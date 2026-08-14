@@ -1,0 +1,11 @@
+# Built binary
+/eka-mcp
+/eka-mcp.exe
+
+# Build output
+/dist/
+*.test
+*.out
+
+# Local EKA workspace registration identity (dev-time, machine-specific)
+/eka.yaml

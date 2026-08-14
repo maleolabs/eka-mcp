@@ -1,0 +1,74 @@
+# EKA AI Skill Pack — manifest
+#
+# Version pinning contract: the pack references CLI behavior. Check the
+# local CLI against requiresEka before trusting the pack's command
+# surface, and re-verify with `eka --help` when in doubt.
+
+pack:
+  name: eka-ai-skill-pack
+  version: 0.3.1
+  status: experimental
+  requiresEka: ">= 0.6.0"
+  anchorDecision: "reference/decisions/adr-022-ai-skill-pack.md"
+  installCommand: "eka install skills|commands (pack embedded in the eka binary since ADR-023)"
+
+skills:
+  - name: eka-router
+    path: eka-router/SKILL.md
+    role: routing — pick the right skill per task
+  - name: eka-orientation
+    path: eka-orientation/SKILL.md
+    role: the EKA mental model
+  - name: eka-project-understanding
+    path: eka-project-understanding/SKILL.md
+    role: context-first project context
+  - name: eka-knowledge-retrieval
+    path: eka-knowledge-retrieval/SKILL.md
+    role: eka get / context / view — the retrieval surface
+  - name: eka-knowledge-authoring
+    path: eka-knowledge-authoring/SKILL.md
+    role: create knowledge — draft → validate → publish
+    resources:
+      - eka-knowledge-authoring/templates/README.md
+      - eka-knowledge-authoring/templates/drafts/
+  - name: eka-knowledge-modification
+    path: eka-knowledge-modification/SKILL.md
+    role: change knowledge — revisions and transitions
+  - name: eka-knowledge-review
+    path: eka-knowledge-review/SKILL.md
+    role: review with EKA-native validation
+  - name: eka-adoption
+    path: eka-adoption/SKILL.md
+    role: bring non-EKA projects into EKA (migration and greenfield)
+  - name: eka-engineering-workflow
+    path: eka-engineering-workflow/SKILL.md
+    role: EKA and software development, methodology-independent
+  - name: eka-troubleshooting
+    path: eka-troubleshooting/SKILL.md
+    role: refusal classes, exit codes, fixes
+  - name: eka-feedback
+    path: eka-feedback/SKILL.md
+    role: report EKA shortcomings — write + publish feedback (ADR-026)
+
+supporting:
+  - path: commands/README.md
+    role: user-invoked agent workflows — install, provider mapping, resume architecture
+  - path: commands/eka-discuss.md
+    role: planning discussion command (idea → discuss → propose → validate → approved → publish; no code)
+  - path: commands/eka-execute.md
+    role: autonomous execution command (approved planning, EKA state machine, checkpoint + resume)
+  - path: docs/installation.md
+    role: installation and discovery
+  - path: docs/workflow.md
+    role: the full AI workflow
+  - path: docs/mcp-boundary.md
+    role: future MCP integration boundary
+  - path: docs/reference-project-validation.md
+    role: validation evidence against the Reference Project
+  - path: scripts/smoke-test.sh
+    role: executable smoke test over the reference project
+
+maintenance:
+  regenerateTemplates: "for each token family: eka new <ns>/<type>:template (--dimension for knowledge types); see eka-knowledge-authoring/templates/README.md"
+  verifyPack: "EKA_PATH=<eka> skills/scripts/smoke-test.sh"
+  bumpPolicy: "pack version bumps when the skill set, command surface references, or templates change"

@@ -1,0 +1,10 @@
+{
+  "namespace": "feather",
+  "type": "tkt",
+  "id": "template",
+  "revision": 1,
+  "content": {
+    "commands": "> Generated — State Projection. Do NOT edit state here; refresh on read.\n",
+    "projectedStatus": ""
+  }
+}

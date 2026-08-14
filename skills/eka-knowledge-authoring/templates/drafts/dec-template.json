@@ -1,0 +1,33 @@
+{
+  "namespace": "feather",
+  "type": "dec",
+  "id": "template",
+  "revision": 1,
+  "state": {
+    "contentState": "draft",
+    "existenceState": "active"
+  },
+  "dimension": "decisions",
+  "changeLog": [
+    {
+      "date": "2026-08-11",
+      "domain": "contentState",
+      "from": "-",
+      "to": "draft",
+      "by": "Engineering"
+    },
+    {
+      "date": "2026-08-11",
+      "domain": "existenceState",
+      "from": "-",
+      "to": "active",
+      "by": "Engineering"
+    }
+  ],
+  "content": {
+    "alternativesConsidered": "",
+    "consequences": "",
+    "context": "",
+    "decision": ""
+  }
+}

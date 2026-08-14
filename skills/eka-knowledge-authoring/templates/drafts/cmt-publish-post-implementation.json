@@ -1,0 +1,46 @@
+{
+  "namespace": "feather",
+  "type": "cmt",
+  "id": "publish-post-implementation",
+  "revision": 1,
+  "state": {
+    "contentState": "draft",
+    "existenceState": "active",
+    "noteState": "open"
+  },
+  "author": "Marij Mokoginta",
+  "relationships": {
+    "discusses": [
+      "feather/sto:publish-post"
+    ]
+  },
+  "changeLog": [
+    {
+      "date": "2026-08-11",
+      "domain": "contentState",
+      "from": "-",
+      "to": "draft",
+      "by": "Marij Mokoginta"
+    },
+    {
+      "date": "2026-08-11",
+      "domain": "existenceState",
+      "from": "-",
+      "to": "active",
+      "by": "Marij Mokoginta"
+    },
+    {
+      "date": "2026-08-11",
+      "domain": "noteState",
+      "from": "-",
+      "to": "open",
+      "by": "Marij Mokoginta"
+    }
+  ],
+  "content": {
+    "changes": [],
+    "role": "implementation",
+    "summary": "",
+    "tests": []
+  }
+}
