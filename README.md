@@ -40,8 +40,9 @@ eka-mcp implements the eka-cli plugin contract (v1). It is an executable named
 
 **`eka-mcp manifest --json`** — print the plugin self-description. The
 `Manifest` (`contract: "v1"`, `name: "mcp"`, `version`, `description`,
-`artifacts`) is derived from the embedded skill pack, so the manifest always
-reflects what the installer can actually install:
+`artifacts`, plus the extended-contract `capabilities` and `source`) is
+derived from the embedded skill pack, so the manifest always reflects what the
+installer can actually install:
 
 ```json
 {
@@ -52,7 +53,9 @@ reflects what the installer can actually install:
   "artifacts": [
     { "kind": "skills", "entries": ["eka-router", "eka-orientation", "…"] },
     { "kind": "commands", "entries": ["eka-discuss.md", "eka-execute.md"] }
-  ]
+  ],
+  "capabilities": ["install", "mcp"],
+  "source": "github.com/maleolabs/eka-mcp"
 }
 ```
 

@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -57,19 +58,19 @@ func TestCommandFilesKnownCommands(t *testing.T) {
 
 // TestManifestDeterminism: two manifest builds are identical.
 func TestManifestDeterminism(t *testing.T) {
-	a, err := Manifest()
+	a, err := BuildManifest()
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := Manifest()
+	b, err := BuildManifest()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(a.Artifacts) != 2 || len(b.Artifacts) != 2 {
 		t.Fatalf("manifest must carry exactly the skills and commands artifacts, got %d/%d", len(a.Artifacts), len(b.Artifacts))
 	}
-	if len(a.Artifacts[0].Entries) != len(b.Artifacts[0].Entries) || len(a.Artifacts[1].Entries) != len(b.Artifacts[1].Entries) {
-		t.Fatal("manifest must be deterministic")
+	if !reflect.DeepEqual(a, b) {
+		t.Fatalf("manifest builds must be fully identical, got:\na = %#v\nb = %#v", a, b)
 	}
 }
 
