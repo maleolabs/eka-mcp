@@ -56,6 +56,29 @@ func TestManifestJSON(t *testing.T) {
 		t.Errorf("source = %q, want %q", ext.Source, "github.com/maleolabs/eka-mcp")
 	}
 
+	// The JSON key names are the contract too: decode the raw output a
+	// second time into a map so a typo in a json tag can never slip
+	// through the self-round-trip through the type that produced it.
+	// The emitted JSON is indented, so normalize each raw value with
+	// json.Compact before the exact comparison.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(out.Bytes(), &raw); err != nil {
+		t.Fatalf("manifest --json must remain valid JSON: %v\n%s", err, out.String())
+	}
+	compact := func(v json.RawMessage) string {
+		var b bytes.Buffer
+		if err := json.Compact(&b, v); err != nil {
+			t.Fatalf("cannot compact raw manifest value %s: %v", v, err)
+		}
+		return b.String()
+	}
+	if got := compact(raw["capabilities"]); got != `["install","mcp"]` {
+		t.Errorf("raw capabilities = %s, want [\"install\",\"mcp\"]", got)
+	}
+	if got := compact(raw["source"]); got != `"github.com/maleolabs/eka-mcp"` {
+		t.Errorf("raw source = %s, want %q", got, "github.com/maleolabs/eka-mcp")
+	}
+
 	skills, err := pack.SkillDirs()
 	if err != nil {
 		t.Fatal(err)

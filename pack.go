@@ -38,7 +38,9 @@ const Source = "github.com/maleolabs/eka-mcp"
 // Capabilities are the fixed capability tags of the plugin, reported
 // in the manifest: it installs artifact families into the workspace
 // ("install") and runs an MCP server ("mcp"). The tags are ordered
-// and stable — the manifest is the contract.
+// and stable — the manifest is the contract. Immutable by convention:
+// do not mutate or reorder (the JSON shape is the cross-repo contract
+// with eka-cli).
 var Capabilities = []string{"install", "mcp"}
 
 // skillsFS embeds the EKA AI Skill Pack. The entry names of the
@@ -110,6 +112,11 @@ func CommandFiles() ([]string, error) {
 // source fields. The local plugin package (github.com/maleolabs/eka-cli
 // v1.0.0) predates contract v1 and does not know these fields, so they
 // are declared here — the emitted JSON is the contract.
+//
+// TODO(sto:mcp-manifest-capabilities): drop this local type (and the
+// BuildManifest rename) once eka-cli >= v1.1 carries contract v1 —
+// Capabilities/Source on plugin.Manifest — and BuildManifest can
+// return plugin.Manifest again.
 type Manifest struct {
 	plugin.Manifest
 	Capabilities []string `json:"capabilities"`
