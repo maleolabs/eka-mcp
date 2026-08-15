@@ -60,7 +60,7 @@ func runManifest(args []string, out io.Writer) error {
 	if len(args) != 1 || args[0] != "--json" {
 		return errors.New("usage: eka-mcp manifest --json")
 	}
-	m, err := pack.Manifest()
+	m, err := pack.BuildManifest()
 	if err != nil {
 		return err
 	}

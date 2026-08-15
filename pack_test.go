@@ -57,11 +57,11 @@ func TestCommandFilesKnownCommands(t *testing.T) {
 
 // TestManifestDeterminism: two manifest builds are identical.
 func TestManifestDeterminism(t *testing.T) {
-	a, err := Manifest()
+	a, err := BuildManifest()
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := Manifest()
+	b, err := BuildManifest()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -41,6 +41,21 @@ func TestManifestJSON(t *testing.T) {
 		t.Error("description must not be empty")
 	}
 
+	// Extended plugin contract v1 (additive): the manifest must carry
+	// the fixed capability tags and the canonical source. The local
+	// plugin package predates these fields, so the raw JSON shape is
+	// the contract — decode the emitted output into the extended type.
+	var ext pack.Manifest
+	if err := json.Unmarshal(out.Bytes(), &ext); err != nil {
+		t.Fatalf("manifest --json must remain valid JSON: %v\n%s", err, out.String())
+	}
+	if !equalStrings(ext.Capabilities, []string{"install", "mcp"}) {
+		t.Errorf("capabilities = %v, want [install mcp]", ext.Capabilities)
+	}
+	if ext.Source != "github.com/maleolabs/eka-mcp" {
+		t.Errorf("source = %q, want %q", ext.Source, "github.com/maleolabs/eka-mcp")
+	}
+
 	skills, err := pack.SkillDirs()
 	if err != nil {
 		t.Fatal(err)
