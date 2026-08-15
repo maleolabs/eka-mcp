@@ -21,9 +21,14 @@ import (
 )
 
 // Version is the eka-mcp plugin version (and the MCP server version it
-// reports in serverInfo). It is the single version constant of the
-// repository.
-const Version = "0.1.0"
+// reports in serverInfo). It is the single version source of the
+// repository: anvil.yaml must carry the same value (scripts/bump.sh
+// keeps both in sync), and the release pipeline stamps it via ldflags
+// (-X github.com/maleolabs/eka-mcp.Version=<version>) so the released
+// binary reports the tagged version in its manifest and serverInfo.
+// The -X target is the module path (not .../pack): this package lives
+// at the module root, so its import path IS the module path.
+var Version = "0.1.0"
 
 // Name is the stable plugin identity reported in the manifest.
 const Name = "mcp"

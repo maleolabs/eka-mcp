@@ -1,0 +1,13 @@
+artifact:
+    exclude:
+        - .git/**
+        - .github/**
+        - .anvil/**
+        - dist/**
+        - eka-mcp
+        - eka-mcp.exe
+    include: []
+project:
+    description: 'EKA MCP — the AI-agent integration layer: an MCP server over the EKA Runtime plus the EKA AI Skill Pack installer'
+    name: eka-mcp
+    version: 0.1.0
