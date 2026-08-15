@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/maleolabs/eka-mcp"
 )
 
 // fakeCapability is a deterministic stand-in for the EKA capability
@@ -78,8 +80,8 @@ func TestInitialize(t *testing.T) {
 	if info["name"] != "mcp" {
 		t.Errorf("serverInfo.name = %v, want mcp", info["name"])
 	}
-	if info["version"] != "0.1.0" {
-		t.Errorf("serverInfo.version = %v, want 0.1.0", info["version"])
+	if info["version"] != pack.Version {
+		t.Errorf("serverInfo.version = %v, want %v", info["version"], pack.Version)
 	}
 	if caps, ok := res["capabilities"].(map[string]any); !ok || caps["tools"] == nil || caps["resources"] == nil {
 		t.Errorf("capabilities = %v, want tools+resources", res["capabilities"])
