@@ -31,12 +31,19 @@ pipeline:
             # Stamping github.com/maleolabs/eka-mcp/pack.Version would
             # silently no-op (the linker has no such symbol) and the
             # release would ship the stale source version.
+            #
+            # Version normalization: `git describe --tags --always` emits
+            # the tag verbatim (v0.1.0), but anvil.yaml and pack.go carry
+            # the version WITHOUT the v prefix — the stamped value must
+            # match them, so the leading v is stripped before ldflags
+            # (same idiom as release.yml).
             - name: linux-amd64
               command: sh
               args:
                 - -c
                 - |
                   VERSION=$(git describe --tags --always 2>/dev/null || echo "0.0.0-dev")
+                  VERSION="${VERSION#v}"
                   go build -ldflags="-X github.com/maleolabs/eka-mcp.Version=${VERSION}" -o ${ANVIL_OUTPUT_DIR}/eka-mcp-linux-amd64 ./cmd/eka-mcp
               env:
                 GOOS: linux
@@ -47,6 +54,7 @@ pipeline:
                 - -c
                 - |
                   VERSION=$(git describe --tags --always 2>/dev/null || echo "0.0.0-dev")
+                  VERSION="${VERSION#v}"
                   go build -ldflags="-X github.com/maleolabs/eka-mcp.Version=${VERSION}" -o ${ANVIL_OUTPUT_DIR}/eka-mcp-linux-arm64 ./cmd/eka-mcp
               env:
                 GOOS: linux
@@ -57,6 +65,7 @@ pipeline:
                 - -c
                 - |
                   VERSION=$(git describe --tags --always 2>/dev/null || echo "0.0.0-dev")
+                  VERSION="${VERSION#v}"
                   go build -ldflags="-X github.com/maleolabs/eka-mcp.Version=${VERSION}" -o ${ANVIL_OUTPUT_DIR}/eka-mcp-darwin-amd64 ./cmd/eka-mcp
               env:
                 GOOS: darwin
@@ -67,6 +76,7 @@ pipeline:
                 - -c
                 - |
                   VERSION=$(git describe --tags --always 2>/dev/null || echo "0.0.0-dev")
+                  VERSION="${VERSION#v}"
                   go build -ldflags="-X github.com/maleolabs/eka-mcp.Version=${VERSION}" -o ${ANVIL_OUTPUT_DIR}/eka-mcp-darwin-arm64 ./cmd/eka-mcp
               env:
                 GOOS: darwin
@@ -79,6 +89,7 @@ pipeline:
                 - -c
                 - |
                   VERSION=$(git describe --tags --always 2>/dev/null || echo "0.0.0-dev")
+                  VERSION="${VERSION#v}"
                   go build -ldflags="-X github.com/maleolabs/eka-mcp.Version=${VERSION}" -o ${ANVIL_OUTPUT_DIR}/eka-mcp-windows-amd64.exe ./cmd/eka-mcp
               env:
                 GOOS: windows
@@ -89,6 +100,7 @@ pipeline:
                 - -c
                 - |
                   VERSION=$(git describe --tags --always 2>/dev/null || echo "0.0.0-dev")
+                  VERSION="${VERSION#v}"
                   go build -ldflags="-X github.com/maleolabs/eka-mcp.Version=${VERSION}" -o ${ANVIL_OUTPUT_DIR}/eka-mcp-windows-arm64.exe ./cmd/eka-mcp
               env:
                 GOOS: windows

@@ -75,16 +75,27 @@ echo "New version:     $NEW_VERSION"
 # anvil.yaml version field is without 'v' prefix
 anvil project version set "$NEW_VERSION"
 
+# Fail-before-commit verification: confirm anvil actually wrote the
+# version (a silent no-op or rewrite hiccup must not reach the commit).
+ANVIL_YAML_NEW=$(grep 'version:' anvil.yaml | head -1 | awk '{print $2}' | tr -d '"' | tr -d "'")
+if [ "$ANVIL_YAML_NEW" != "$NEW_VERSION" ]; then
+  echo "Error: anvil.yaml version is '$ANVIL_YAML_NEW', expected '$NEW_VERSION' — aborting (nothing committed)"
+  exit 1
+fi
+echo "anvil.yaml version synced: $NEW_VERSION"
+
 # ── Sync pack.go (single version source) ───────────────────────────
 # pack.Version is a var (stamped via ldflags at release build time);
 # the repository source still carries the version, and it must match
-# anvil.yaml. Rewrite the declaration in place.
+# anvil.yaml. Rewrite the declaration in place. sed -i.bak keeps the
+# edit portable across GNU and BSD sed (BSD requires the backup suffix).
 PACK_GO="pack.go"
 if [ ! -f "$PACK_GO" ]; then
   echo "Error: $PACK_GO not found — aborting (nothing committed)"
   exit 1
 fi
-sed -i "s|^\(var Version = \).*|\1\"$NEW_VERSION\"|" "$PACK_GO"
+sed -i.bak "s|^\(var Version = \).*|\1\"$NEW_VERSION\"|" "$PACK_GO"
+rm -f "$PACK_GO.bak"
 if ! grep -q "var Version = \"$NEW_VERSION\"" "$PACK_GO"; then
   echo "Error: could not update pack.Version in $PACK_GO — aborting (nothing committed)"
   exit 1
