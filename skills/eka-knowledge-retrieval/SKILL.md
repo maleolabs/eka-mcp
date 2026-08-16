@@ -66,6 +66,21 @@ eka watch <projection> [target]   # live, TTY-only
 
 Projections: `discovery`, `architecture`, `planning`, `execution` (aliases `sprint`/`wave`), `operations`, `containers` (aligned container table), `ticket <id>`, `board` (all work items across containers). Human reading aid only — never a retrieval contract.
 
+### Board member scope (`--member`)
+
+The board projection takes an advisory member filter (ADR-029): the six state columns hold only one member's assigned work items, and every work item **without** an assigned-to edge surfaces in a separate visible **"No Assignee"** bucket below the columns — never hidden, never interleaved.
+
+```sh
+eka view board --member me            # the operator's own scope
+eka view board --member <mbr-id>      # one member's scope
+```
+
+- `me` resolves the operator identity from `git config user.name` (the same authority as `--by`) to **exactly one** `mbr-` line of the repository; zero or multiple matches refuse listing the available members.
+- Any other value resolves like an assign target: `<mbr-id>`, `mbr:<id>`, `mbr-<id>`, or `<ns>/mbr:<id>` (the qualified form must stay inside the repository's namespace); an unresolvable id refuses listing the available members.
+- **Terminology** — "No assignee" is the **member axis** (a work item without an assigned-to edge); "unassigned" is the **container axis** (a work item not referenced by any ticket container). The two never merge: an item can be container-unassigned AND member-assigned, or both. The container-axis "Unassigned" insight is suppressed in member views — the "No assignee" bucket replaces it there.
+- **Machine output** — `--json` on the repository-wide board emits schema `eka-board-v1` with the pinned `assignee` key per item (the canonical member line, absent without an assigned-to edge); the member-scoped board emits schema `eka-board-member-v1` with the pinned keys `assignee` (the member's assigned items) and `no-assignee` (the 'No assignee' bucket) — the member-axis counterpart of the container-axis `unassigned`.
+- `--member` composes with pagination (filter first, then window); `--json` always carries the full projection.
+
 ## Decision guide
 
 | Question | Command |
@@ -76,6 +91,7 @@ Projections: `discovery`, `architecture`, `planning`, `execution` (aliases `spri
 | "How did this line evolve?" | `eka get <id> --timeline` |
 | "What constrains this subject? What should I know before touching it?" | `eka context <subject> --depth engineering --json` |
 | "Is this a draft or in force?" | check `stateVector.contentState` in `eka get` (draft units constrain nothing) |
+| "What is assigned to me / to member X?" | `eka view board --member me` / `eka view board --member <mbr-id>` |
 | "Give me a readable overview for a human" | `eka view <domain>` |
 
 ## Retrieval etiquette
@@ -102,6 +118,12 @@ eka context feather/adr:content-storage --depth engineering --json
 
 # the human board
 eka view execution
+
+# the member-scoped board: my assigned items plus the 'No assignee' bucket
+eka view board --member me
+
+# one member's assigned work, machine-readable (schema eka-board-member-v1)
+eka view board --member alice --json
 ```
 
 ## Next

@@ -6,7 +6,7 @@
 
 pack:
   name: eka-ai-skill-pack
-  version: 0.3.1
+  version: 0.3.2
   status: experimental
   requiresEka: ">= 0.6.0"
   anchorDecision: "reference/decisions/adr-022-ai-skill-pack.md"

@@ -10,4 +10,4 @@ artifact:
 project:
     description: 'EKA MCP — the AI-agent integration layer: an MCP server over the EKA Runtime plus the EKA AI Skill Pack installer'
     name: eka-mcp
-    version: 0.1.1
+    version: 0.1.2

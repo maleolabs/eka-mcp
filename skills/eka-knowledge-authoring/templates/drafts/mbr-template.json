@@ -1,0 +1,30 @@
+{
+  "namespace": "feather",
+  "type": "mbr",
+  "id": "template",
+  "revision": 1,
+  "state": {
+    "contentState": "draft",
+    "existenceState": "active"
+  },
+  "changeLog": [
+    {
+      "date": "2026-08-16",
+      "domain": "contentState",
+      "from": "-",
+      "to": "draft",
+      "by": "Engineering"
+    },
+    {
+      "date": "2026-08-16",
+      "domain": "existenceState",
+      "from": "-",
+      "to": "active",
+      "by": "Engineering"
+    }
+  ],
+  "content": {
+    "content": "",
+    "purpose": ""
+  }
+}
