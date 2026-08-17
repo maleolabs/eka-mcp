@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-cli/plugin"
+	"github.com/maleolabs/eka-core/plugin"
 	"github.com/maleolabs/eka-mcp"
 )
 
@@ -42,10 +42,10 @@ func TestManifestJSON(t *testing.T) {
 	}
 
 	// Extended plugin contract v1 (additive): the manifest must carry
-	// the fixed capability tags and the canonical source. The local
-	// plugin package predates these fields, so the raw JSON shape is
-	// the contract — decode the emitted output into the extended type.
-	var ext pack.Manifest
+	// the fixed capability tags and the canonical source. The contract
+	// type (plugin.Manifest) carries these fields, so decode the emitted
+	// output into it directly.
+	var ext plugin.Manifest
 	if err := json.Unmarshal(out.Bytes(), &ext); err != nil {
 		t.Fatalf("manifest --json must remain valid JSON: %v\n%s", err, out.String())
 	}

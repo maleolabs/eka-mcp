@@ -2,10 +2,7 @@ module github.com/maleolabs/eka-mcp
 
 go 1.24.0
 
-require (
-	github.com/maleolabs/eka-cli v1.0.0
-	github.com/maleolabs/eka-core v1.0.0
-)
+require github.com/maleolabs/eka-core v1.2.1-0.20260816205231-6f9ee7f02205
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -21,3 +18,9 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.45.0 // indirect
 )
+
+// Development replace (sto:mcp-contract-relocation): eka-core's plugin
+// contract package (github.com/maleolabs/eka-core/plugin) is not yet
+// merged to develop. The orchestrator merges eka-core first; this
+// replace is then dropped in a follow-up bump to the published version.
+replace github.com/maleolabs/eka-core => /home/m2codeloan/m2code/maleolabs/eka/worktrees/eka-core-feat-sto-mcp-contract-relocation

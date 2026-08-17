@@ -1,6 +1,6 @@
 // Package pack embeds the EKA AI Skill Pack and implements the
 // installable artifact families the eka-mcp plugin exposes through the
-// eka-cli plugin contract (plugin.Manifest / plugin.InstallResult).
+// eka-core plugin contract (plugin.Manifest / plugin.InstallResult).
 //
 // The embedded skills/ tree is the single source of truth for the
 // manifest: entry names are derived from the embedded filesystem, never
@@ -17,7 +17,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/maleolabs/eka-cli/plugin"
+	"github.com/maleolabs/eka-core/plugin"
 )
 
 // Version is the eka-mcp plugin version (and the MCP server version it
@@ -112,44 +112,28 @@ func CommandFiles() ([]string, error) {
 	return out, nil
 }
 
-// Manifest is the plugin self-description under the extended plugin
-// contract v1: plugin.Manifest plus the additive capabilities and
-// source fields. The local plugin package (github.com/maleolabs/eka-cli
-// v1.0.0) predates contract v1 and does not know these fields, so they
-// are declared here — the emitted JSON is the contract.
-//
-// TODO(sto:mcp-manifest-capabilities): drop this local type (and the
-// BuildManifest rename) once eka-cli >= v1.1 carries contract v1 —
-// Capabilities/Source on plugin.Manifest — and BuildManifest can
-// return plugin.Manifest again.
-type Manifest struct {
-	plugin.Manifest
-	Capabilities []string `json:"capabilities"`
-	Source       string   `json:"source"`
-}
-
 // BuildManifest builds the plugin self-description from the embedded
 // skill pack: artifact entries are derived from the filesystem, so the
 // manifest always reflects what the installer can actually install.
-func BuildManifest() (Manifest, error) {
+// The contract type (plugin.Manifest) carries the additive capabilities
+// and source fields of contract v1.
+func BuildManifest() (plugin.Manifest, error) {
 	skills, err := SkillDirs()
 	if err != nil {
-		return Manifest{}, err
+		return plugin.Manifest{}, err
 	}
 	commands, err := CommandFiles()
 	if err != nil {
-		return Manifest{}, err
+		return plugin.Manifest{}, err
 	}
-	return Manifest{
-		Manifest: plugin.Manifest{
-			Contract:    plugin.ContractVersion,
-			Name:        Name,
-			Version:     Version,
-			Description: Description,
-			Artifacts: []plugin.Artifact{
-				{Kind: "skills", Entries: skills},
-				{Kind: "commands", Entries: commands},
-			},
+	return plugin.Manifest{
+		Contract:    plugin.ContractVersion,
+		Name:        Name,
+		Version:     Version,
+		Description: Description,
+		Artifacts: []plugin.Artifact{
+			{Kind: "skills", Entries: skills},
+			{Kind: "commands", Entries: commands},
 		},
 		Capabilities: Capabilities,
 		Source:       Source,
