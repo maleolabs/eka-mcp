@@ -10,9 +10,8 @@ into one executable:
 3. **CLI plugin** — an `eka-cli` plugin that installs the skill pack into an
    agent configuration directory.
 
-It is a consumer of both [`eka-core`](https://github.com/maleolabs/eka-core)
-(the Runtime) and [`eka-cli`](https://github.com/maleolabs/eka-cli) (the plugin
-contract).
+It is a consumer of [`eka-core`](https://github.com/maleolabs/eka-core) (the
+Runtime and the plugin contract) and an `eka-cli` plugin.
 
 Module path: `github.com/maleolabs/eka-mcp`
 
