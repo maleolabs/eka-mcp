@@ -131,10 +131,14 @@ func writeJSON(out io.Writer, v any) error {
 // EKA Runtime read-only (runtime.Open: it never initializes a
 // workspace), so the server starts cleanly even before a workspace
 // exists — retrieval tools then report the uninitialized state.
+//
+// A startup failure is sanitized before it reaches stderr (which the
+// MCP client captures): the same refusal-class policy as the MCP
+// boundary — no workspace paths, no store details.
 func serve() error {
 	cap, err := eka.Open()
 	if err != nil {
-		return err
+		return fmt.Errorf("cannot open the EKA workspace: %s", mcp.SanitizeError(err))
 	}
 	defer cap.Close()
 	server := mcp.NewServer(cap)

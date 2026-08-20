@@ -84,6 +84,38 @@ The server opens the EKA Runtime **read-only** (`runtime.Open`), so it starts
 cleanly even before a workspace exists — retrieval then reports the
 uninitialized state instead of failing.
 
+### Hardening contract
+
+The server is hardened to production standard, with a deterministic
+conformance suite (`internal/mcp/conformance_test.go`) and fuzz harness
+(`internal/mcp/fuzz_test.go`) asserting the contract:
+
+- **Protocol**: `initialize` echoes the client's announced protocol version
+  (falling back to the `2024-11-05` baseline when none is announced);
+  capabilities advertise exactly `tools` + `resources`.
+- **Batch rejection**: a JSON-RPC batch array is refused deterministically
+  (`-32600`, fixed message) — the server never processes batches.
+- **Bounded read line**: one stdio message line is capped at 64 MiB; an
+  oversized line is refused deterministically and the stream resynchronizes
+  at the next newline.
+- **Error message policy**: every error path returns a fixed, client-safe
+  refusal-class message — no Go internals, no file paths, no store details,
+  no stack traces.
+- **Framing**: newline-delimited responses, flushed after every reply.
+
+### Integration test (real client)
+
+`scripts/integration-opencode.sh` drives a real opencode session against the
+server: it builds the binary, registers it as a stdio MCP server in a
+throwaway opencode project, and asserts that the session calls the `status`
+tool and receives its JSON — proving the handshake, framing and tool dispatch
+work end-to-end with a real client. It uses the credential-free
+`opencode/deepseek-v4-flash-free` model by default:
+
+```sh
+scripts/integration-opencode.sh
+```
+
 ## The skill pack
 
 The embedded [`skills/`](skills) tree is the **EKA AI Skill Pack** — see
