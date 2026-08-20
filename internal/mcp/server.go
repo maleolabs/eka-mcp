@@ -16,8 +16,11 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/maleolabs/eka-mcp"
 )
@@ -93,18 +96,60 @@ func (r *request) isNotification() bool {
 	return len(r.ID) == 0
 }
 
+// validID reports whether id is a JSON-RPC 2.0 id: a string, a number,
+// or null (spec §4.2). An absent id (a notification) is valid. Objects,
+// arrays and booleans are not ids — a request carrying one is invalid.
+func validID(id json.RawMessage) bool {
+	if len(id) == 0 {
+		return true
+	}
+	switch id[0] {
+	case '"', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '-', 'n':
+		return true
+	}
+	return false
+}
+
 // HandleMessage processes one JSON-RPC message and returns the response
 // bytes to write, or nil when the message needs no response (a
 // notification). It is the pure dispatch unit: parse, route, respond —
 // it never touches I/O, so it is directly testable.
+//
+// The message must be exactly one JSON-RPC request object. A JSON-RPC
+// batch (an array of requests) is rejected deterministically — the
+// server processes one request per message and never splits or merges
+// batches. Every error path returns a fixed, client-safe message (the
+// CLI refusal-class policy): no Go internals, no paths, no store
+// details.
 func (s *Server) HandleMessage(line []byte) []byte {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 {
+		return nil
+	}
+	var raw json.RawMessage
+	if err := json.Unmarshal(line, &raw); err != nil {
+		return parseErrorResponse()
+	}
+	if len(raw) == 0 {
+		return parseErrorResponse()
+	}
+	switch raw[0] {
+	case '[':
+		// JSON-RPC batch: rejected deterministically.
+		return s.errorResponse(json.RawMessage("null"), codeInvalidRequest, "batch requests are not supported")
+	case '{':
+		// A request object — proceed.
+	default:
+		return s.errorResponse(json.RawMessage("null"), codeInvalidRequest, "invalid request: expected a JSON-RPC request object")
+	}
 	var req request
 	if err := json.Unmarshal(line, &req); err != nil {
-		return marshalResponse(response{
-			JSONRPC: "2.0",
-			ID:      json.RawMessage("null"),
-			Error:   &rpcError{Code: codeParseError, Message: "parse error: " + err.Error()},
-		})
+		// Valid JSON object with malformed fields (e.g. a non-string
+		// method): an invalid request, not a parse error.
+		return s.errorResponse(json.RawMessage("null"), codeInvalidRequest, "invalid request: malformed request object")
+	}
+	if !validID(req.ID) {
+		return s.errorResponse(json.RawMessage("null"), codeInvalidRequest, "invalid request: malformed request id")
 	}
 	if req.JSONRPC != "2.0" {
 		return s.errorResponse(req.ID, codeInvalidRequest, `"jsonrpc" must be "2.0"`)
@@ -245,7 +290,7 @@ func (s *Server) handleToolsCall(req request) []byte {
 			return s.errorResponse(req.ID, codeToolNotFound, "tool not found: "+p.Name)
 		}
 		return s.resultResponse(req.ID, map[string]any{
-			"content": []any{map[string]any{"type": "text", "text": err.Error()}},
+			"content": []any{map[string]any{"type": "text", "text": sanitizeError(err)}},
 			"isError": true,
 		})
 	}
@@ -329,7 +374,7 @@ func (s *Server) handleResourcesRead(req request) []byte {
 	}
 	data, err := s.cap.Status()
 	if err != nil {
-		return s.errorResponse(req.ID, codeInternalError, "reading eka://status: "+err.Error())
+		return s.errorResponse(req.ID, codeInternalError, "reading eka://status: "+sanitizeError(err))
 	}
 	return s.resultResponse(req.ID, map[string]any{
 		"contents": []any{
@@ -354,6 +399,40 @@ func (s *Server) errorResponse(id json.RawMessage, code int, msg string) []byte 
 		ID:      id,
 		Error:   &rpcError{Code: code, Message: msg},
 	})
+}
+
+// parseErrorResponse is the deterministic response for JSON that does
+// not parse: a fixed message with no Go internals (the JSON parser's
+// errors are implementation details and must never reach the client).
+func parseErrorResponse() []byte {
+	return marshalResponse(response{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage("null"),
+		Error:   &rpcError{Code: codeParseError, Message: "parse error: invalid JSON"},
+	})
+}
+
+// pathRe matches file paths in error messages: absolute paths
+// (/home/…, C:\…), relative paths (./…, ../…) and any slash- or
+// backslash-separated run that looks like a path. The MCP boundary
+// must never leak store paths or workspace locations.
+var pathRe = regexp.MustCompile(`(?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|[\\/])[^\s"':]*[\\/][^\s"':]*`)
+
+// sanitizeError reduces a capability error to a deterministic,
+// client-safe refusal-class message: first line only (stack traces and
+// wrapped context live below), no file paths, no store details. The
+// result is stable for a given error, so clients can match on it.
+func sanitizeError(err error) string {
+	msg := err.Error()
+	if i := strings.IndexByte(msg, '\n'); i >= 0 {
+		msg = msg[:i]
+	}
+	msg = pathRe.ReplaceAllString(msg, "<path>")
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return "tool execution failed"
+	}
+	return msg
 }
 
 // marshalResponse serializes a response; it cannot fail for the shapes
