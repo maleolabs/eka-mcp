@@ -14,6 +14,12 @@ import (
 // wedge the session or exhaust the process memory.
 const defaultMaxLineSize = 64 << 20
 
+// writerBufferSize is the response writer buffer. It comfortably fits
+// the largest response (tools/list with the full tool set), so every
+// response is delivered in one flush — the flush-per-response framing
+// contract stays observable at the stream level.
+const writerBufferSize = 64 << 10
+
 // errLineTooLong marks a message line that exceeded the line cap.
 var errLineTooLong = errors.New("mcp: message exceeds the 64 MiB line limit")
 
@@ -27,7 +33,7 @@ var errLineTooLong = errors.New("mcp: message exceeds the 64 MiB line limit")
 // each reply immediately.
 func (s *Server) Serve(r io.Reader, w io.Writer) error {
 	br := bufio.NewReader(r)
-	bw := bufio.NewWriter(w)
+	bw := bufio.NewWriterSize(w, writerBufferSize)
 	for {
 		line, err := readLine(br, s.maxLineSize)
 		if err == io.EOF {

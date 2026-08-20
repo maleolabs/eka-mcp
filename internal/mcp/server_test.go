@@ -18,6 +18,8 @@ type fakeCapability struct {
 	getErr     error
 	domainErr  error
 	gotForms   []string
+	gotNew     []NewDraftRequest
+	gotNote    []NoteRequest
 }
 
 func (f *fakeCapability) Get(form string) ([]byte, error) {
@@ -37,6 +39,48 @@ func (f *fakeCapability) Domain(projectID, domain string) ([]byte, error) {
 
 func (f *fakeCapability) Status() ([]byte, error) {
 	return []byte(f.statusJSON), nil
+}
+
+func (f *fakeCapability) Context(subject, projectID, depth string) ([]byte, error) {
+	return []byte(`{"schema":"eka-context-v1","kind":"context","depth":` + mustQuote(depth) + `,"focus":` + mustQuote(subject) + `}`), nil
+}
+
+func (f *fakeCapability) Validate(root string) ([]byte, error) {
+	return []byte(`{"schema":"eka-conformance-report-v1","root":` + mustQuote(root) + `,"filesScanned":0,"artifacts":0,"skipped":"","errors":0,"warnings":0,"pass":true,"results":[]}`), nil
+}
+
+func (f *fakeCapability) NewDraft(req NewDraftRequest) ([]byte, error) {
+	f.gotNew = append(f.gotNew, req)
+	return []byte(`{"schema":"eka-draft-v1","project":` + mustQuote(req.Project) + `,"namespace":` + mustQuote(req.Namespace) + `,"type":` + mustQuote(req.Type) + `,"id":` + mustQuote(req.ID) + `,"path":"/tmp/drafts/` + req.Type + `-` + req.ID + `.json","updated":"2026-08-21T00:00:00Z"}`), nil
+}
+
+func (f *fakeCapability) Publish(req PublishRequest) ([]byte, error) {
+	return []byte(`{"schema":"eka-publish-result-v1","form":` + mustQuote(req.Target+":1") + `,"instanceVersion":1,"objectHash":"abc","note":""}`), nil
+}
+
+func (f *fakeCapability) Transition(req TransitionRequest) ([]byte, error) {
+	return []byte(`{"schema":"eka-transition-result-v1","target":` + mustQuote(req.Target) + `,"from":"planned","to":"todo","by":{"kind":"agent","name":"mcp-agent"},"objectHash":"abc","lockedPlan":"","lockedPlanHash":"","warning":""}`), nil
+}
+
+func (f *fakeCapability) Note(req NoteRequest) ([]byte, error) {
+	f.gotNote = append(f.gotNote, req)
+	return []byte(`{"schema":"eka-note-result-v1","id":"x-implementation","target":` + mustQuote(req.Target) + `,"subjectState":"","path":"/tmp/drafts/cmt-x-implementation.json","by":{"kind":"agent","name":"mcp-agent"}}`), nil
+}
+
+func (f *fakeCapability) View(target, project string) ([]byte, error) {
+	return []byte(`{"namespace":"feather","type":"adr","id":"001","revision":1,"content":{}}`), nil
+}
+
+func (f *fakeCapability) DraftList(project string) ([]byte, error) {
+	return []byte(`{"schema":"eka-draft-list-v1","count":0,"drafts":[]}`), nil
+}
+
+func (f *fakeCapability) IntegrityCheck() ([]byte, error) {
+	return []byte(`{"schema":"eka-integrity-report-v1","payloadsChecked":0,"refsChecked":0,"attachmentsChecked":0,"orphanPayloads":0,"violations":[]}`), nil
+}
+
+func (f *fakeCapability) Discard(target, project string) ([]byte, error) {
+	return []byte(`{"schema":"eka-discard-result-v1","target":` + mustQuote(target) + `,"note":""}`), nil
 }
 
 func mustQuote(s string) string {
@@ -115,7 +159,7 @@ func TestToolsList(t *testing.T) {
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	res := out["result"].(map[string]any)
 	tools := res["tools"].([]any)
-	want := []string{"get", "domain", "status"}
+	want := []string{"context", "get", "domain", "status", "validate", "new", "publish", "transition", "note", "view", "draft_list", "integrity_check", "discard"}
 	got := make([]string, 0, len(tools))
 	for _, tl := range tools {
 		tm := tl.(map[string]any)
@@ -197,13 +241,41 @@ func TestResourcesList(t *testing.T) {
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":8,"method":"resources/list"}`)
 	res := out["result"].(map[string]any)
 	resources := res["resources"].([]any)
-	if len(resources) != 1 {
-		t.Fatalf("resources = %v, want exactly the status resource", resources)
+	// The deterministic resource set: eka://status + every embedded
+	// skill + every embedded draft template type.
+	wantCount := 1 + len(mustSkillDirs(t)) + len(mustTemplateTypes(t))
+	if len(resources) != wantCount {
+		t.Fatalf("resources = %d, want %d", len(resources), wantCount)
 	}
 	r := resources[0].(map[string]any)
 	if r["uri"] != "eka://status" {
 		t.Errorf("resource uri = %v, want eka://status", r["uri"])
 	}
+	// Every resource must carry a uri and a mimeType.
+	for _, rl := range resources {
+		rm := rl.(map[string]any)
+		if rm["uri"] == nil || rm["mimeType"] == nil {
+			t.Errorf("resource %v must carry uri and mimeType", rm)
+		}
+	}
+}
+
+func mustSkillDirs(t *testing.T) []string {
+	t.Helper()
+	dirs, err := pack.SkillDirs()
+	if err != nil {
+		t.Fatalf("SkillDirs: %v", err)
+	}
+	return dirs
+}
+
+func mustTemplateTypes(t *testing.T) []string {
+	t.Helper()
+	types, err := pack.TemplateTypes()
+	if err != nil {
+		t.Fatalf("TemplateTypes: %v", err)
+	}
+	return types
 }
 
 func TestResourcesReadStatus(t *testing.T) {

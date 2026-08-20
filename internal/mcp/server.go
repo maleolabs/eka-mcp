@@ -53,6 +53,91 @@ type Capability interface {
 	Domain(projectID, domain string) ([]byte, error)
 	// Status returns the workspace status as JSON.
 	Status() ([]byte, error)
+	// Context builds the Context Object around one subject at a depth
+	// (schema eka-context-v1).
+	Context(subject, projectID, depth string) ([]byte, error)
+	// Validate runs the authoring conformance gate over a repository
+	// root and returns the machine report (schema
+	// eka-conformance-report-v1).
+	Validate(root string) ([]byte, error)
+	// NewDraft scaffolds one draft (schema eka-draft-v1).
+	NewDraft(req NewDraftRequest) ([]byte, error)
+	// Publish publishes one draft (schema eka-publish-result-v1).
+	Publish(req PublishRequest) ([]byte, error)
+	// Transition performs one transition (schema
+	// eka-transition-result-v1); gate refusals surface as errors and
+	// nothing is published.
+	Transition(req TransitionRequest) ([]byte, error)
+	// Note creates one cmt- note draft (schema eka-note-result-v1).
+	Note(req NoteRequest) ([]byte, error)
+	// View returns one draft file content (the v2.0 JSON authoring
+	// document, verbatim).
+	View(target, project string) ([]byte, error)
+	// DraftList lists the draft backlog (schema eka-draft-list-v1).
+	DraftList(project string) ([]byte, error)
+	// IntegrityCheck verifies the canonical store (schema
+	// eka-integrity-report-v1).
+	IntegrityCheck() ([]byte, error)
+	// Discard deletes one draft without publishing (schema
+	// eka-discard-result-v1).
+	Discard(target, project string) ([]byte, error)
+}
+
+// AuthorIdentity is the change-log authority of a write tool: the kind
+// (user | agent | worker) plus the display name. The MCP boundary
+// always resolves a non-empty identity — never the "Engineering"
+// placeholder.
+type AuthorIdentity struct {
+	Kind string
+	Name string
+}
+
+// Relationship is one authoring reference of a draft.
+type Relationship struct {
+	Type   string `json:"type"`
+	Target string `json:"target"`
+}
+
+// NewDraftRequest describes one draft to scaffold.
+type NewDraftRequest struct {
+	Project       string
+	Namespace     string
+	Type          string
+	ID            string
+	Dimension     string
+	Phase         string
+	Domain        string
+	By            AuthorIdentity
+	Relationships []Relationship
+	Content       map[string]any
+}
+
+// PublishRequest describes one publish run.
+type PublishRequest struct {
+	Target          string
+	Project         string
+	InstanceVersion int
+}
+
+// TransitionRequest describes one requested transition.
+type TransitionRequest struct {
+	RepoPath  string
+	Target    string
+	To        string
+	Forward   bool
+	Backward  bool
+	By        AuthorIdentity
+	Confirmed bool
+}
+
+// NoteRequest describes one note draft to create.
+type NoteRequest struct {
+	RepoPath string
+	Target   string
+	Role     string
+	Domain   string
+	By       AuthorIdentity
+	Content  map[string]any
 }
 
 // Server is the MCP server: it dispatches JSON-RPC 2.0 requests to the
@@ -223,10 +308,36 @@ func (s *Server) handleInitialize(req request) []byte {
 	})
 }
 
-// handleToolsList returns the tool set of the server: EKA knowledge
-// retrieval as MCP tools, with JSON Schema input definitions.
+// handleToolsList returns the tool set of the server: the EKA
+// knowledge-retrieval, context and authoring surfaces as MCP tools,
+// with JSON Schema input definitions. The order is fixed and
+// deterministic (the acceptance contract of the milestone).
 func (s *Server) handleToolsList(req request) []byte {
 	tools := []any{
+		map[string]any{
+			"name": "context",
+			"description": "Build the deterministic Engineering Context Object around one knowledge subject " +
+				"(schema eka-context-v1): the focus in full detail, its instance-line history, and — at " +
+				"dependency/engineering depth — the classified one-hop neighborhood and strata landscape.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"subject": map[string]any{
+						"type":        "string",
+						"description": "Identity form of the focus, e.g. \"feather/adr:001-serialization:1\".",
+					},
+					"projectId": map[string]any{
+						"type":        "string",
+						"description": "The project for the issue-number lookup (optional).",
+					},
+					"depth": map[string]any{
+						"type":        "string",
+						"description": "Context depth: \"local\" (default), \"dependency\" or \"engineering\".",
+					},
+				},
+				"required": []string{"subject"},
+			},
+		},
 		map[string]any{
 			"name": "get",
 			"description": "Fetch one Canonical Knowledge Object (CKO) by identity form: " +
@@ -271,6 +382,256 @@ func (s *Server) handleToolsList(req request) []byte {
 				"properties": map[string]any{},
 			},
 		},
+		map[string]any{
+			"name": "validate",
+			"description": "Run the authoring conformance gate over a repository and return the machine " +
+				"report (schema eka-conformance-report-v1): scanned counts, blocking errors, warnings and " +
+				"the deterministic findings (rules R0-R13).",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"root": map[string]any{
+						"type":        "string",
+						"description": "The repository root to validate (its docs/ tree is scanned).",
+					},
+				},
+				"required": []string{"root"},
+			},
+		},
+		map[string]any{
+			"name": "new",
+			"description": "Scaffold one draft in the workspace drafts tree (schema eka-draft-v1): the " +
+				"deterministic v2.0 JSON authoring template with the type's owned state defaults and " +
+				"required content keys. The change-log authority is the resolved agent identity.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"project": map[string]any{
+						"type":        "string",
+						"description": "The project scope of the draft.",
+					},
+					"namespace": map[string]any{
+						"type":        "string",
+						"description": "The frontmatter namespace of the draft.",
+					},
+					"type": map[string]any{
+						"type":        "string",
+						"description": "The EKA artifact type token, e.g. \"adr\", \"sto\", \"cmt\".",
+					},
+					"id": map[string]any{
+						"type":        "string",
+						"description": "The draft id.",
+					},
+					"dimension": map[string]any{
+						"type":        "string",
+						"description": "Optional primary Knowledge Dimension.",
+					},
+					"phase": map[string]any{
+						"type":        "string",
+						"description": "Optional phase context (scp-/plan- only).",
+					},
+					"domain": map[string]any{
+						"type":        "string",
+						"description": "Optional declared Engineering Domain (canonical spelling).",
+					},
+					"by": map[string]any{
+						"type":        "string",
+						"description": "Optional change-log authority name (defaults to the agent identity).",
+					},
+					"byKind": map[string]any{
+						"type":        "string",
+						"description": "Optional authority kind: user | agent | worker (default agent).",
+					},
+					"relationships": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"type":   map[string]any{"type": "string"},
+								"target": map[string]any{"type": "string"},
+							},
+						},
+						"description": "Optional authoring references, e.g. {\"type\":\"depends-on\",\"target\":\"plan:x\"}.",
+					},
+					"content": map[string]any{
+						"type":        "object",
+						"description": "Optional JSON object merged over the type's required content keys.",
+					},
+				},
+				"required": []string{"project", "namespace", "type", "id"},
+			},
+		},
+		map[string]any{
+			"name": "publish",
+			"description": "Publish one draft as an immutable Canonical Knowledge Object (schema " +
+				"eka-publish-result-v1). All-or-nothing: a failed validation or insert leaves the draft " +
+				"untouched; the draft file is the single-use ticket.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"target": map[string]any{
+						"type":        "string",
+						"description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\".",
+					},
+					"project": map[string]any{
+						"type":        "string",
+						"description": "Optional project scope (default: the cwd repository's project).",
+					},
+					"instanceVersion": map[string]any{
+						"type":        "integer",
+						"description": "Optional explicit instance version (must exceed the line's highest).",
+					},
+				},
+				"required": []string{"target"},
+			},
+		},
+		map[string]any{
+			"name": "transition",
+			"description": "Move a work item along the D1 transition table (or a plan/container/knowledge " +
+				"artifact along its state table) and publish the transition in place (schema " +
+				"eka-transition-result-v1). The R13 note gates and the active-container confirmation are " +
+				"enforced by the Authoring API — a refused transition publishes nothing.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"target": map[string]any{
+						"type":        "string",
+						"description": "The work item line: \"<ns>/<type>:<id>\" or \"<type>:<id>\".",
+					},
+					"to": map[string]any{
+						"type":        "string",
+						"description": "Explicit destination state (exactly one of to/forward/backward).",
+					},
+					"forward": map[string]any{
+						"type":        "boolean",
+						"description": "Take the next step of the D1 table.",
+					},
+					"backward": map[string]any{
+						"type":        "boolean",
+						"description": "Take the one-step pull-back.",
+					},
+					"repoPath": map[string]any{
+						"type":        "string",
+						"description": "Optional directory the repository is addressed from (default: the server cwd).",
+					},
+					"by": map[string]any{
+						"type":        "string",
+						"description": "Optional change-log authority name (defaults to the agent identity).",
+					},
+					"byKind": map[string]any{
+						"type":        "string",
+						"description": "Optional authority kind: user | agent | worker (default agent).",
+					},
+					"confirmed": map[string]any{
+						"type":        "boolean",
+						"description": "Pre-authorize the active-container confirmation gate.",
+					},
+				},
+				"required": []string{"target"},
+			},
+		},
+		map[string]any{
+			"name": "note",
+			"description": "Create one cmt- note draft discussing a subject (schema eka-note-result-v1): " +
+				"the per-role template (implementation | review | fix) with the discusses relationship wired " +
+				"to the resolved subject. The draft is visible to the R13 transition gates immediately.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"target": map[string]any{
+						"type":        "string",
+						"description": "The note's subject: \"<ns>/<type>:<id>\" or \"<type>:<id>\".",
+					},
+					"role": map[string]any{
+						"type":        "string",
+						"description": "Note role: implementation | review | fix.",
+					},
+					"domain": map[string]any{
+						"type":        "string",
+						"description": "Optional declared Engineering Domain of the note.",
+					},
+					"repoPath": map[string]any{
+						"type":        "string",
+						"description": "Optional directory the repository is addressed from (default: the server cwd).",
+					},
+					"by": map[string]any{
+						"type":        "string",
+						"description": "Optional change-log authority name (defaults to the agent identity).",
+					},
+					"byKind": map[string]any{
+						"type":        "string",
+						"description": "Optional authority kind: user | agent | worker (default agent).",
+					},
+					"content": map[string]any{
+						"type":        "object",
+						"description": "Optional JSON object merged over the per-role note template.",
+					},
+				},
+				"required": []string{"target", "role"},
+			},
+		},
+		map[string]any{
+			"name": "view",
+			"description": "Return one draft file content verbatim (the v2.0 JSON authoring document) — " +
+				"the editable draft behind a target.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"target": map[string]any{
+						"type":        "string",
+						"description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\".",
+					},
+					"project": map[string]any{
+						"type":        "string",
+						"description": "Optional project scope (default: the cwd repository's project).",
+					},
+				},
+				"required": []string{"target"},
+			},
+		},
+		map[string]any{
+			"name": "draft_list",
+			"description": "List the draft backlog of one project (or every project) as a machine list " +
+				"(schema eka-draft-list-v1), ordered deterministically.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"project": map[string]any{
+						"type":        "string",
+						"description": "Optional project scope (default: every project).",
+					},
+				},
+			},
+		},
+		map[string]any{
+			"name": "integrity_check",
+			"description": "Verify the canonical store and return the deterministic integrity report " +
+				"(schema eka-integrity-report-v1): scanned counts, retained-history orphans and every " +
+				"detected violation (payload hashes, reference targets, attachment digests, registry).",
+			"inputSchema": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		map[string]any{
+			"name": "discard",
+			"description": "Delete one draft file without publishing (schema eka-discard-result-v1). " +
+				"The draft is gone; the identity is free for a new draft.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"target": map[string]any{
+						"type":        "string",
+						"description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\".",
+					},
+					"project": map[string]any{
+						"type":        "string",
+						"description": "Optional project scope (default: the cwd repository's project).",
+					},
+				},
+				"required": []string{"target"},
+			},
+		},
 	}
 	return s.resultResponse(req.ID, map[string]any{"tools": tools})
 }
@@ -313,6 +674,23 @@ func (e *toolNotFoundError) Error() string { return "tool not found: " + e.name 
 // returned text is the MCP tool text content.
 func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 	switch name {
+	case "context":
+		var p struct {
+			Subject   string `json:"subject"`
+			ProjectID string `json:"projectId"`
+			Depth     string `json:"depth"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil || p.Subject == "" {
+			return "", fmt.Errorf("context requires {\"subject\": string}")
+		}
+		if p.Depth == "" {
+			p.Depth = "local"
+		}
+		data, err := s.cap.Context(p.Subject, p.ProjectID, p.Depth)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
 	case "get":
 		var p struct {
 			Form string `json:"form"`
@@ -344,13 +722,242 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			return "", err
 		}
 		return string(data), nil
+	case "validate":
+		var p struct {
+			Root string `json:"root"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil || p.Root == "" {
+			return "", fmt.Errorf("validate requires {\"root\": string}")
+		}
+		data, err := s.cap.Validate(p.Root)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "new":
+		var p struct {
+			Project       string          `json:"project"`
+			Namespace     string          `json:"namespace"`
+			Type          string          `json:"type"`
+			ID            string          `json:"id"`
+			Dimension     string          `json:"dimension"`
+			Phase         string          `json:"phase"`
+			Domain        string          `json:"domain"`
+			By            string          `json:"by"`
+			ByKind        string          `json:"byKind"`
+			Relationships []Relationship  `json:"relationships"`
+			Content       json.RawMessage `json:"content"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil || p.Project == "" || p.Namespace == "" || p.Type == "" || p.ID == "" {
+			return "", fmt.Errorf("new requires {\"project\": string, \"namespace\": string, \"type\": string, \"id\": string}")
+		}
+		by, err := resolveAuthor(p.By, p.ByKind)
+		if err != nil {
+			return "", err
+		}
+		content, err := parseContent(p.Content)
+		if err != nil {
+			return "", err
+		}
+		data, err := s.cap.NewDraft(NewDraftRequest{
+			Project:       p.Project,
+			Namespace:     p.Namespace,
+			Type:          p.Type,
+			ID:            p.ID,
+			Dimension:     p.Dimension,
+			Phase:         p.Phase,
+			Domain:        p.Domain,
+			By:            by,
+			Relationships: p.Relationships,
+			Content:       content,
+		})
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "publish":
+		var p struct {
+			Target          string `json:"target"`
+			Project         string `json:"project"`
+			InstanceVersion int    `json:"instanceVersion"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" {
+			return "", fmt.Errorf("publish requires {\"target\": string}")
+		}
+		data, err := s.cap.Publish(PublishRequest{
+			Target:          p.Target,
+			Project:         p.Project,
+			InstanceVersion: p.InstanceVersion,
+		})
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "transition":
+		var p struct {
+			RepoPath  string `json:"repoPath"`
+			Target    string `json:"target"`
+			To        string `json:"to"`
+			Forward   bool   `json:"forward"`
+			Backward  bool   `json:"backward"`
+			By        string `json:"by"`
+			ByKind    string `json:"byKind"`
+			Confirmed bool   `json:"confirmed"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" {
+			return "", fmt.Errorf("transition requires {\"target\": string}")
+		}
+		by, err := resolveAuthor(p.By, p.ByKind)
+		if err != nil {
+			return "", err
+		}
+		data, err := s.cap.Transition(TransitionRequest{
+			RepoPath:  p.RepoPath,
+			Target:    p.Target,
+			To:        p.To,
+			Forward:   p.Forward,
+			Backward:  p.Backward,
+			By:        by,
+			Confirmed: p.Confirmed,
+		})
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "note":
+		var p struct {
+			RepoPath string          `json:"repoPath"`
+			Target   string          `json:"target"`
+			Role     string          `json:"role"`
+			Domain   string          `json:"domain"`
+			By       string          `json:"by"`
+			ByKind   string          `json:"byKind"`
+			Content  json.RawMessage `json:"content"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" || p.Role == "" {
+			return "", fmt.Errorf("note requires {\"target\": string, \"role\": string}")
+		}
+		by, err := resolveAuthor(p.By, p.ByKind)
+		if err != nil {
+			return "", err
+		}
+		content, err := parseContent(p.Content)
+		if err != nil {
+			return "", err
+		}
+		data, err := s.cap.Note(NoteRequest{
+			RepoPath: p.RepoPath,
+			Target:   p.Target,
+			Role:     p.Role,
+			Domain:   p.Domain,
+			By:       by,
+			Content:  content,
+		})
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "view":
+		var p struct {
+			Target  string `json:"target"`
+			Project string `json:"project"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" {
+			return "", fmt.Errorf("view requires {\"target\": string}")
+		}
+		data, err := s.cap.View(p.Target, p.Project)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "draft_list":
+		var p struct {
+			Project string `json:"project"`
+		}
+		_ = json.Unmarshal(args, &p)
+		data, err := s.cap.DraftList(p.Project)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "integrity_check":
+		data, err := s.cap.IntegrityCheck()
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "discard":
+		var p struct {
+			Target  string `json:"target"`
+			Project string `json:"project"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" {
+			return "", fmt.Errorf("discard requires {\"target\": string}")
+		}
+		data, err := s.cap.Discard(p.Target, p.Project)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
 	default:
 		return "", &toolNotFoundError{name: name}
 	}
 }
 
+// defaultAgentIdentity is the deterministic agent identity the MCP
+// boundary stamps on write tools when the client does not pass one —
+// the boundary never falls back to the "Engineering" placeholder.
+var defaultAgentIdentity = AuthorIdentity{Kind: "agent", Name: "mcp-agent"}
+
+// resolveAuthor resolves the change-log authority of a write tool: the
+// client's by/byKind when a name is given (the kind defaults to agent —
+// the MCP boundary is the agent interface), else the deterministic
+// default agent identity. The result is never empty-named, so the
+// eka-core "Engineering" fallback can never trigger.
+func resolveAuthor(by, byKind string) (AuthorIdentity, error) {
+	name := strings.TrimSpace(by)
+	if name == "" {
+		return defaultAgentIdentity, nil
+	}
+	kind := strings.TrimSpace(byKind)
+	if kind == "" {
+		kind = "agent"
+	}
+	if !isAuthorKind(kind) {
+		return AuthorIdentity{}, fmt.Errorf("unknown author kind %q (allowed: user, agent, worker)", byKind)
+	}
+	return AuthorIdentity{Kind: kind, Name: name}, nil
+}
+
+// isAuthorKind reports whether kind is one of the three canonical
+// author identity kinds (user | agent | worker).
+func isAuthorKind(kind string) bool {
+	switch kind {
+	case "user", "agent", "worker":
+		return true
+	}
+	return false
+}
+
+// parseContent decodes the optional content object of a write tool: an
+// absent or null value is nil (the empty template scaffolds), anything
+// that is not a JSON object is refused deterministically.
+func parseContent(raw json.RawMessage) (map[string]any, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("content must be a JSON object")
+	}
+	return m, nil
+}
+
 // handleResourcesList returns the resource set of the server: the
-// workspace status resource (a real, readable view over eka-core).
+// workspace status resource (a real, readable view over eka-core) plus
+// the read-only embedded pack resources — every skill's SKILL.md and
+// every draft template type. The enumeration is deterministic (the
+// embedded filesystem is the source of truth).
 func (s *Server) handleResourcesList(req request) []byte {
 	resources := []any{
 		map[string]any{
@@ -360,11 +967,36 @@ func (s *Server) handleResourcesList(req request) []byte {
 			"mimeType":    "application/json",
 		},
 	}
+	skills, err := pack.SkillDirs()
+	if err != nil {
+		return s.errorResponse(req.ID, codeInternalError, "listing skills: "+SanitizeError(err))
+	}
+	for _, name := range skills {
+		resources = append(resources, map[string]any{
+			"uri":         "eka://skills/" + name,
+			"name":        "EKA skill " + name,
+			"description": "The SKILL.md of the embedded " + name + " skill (read-only).",
+			"mimeType":    "text/markdown",
+		})
+	}
+	types, err := pack.TemplateTypes()
+	if err != nil {
+		return s.errorResponse(req.ID, codeInternalError, "listing templates: "+SanitizeError(err))
+	}
+	for _, t := range types {
+		resources = append(resources, map[string]any{
+			"uri":         "eka://templates/" + t,
+			"name":        "EKA draft template " + t,
+			"description": "The v2.0 JSON draft template of type " + t + " (read-only).",
+			"mimeType":    "application/json",
+		})
+	}
 	return s.resultResponse(req.ID, map[string]any{"resources": resources})
 }
 
-// handleResourcesRead reads one resource URI. Currently only
-// "eka://status" is served — the status read from the capability layer.
+// handleResourcesRead reads one resource URI: eka://status (the status
+// read from the capability layer) or the read-only embedded pack
+// resources eka://skills/<name> and eka://templates/<type>.
 func (s *Server) handleResourcesRead(req request) []byte {
 	var p struct {
 		URI string `json:"uri"`
@@ -372,22 +1004,54 @@ func (s *Server) handleResourcesRead(req request) []byte {
 	if err := json.Unmarshal(req.Params, &p); err != nil || p.URI == "" {
 		return s.errorResponse(req.ID, codeInvalidParams, "resources/read requires {\"uri\": string}")
 	}
-	if p.URI != "eka://status" {
+	switch {
+	case p.URI == "eka://status":
+		data, err := s.cap.Status()
+		if err != nil {
+			return s.errorResponse(req.ID, codeInternalError, "reading eka://status: "+SanitizeError(err))
+		}
+		return s.resultResponse(req.ID, map[string]any{
+			"contents": []any{
+				map[string]any{
+					"uri":      p.URI,
+					"mimeType": "application/json",
+					"text":     string(data),
+				},
+			},
+		})
+	case strings.HasPrefix(p.URI, "eka://skills/"):
+		name := strings.TrimPrefix(p.URI, "eka://skills/")
+		data, err := pack.SkillFile(name)
+		if err != nil {
+			return s.errorResponse(req.ID, codeResourceNotFound, "resource not found: "+p.URI)
+		}
+		return s.resultResponse(req.ID, map[string]any{
+			"contents": []any{
+				map[string]any{
+					"uri":      p.URI,
+					"mimeType": "text/markdown",
+					"text":     string(data),
+				},
+			},
+		})
+	case strings.HasPrefix(p.URI, "eka://templates/"):
+		typeToken := strings.TrimPrefix(p.URI, "eka://templates/")
+		data, err := pack.TemplateFile(typeToken)
+		if err != nil {
+			return s.errorResponse(req.ID, codeResourceNotFound, "resource not found: "+p.URI)
+		}
+		return s.resultResponse(req.ID, map[string]any{
+			"contents": []any{
+				map[string]any{
+					"uri":      p.URI,
+					"mimeType": "application/json",
+					"text":     string(data),
+				},
+			},
+		})
+	default:
 		return s.errorResponse(req.ID, codeResourceNotFound, "resource not found: "+p.URI)
 	}
-	data, err := s.cap.Status()
-	if err != nil {
-		return s.errorResponse(req.ID, codeInternalError, "reading eka://status: "+SanitizeError(err))
-	}
-	return s.resultResponse(req.ID, map[string]any{
-		"contents": []any{
-			map[string]any{
-				"uri":      p.URI,
-				"mimeType": "application/json",
-				"text":     string(data),
-			},
-		},
-	})
 }
 
 // resultResponse builds a success response.

@@ -75,6 +75,19 @@ const skillPrefix = "eka-"
 // directory: every eka-*.md file is one installable command.
 const commandPrefix = "eka-"
 
+// skillFile is the SKILL.md file name of every skill directory — the
+// resource source of eka://skills/<name>.
+const skillFile = "SKILL.md"
+
+// templateDir is the drafts template directory inside the
+// eka-knowledge-authoring skill — the resource source of
+// eka://templates/<type>.
+const templateDir = "eka-knowledge-authoring/templates/drafts"
+
+// templateSuffix is the file name suffix of every draft template
+// (the type token is the file name minus the suffix).
+const templateSuffix = "-template.json"
+
 // SkillDirs lists the embedded skill directory names (the eka-*
 // directories at the skills/ root of the embedded filesystem), sorted.
 // The names come from the embedded filesystem — the manifest and the
@@ -110,6 +123,74 @@ func CommandFiles() ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// SkillFile returns the SKILL.md content of one embedded skill — the
+// read-only resource source of eka://skills/<name>. The name must be a
+// known skill directory (the embedded filesystem is the source of
+// truth, so an unknown or path-traversal name is refused
+// deterministically).
+func SkillFile(name string) ([]byte, error) {
+	dirs, err := SkillDirs()
+	if err != nil {
+		return nil, err
+	}
+	if !contains(dirs, name) {
+		return nil, fmt.Errorf("pack: unknown skill %q", name)
+	}
+	data, err := fs.ReadFile(packFS, filepath.Join(name, skillFile))
+	if err != nil {
+		return nil, fmt.Errorf("pack: skill %q has no %s: %w", name, skillFile, err)
+	}
+	return data, nil
+}
+
+// TemplateTypes lists the draft template type tokens of the embedded
+// pack (the *-template.json file names minus the suffix), sorted — the
+// deterministic resource enumeration of eka://templates/<type>.
+func TemplateTypes() ([]string, error) {
+	entries, err := fs.ReadDir(packFS, templateDir)
+	if err != nil {
+		return nil, fmt.Errorf("pack: cannot read embedded templates: %w", err)
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, templateSuffix) {
+			continue
+		}
+		out = append(out, strings.TrimSuffix(name, templateSuffix))
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// TemplateFile returns the draft template JSON of one type token — the
+// read-only resource source of eka://templates/<type>. The token must
+// be a known template type (the embedded filesystem is the source of
+// truth, so an unknown token is refused deterministically).
+func TemplateFile(typeToken string) ([]byte, error) {
+	types, err := TemplateTypes()
+	if err != nil {
+		return nil, err
+	}
+	if !contains(types, typeToken) {
+		return nil, fmt.Errorf("pack: no draft template for type %q", typeToken)
+	}
+	return fs.ReadFile(packFS, filepath.Join(templateDir, typeToken+templateSuffix))
+}
+
+// contains reports whether v is in the list.
+func contains(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 // BuildManifest builds the plugin self-description from the embedded

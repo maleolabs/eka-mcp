@@ -8,10 +8,13 @@ package mcp
 //  2. initialize without protocolVersion answers the baseline 2024-11-05
 //  3. capabilities advertise only tools + resources (no prompts,
 //     logging, completions or elicitation claims)
-//  4. tools/list = exactly get/domain/status with valid inputSchema;
-//     tools/call unknown tool → -32003; execution error → isError:true;
-//     success → text content
-//  5. resources/list + resources/read eka://status; unknown URI → -32002
+//  4. tools/list = exactly context/get/domain/status/validate/new/
+//     publish/transition/note/view/draft_list/integrity_check/discard
+//     with valid inputSchema; tools/call unknown tool → -32003;
+//     execution error → isError:true; success → text content
+//  5. resources/list = eka://status + every embedded skill + every
+//     embedded draft template type; resources/read on each family;
+//     unknown URI → -32002
 //  6. notifications (initialized, cancelled) → no response; ping → {}
 //  7. JSON-RPC error codes: -32700, -32600, -32601, -32602
 //  8. stdio framing: newline-delimited, flush per response
@@ -113,7 +116,8 @@ func TestConformanceCapabilitiesOnlyToolsAndResources(t *testing.T) {
 }
 
 // TestConformanceToolsListExact (spike point 4a): tools/list returns
-// exactly get/domain/status, each with a valid JSON Schema inputSchema.
+// exactly the 13-tool surface in the acceptance order, each with a
+// valid JSON Schema inputSchema.
 func TestConformanceToolsListExact(t *testing.T) {
 	s := conformanceServer()
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
@@ -122,10 +126,10 @@ func TestConformanceToolsListExact(t *testing.T) {
 	if !ok {
 		t.Fatalf("tools = %v, want an array", res["tools"])
 	}
-	if len(tools) != 3 {
-		t.Fatalf("tools = %v, want exactly get/domain/status", tools)
+	want := []string{"context", "get", "domain", "status", "validate", "new", "publish", "transition", "note", "view", "draft_list", "integrity_check", "discard"}
+	if len(tools) != len(want) {
+		t.Fatalf("tools = %v, want exactly %v", tools, want)
 	}
-	want := []string{"get", "domain", "status"}
 	for i, tl := range tools {
 		tm, ok := tl.(map[string]any)
 		if !ok {
@@ -195,14 +199,16 @@ func TestConformanceToolsCallSuccess(t *testing.T) {
 }
 
 // TestConformanceResourcesList (spike point 5a): resources/list exposes
-// exactly the eka://status resource.
+// the deterministic resource set — eka://status first, then every
+// embedded skill and every embedded draft template type.
 func TestConformanceResourcesList(t *testing.T) {
 	s := conformanceServer()
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"resources/list"}`)
 	res := mustResult(t, out)
 	resources := res["resources"].([]any)
-	if len(resources) != 1 {
-		t.Fatalf("resources = %v, want exactly eka://status", resources)
+	wantCount := 1 + len(mustSkillDirs(t)) + len(mustTemplateTypes(t))
+	if len(resources) != wantCount {
+		t.Fatalf("resources = %d, want %d", len(resources), wantCount)
 	}
 	r := resources[0].(map[string]any)
 	if r["uri"] != "eka://status" {
@@ -210,22 +216,52 @@ func TestConformanceResourcesList(t *testing.T) {
 	}
 }
 
-// TestConformanceResourcesReadStatus (spike point 5b): resources/read
-// on eka://status returns the status document as text content.
-func TestConformanceResourcesReadStatus(t *testing.T) {
+// TestConformanceResourcesReadSkill (spike point 5b): resources/read on
+// eka://skills/<name> returns the embedded SKILL.md as markdown text.
+func TestConformanceResourcesReadSkill(t *testing.T) {
 	s := conformanceServer()
-	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"eka://status"}}`)
+	skills := mustSkillDirs(t)
+	if len(skills) == 0 {
+		t.Fatal("the pack must embed at least one skill")
+	}
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"eka://skills/`+skills[0]+`"}}`)
 	res := mustResult(t, out)
 	contents := res["contents"].([]any)[0].(map[string]any)
-	if contents["uri"] != "eka://status" {
+	if contents["uri"] != "eka://skills/"+skills[0] {
 		t.Errorf("content uri = %v", contents["uri"])
 	}
-	if !strings.Contains(contents["text"].(string), `"initialized":true`) {
-		t.Errorf("status text = %v, want the status document", contents["text"])
+	if contents["mimeType"] != "text/markdown" {
+		t.Errorf("mimeType = %v, want text/markdown", contents["mimeType"])
+	}
+	if !strings.Contains(contents["text"].(string), "#") {
+		t.Errorf("skill text must be markdown, got %v", contents["text"])
 	}
 }
 
-// TestConformanceResourcesReadUnknown (spike point 5c): an unknown
+// TestConformanceResourcesReadTemplate (spike point 5c): resources/read
+// on eka://templates/<type> returns the embedded draft template JSON.
+func TestConformanceResourcesReadTemplate(t *testing.T) {
+	s := conformanceServer()
+	types := mustTemplateTypes(t)
+	if len(types) == 0 {
+		t.Fatal("the pack must embed at least one draft template")
+	}
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"eka://templates/`+types[0]+`"}}`)
+	res := mustResult(t, out)
+	contents := res["contents"].([]any)[0].(map[string]any)
+	if contents["uri"] != "eka://templates/"+types[0] {
+		t.Errorf("content uri = %v", contents["uri"])
+	}
+	if contents["mimeType"] != "application/json" {
+		t.Errorf("mimeType = %v, want application/json", contents["mimeType"])
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(contents["text"].(string)), &doc); err != nil {
+		t.Fatalf("template text must be JSON: %v", err)
+	}
+}
+
+// TestConformanceResourcesReadUnknown (spike point 5d): an unknown
 // resource URI is a JSON-RPC error -32002 (resource not found).
 func TestConformanceResourcesReadUnknown(t *testing.T) {
 	s := conformanceServer()
