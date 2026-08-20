@@ -231,8 +231,8 @@ func TestConformanceResourcesReadUnknown(t *testing.T) {
 	s := conformanceServer()
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"eka://bogus"}}`)
 	errObj := mustError(t, out)
-	if errObj["code"] != float64(codeResourceFound) {
-		t.Errorf("error code = %v, want %v", errObj["code"], codeResourceFound)
+	if errObj["code"] != float64(codeResourceNotFound) {
+		t.Errorf("error code = %v, want %v", errObj["code"], codeResourceNotFound)
 	}
 }
 

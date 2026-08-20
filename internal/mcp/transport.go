@@ -8,13 +8,13 @@ import (
 	"io"
 )
 
-// maxLineSize is the hard cap on one stdio message line (64 MiB). A
-// larger line is refused deterministically and the stream is
+// defaultMaxLineSize is the hard cap on one stdio message line (64 MiB).
+// A larger line is refused deterministically and the stream is
 // resynchronized at the next newline, so one oversized message cannot
 // wedge the session or exhaust the process memory.
-const maxLineSize = 64 << 20
+const defaultMaxLineSize = 64 << 20
 
-// errLineTooLong marks a message line that exceeded maxLineSize.
+// errLineTooLong marks a message line that exceeded the line cap.
 var errLineTooLong = errors.New("mcp: message exceeds the 64 MiB line limit")
 
 // Serve runs the MCP server over a stdio-style byte stream: it reads
@@ -29,7 +29,7 @@ func (s *Server) Serve(r io.Reader, w io.Writer) error {
 	br := bufio.NewReader(r)
 	bw := bufio.NewWriter(w)
 	for {
-		line, err := readLine(br)
+		line, err := readLine(br, s.maxLineSize)
 		if err == io.EOF {
 			return nil
 		}
@@ -70,7 +70,7 @@ func writeResponse(bw *bufio.Writer, resp []byte) error {
 }
 
 // lineTooLongResponse is the deterministic refusal for a message line
-// exceeding maxLineSize: a JSON-RPC invalid-request error with a fixed
+// exceeding the line cap: a JSON-RPC invalid-request error with a fixed
 // message (no internal details).
 func lineTooLongResponse() []byte {
 	return marshalResponse(response{
@@ -81,28 +81,30 @@ func lineTooLongResponse() []byte {
 }
 
 // readLine reads one newline-terminated line, accumulating fragments up
-// to maxLineSize (the cap counts the message content, not the framing
-// newline). A line that exceeds the cap is drained (the stream is
-// resynchronized at the next newline) and reported as errLineTooLong.
-// A final partial line (EOF without a trailing newline) is delivered
-// with the EOF deferred to the next call, so Serve processes it before
-// terminating.
-func readLine(br *bufio.Reader) ([]byte, error) {
+// to max (the cap counts the message content, not the framing newline).
+// A line that exceeds the cap is drained (the stream is resynchronized
+// at the next newline) and reported as errLineTooLong. A final partial
+// line (EOF without a trailing newline) is delivered with the EOF
+// deferred to the next call, so Serve processes it before terminating.
+func readLine(br *bufio.Reader, max int) ([]byte, error) {
 	var buf []byte
 	for {
 		frag, err := br.ReadSlice('\n')
 		if err == nil {
 			// Complete line: frag includes the framing newline, so the
 			// message content is len(buf)+len(frag)-1 bytes.
-			if len(buf)+len(frag)-1 > maxLineSize {
+			if len(buf)+len(frag)-1 > max {
 				return nil, errLineTooLong
 			}
 			return append(buf, frag...), nil
 		}
 		if err == bufio.ErrBufferFull {
 			// Fragment without a newline: the message already exceeds
-			// the cap — drain to the next newline and refuse.
-			if len(buf)+len(frag) > maxLineSize {
+			// the cap — drain to the next newline and refuse. Note the
+			// transient buf capacity can reach ~max plus one read
+			// buffer before the refusal fires (up to ~2x max at the
+			// boundary with a buffer the size of the cap).
+			if len(buf)+len(frag) > max {
 				drainLine(br)
 				return nil, errLineTooLong
 			}
@@ -110,7 +112,7 @@ func readLine(br *bufio.Reader) ([]byte, error) {
 			continue
 		}
 		// EOF or reader error.
-		if len(buf)+len(frag) > maxLineSize {
+		if len(buf)+len(frag) > max {
 			return nil, errLineTooLong
 		}
 		line := append(buf, frag...)

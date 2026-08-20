@@ -32,13 +32,13 @@ const ProtocolVersion = "2024-11-05"
 
 // JSON-RPC 2.0 error codes (spec §5.1) plus the MCP extensions.
 const (
-	codeParseError     = -32700
-	codeInvalidRequest = -32600
-	codeMethodNotFound = -32601
-	codeInvalidParams  = -32602
-	codeInternalError  = -32603
-	codeToolNotFound   = -32003
-	codeResourceFound  = -32002 // "Resource not found" (MCP extension)
+	codeParseError       = -32700
+	codeInvalidRequest   = -32600
+	codeMethodNotFound   = -32601
+	codeInvalidParams    = -32602
+	codeInternalError    = -32603
+	codeToolNotFound     = -32003
+	codeResourceNotFound = -32002 // "Resource not found" (MCP extension)
 )
 
 // Capability is the EKA capability surface the MCP server dispatches
@@ -59,11 +59,14 @@ type Capability interface {
 // capability layer. It is safe for one session at a time (stdio).
 type Server struct {
 	cap Capability
+	// maxLineSize caps one stdio message line (defaultMaxLineSize).
+	// Tests shrink it to exercise the boundary cheaply.
+	maxLineSize int
 }
 
 // NewServer wires the server around one capability.
 func NewServer(cap Capability) *Server {
-	return &Server{cap: cap}
+	return &Server{cap: cap, maxLineSize: defaultMaxLineSize}
 }
 
 // request is a JSON-RPC 2.0 request object. ID is kept raw so string,
@@ -290,7 +293,7 @@ func (s *Server) handleToolsCall(req request) []byte {
 			return s.errorResponse(req.ID, codeToolNotFound, "tool not found: "+p.Name)
 		}
 		return s.resultResponse(req.ID, map[string]any{
-			"content": []any{map[string]any{"type": "text", "text": sanitizeError(err)}},
+			"content": []any{map[string]any{"type": "text", "text": SanitizeError(err)}},
 			"isError": true,
 		})
 	}
@@ -370,11 +373,11 @@ func (s *Server) handleResourcesRead(req request) []byte {
 		return s.errorResponse(req.ID, codeInvalidParams, "resources/read requires {\"uri\": string}")
 	}
 	if p.URI != "eka://status" {
-		return s.errorResponse(req.ID, codeResourceFound, "resource not found: "+p.URI)
+		return s.errorResponse(req.ID, codeResourceNotFound, "resource not found: "+p.URI)
 	}
 	data, err := s.cap.Status()
 	if err != nil {
-		return s.errorResponse(req.ID, codeInternalError, "reading eka://status: "+sanitizeError(err))
+		return s.errorResponse(req.ID, codeInternalError, "reading eka://status: "+SanitizeError(err))
 	}
 	return s.resultResponse(req.ID, map[string]any{
 		"contents": []any{
@@ -392,8 +395,13 @@ func (s *Server) resultResponse(id json.RawMessage, result any) []byte {
 	return marshalResponse(response{JSONRPC: "2.0", ID: id, Result: result})
 }
 
-// errorResponse builds an error response.
+// errorResponse builds an error response. When the request carried no
+// id (or an undetectable one), the response id is null — JSON-RPC 2.0
+// §4.3: the id MUST be Null when the detection of the id failed.
 func (s *Server) errorResponse(id json.RawMessage, code int, msg string) []byte {
+	if len(id) == 0 {
+		id = json.RawMessage("null")
+	}
 	return marshalResponse(response{
 		JSONRPC: "2.0",
 		ID:      id,
@@ -413,21 +421,34 @@ func parseErrorResponse() []byte {
 }
 
 // pathRe matches file paths in error messages: absolute paths
-// (/home/…, C:\…), relative paths (./…, ../…) and any slash- or
-// backslash-separated run that looks like a path. The MCP boundary
-// must never leak store paths or workspace locations.
-var pathRe = regexp.MustCompile(`(?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|[\\/])[^\s"':]*[\\/][^\s"':]*`)
+// (/home/…, C:\…), tilde paths (~/…), relative paths (./…, ../…)
+// and any slash- or backslash-separated run that looks like a path.
+// Segments may contain spaces (a parent directory can be "john doe");
+// the second-slash requirement anchors matches, so single-slash tokens
+// like "a/b" survive. The MCP boundary must never leak store paths or
+// workspace locations.
+var pathRe = regexp.MustCompile(`(?:[A-Za-z]:[\\/]|~[\\/]|\.{1,2}[\\/]|[\\/])[^\r\n"':]*[\\/][^\r\n"':]*`)
 
-// sanitizeError reduces a capability error to a deterministic,
-// client-safe refusal-class message: first line only (stack traces and
-// wrapped context live below), no file paths, no store details. The
-// result is stable for a given error, so clients can match on it.
-func sanitizeError(err error) string {
+// relPathRe matches dot-less relative paths whose last segment looks
+// like a file (contains a dot), e.g. "data/store.db". The first segment
+// excludes whitespace so a leading space before the path survives.
+// Single-slash tokens without a file-like last segment (e.g.
+// "feather/adr:…" identity forms) survive.
+var relPathRe = regexp.MustCompile(`[^\r\n"':/\\ ]*[\\/][^\r\n"':/\\]*\.[^\r\n"':/\\]*`)
+
+// SanitizeError reduces an error to a deterministic, client-safe
+// refusal-class message: first line only (stack traces and wrapped
+// context live below), no file paths, no store details. The result is
+// stable for a given error, so clients can match on it. It is the
+// shared policy of the MCP boundary and the executable's startup
+// errors (stderr is captured by the MCP client).
+func SanitizeError(err error) string {
 	msg := err.Error()
 	if i := strings.IndexByte(msg, '\n'); i >= 0 {
 		msg = msg[:i]
 	}
 	msg = pathRe.ReplaceAllString(msg, "<path>")
+	msg = relPathRe.ReplaceAllString(msg, "<path>")
 	msg = strings.TrimSpace(msg)
 	if msg == "" {
 		return "tool execution failed"

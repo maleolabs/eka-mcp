@@ -99,6 +99,27 @@ func TestMalformedRequestObject(t *testing.T) {
 	}
 }
 
+// TestErrorResponseMissingIDIsNull: an invalid request without an id
+// (wrong jsonrpc version, missing method, malformed fields) must still
+// carry "id": null in the error response — JSON-RPC 2.0 §4.3: the id
+// MUST be Null when the detection of the id failed.
+func TestErrorResponseMissingIDIsNull(t *testing.T) {
+	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	for _, msg := range []string{
+		`{"jsonrpc":"1.0","method":"ping"}`,
+		`{"jsonrpc":"2.0"}`,
+		`{"jsonrpc":"2.0","method":123}`,
+	} {
+		resp := s.HandleMessage([]byte(msg))
+		if len(resp) == 0 {
+			t.Fatalf("%s: expected an error response, got none", msg)
+		}
+		if !bytes.Contains(resp, []byte(`"id":null`)) {
+			t.Errorf("%s: error response must carry \"id\":null, got %s", msg, resp)
+		}
+	}
+}
+
 // TestSanitizeError: capability errors are reduced to deterministic
 // refusal-class messages — first line only, no paths, no store details.
 func TestSanitizeError(t *testing.T) {
@@ -111,13 +132,19 @@ func TestSanitizeError(t *testing.T) {
 		{"unable to open database file: /home/user/.eka/workspace.db", "unable to open database file: <path>"},
 		{"no such file or directory: ./data/store.db", "no such file or directory: <path>"},
 		{"open C:\\Users\\eka\\.eka\\store.db: permission denied", "open <path>: permission denied"},
+		// Paths with spaces in a parent directory must not leak fragments.
+		{"unable to open database file: /home/john doe/.eka/store.db", "unable to open database file: <path>"},
+		// Tilde paths must not leak fragments.
+		{"no such file or directory: ~/.eka/store.db", "no such file or directory: <path>"},
+		// Dot-less relative paths must not leak fragments.
+		{"no such file or directory: data/store.db", "no such file or directory: <path>"},
 		{"first line\nsecond line\nat goroutine 1 [running]:", "first line"},
 		{"", "tool execution failed"},
 	}
 	for _, tc := range cases {
-		got := sanitizeError(errors.New(tc.in))
+		got := SanitizeError(errors.New(tc.in))
 		if got != tc.want {
-			t.Errorf("sanitizeError(%q) = %q, want %q", tc.in, got, tc.want)
+			t.Errorf("SanitizeError(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }
@@ -180,7 +207,7 @@ func (f *failingStatusCapability) Status() ([]byte, error) {
 // deterministically and the session continues at the next line.
 func TestServeLineTooLong(t *testing.T) {
 	s := NewServer(&fakeCapability{statusJSON: `{}`})
-	oversized := strings.Repeat("a", maxLineSize+1)
+	oversized := strings.Repeat("a", defaultMaxLineSize+1)
 	input := oversized + "\n" + `{"jsonrpc":"2.0","id":1,"method":"ping"}` + "\n"
 
 	var out bytes.Buffer
@@ -213,13 +240,15 @@ func TestServeLineTooLong(t *testing.T) {
 	}
 }
 
-// TestServeLineAtCap: a line of exactly maxLineSize is accepted (the
-// cap is inclusive) — it parses as JSON and answers.
+// TestServeLineAtCap: a line of exactly the cap is accepted (the cap is
+// inclusive) — it parses as JSON and answers. Runs at a small cap; the
+// real 64 MiB cap is exercised by TestServeLineTooLong.
 func TestServeLineAtCap(t *testing.T) {
 	s := NewServer(&fakeCapability{statusJSON: `{}`})
-	// A valid request padded with whitespace to exactly maxLineSize.
+	s.maxLineSize = 1024
+	// A valid request padded with whitespace to exactly the cap.
 	base := `{"jsonrpc":"2.0","id":1,"method":"ping"}`
-	pad := maxLineSize - len(base)
+	pad := s.maxLineSize - len(base)
 	if pad < 0 {
 		t.Fatal("base message larger than the cap")
 	}
@@ -237,7 +266,8 @@ func TestServeLineAtCap(t *testing.T) {
 // newline) is still refused deterministically and Serve terminates.
 func TestServeOversizedLineAtEOF(t *testing.T) {
 	s := NewServer(&fakeCapability{statusJSON: `{}`})
-	input := strings.Repeat("a", maxLineSize+1)
+	s.maxLineSize = 1024
+	input := strings.Repeat("a", s.maxLineSize+1)
 	var out bytes.Buffer
 	if err := s.Serve(strings.NewReader(input), &out); err != nil {
 		t.Fatalf("Serve failed: %v", err)
@@ -249,15 +279,13 @@ func TestServeOversizedLineAtEOF(t *testing.T) {
 
 // TestServeResyncAfterOversizedLine: after an oversized line the stream
 // is resynchronized at the next newline — a following valid message is
-// processed even when the oversized line had no trailing newline before
-// the next message.
+// processed.
 func TestServeResyncAfterOversizedLine(t *testing.T) {
 	s := NewServer(&fakeCapability{statusJSON: `{}`})
-	// Oversized line WITHOUT newline, immediately followed by a valid
-	// message: the drain must consume up to the newline of the valid
-	// message's line... which would eat it. Instead use the framing the
-	// protocol guarantees: oversized line + newline + valid message.
-	input := strings.Repeat("a", maxLineSize+1) + "\n" + `{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n"
+	s.maxLineSize = 1024
+	// Oversized line + newline + valid message: the drain consumes up to
+	// the newline, so the following message is processed normally.
+	input := strings.Repeat("a", s.maxLineSize+1) + "\n" + `{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n"
 	var out bytes.Buffer
 	if err := s.Serve(strings.NewReader(input), &out); err != nil {
 		t.Fatalf("Serve failed: %v", err)
