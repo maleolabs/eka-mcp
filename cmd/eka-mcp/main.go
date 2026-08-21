@@ -46,12 +46,14 @@ func run(args []string, out io.Writer) error {
 		return runManifest(args[1:], out)
 	case "install":
 		return runInstall(args[1:], out)
+	case "configure":
+		return runConfigure(args[1:], out)
 	case "serve", "--stdio":
 		// "--stdio" is the MCP client convention for "run the server
 		// over stdio"; it is accepted as an alias of "serve".
 		return serve()
 	default:
-		return fmt.Errorf("unknown subcommand %q (want manifest, install or serve)", args[0])
+		return fmt.Errorf("unknown subcommand %q (want manifest, install, configure or serve)", args[0])
 	}
 }
 
