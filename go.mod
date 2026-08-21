@@ -2,7 +2,7 @@ module github.com/maleolabs/eka-mcp
 
 go 1.24.0
 
-require github.com/maleolabs/eka-core v1.2.1-0.20260817063006-80ba3d698faa
+require github.com/maleolabs/eka-core v1.3.0
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
