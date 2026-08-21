@@ -203,6 +203,46 @@ func (f *failingStatusCapability) Status() ([]byte, error) {
 	return nil, errors.New("unable to open database file: /home/user/.eka/workspace.db")
 }
 
+func (f *failingStatusCapability) Context(subject, projectID, depth string) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (f *failingStatusCapability) Validate(root string) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (f *failingStatusCapability) NewDraft(req NewDraftRequest) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (f *failingStatusCapability) Publish(req PublishRequest) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (f *failingStatusCapability) Transition(req TransitionRequest) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (f *failingStatusCapability) Note(req NoteRequest) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (f *failingStatusCapability) View(target, project string) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (f *failingStatusCapability) DraftList(project string) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (f *failingStatusCapability) IntegrityCheck() ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (f *failingStatusCapability) Discard(target, project string) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
 // TestServeLineTooLong: a line exceeding the 64 MiB cap is refused
 // deterministically and the session continues at the next line.
 func TestServeLineTooLong(t *testing.T) {
