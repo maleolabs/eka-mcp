@@ -37,9 +37,19 @@ func TestOpenDetached(t *testing.T) {
 		t.Errorf("detached Get error must report the uninitialized workspace, got %v", err)
 	}
 
-	_, err = cap.Status()
-	if err == nil {
-		t.Fatal("Status without a workspace must error")
+	data, err := cap.Status()
+	if err != nil {
+		t.Fatalf("Status without a workspace must return uninitialized shape, got error %v", err)
+	}
+	var st map[string]any
+	if err := json.Unmarshal(data, &st); err != nil {
+		t.Fatalf("detached Status must be JSON: %v", err)
+	}
+	if st["initialized"] != false {
+		t.Errorf("detached Status initialized = %v, want false", st["initialized"])
+	}
+	if st["schema"] != "eka-status-v1" {
+		t.Errorf("detached Status schema = %v, want eka-status-v1", st["schema"])
 	}
 }
 

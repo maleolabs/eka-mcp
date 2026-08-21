@@ -58,7 +58,14 @@ func (c *Capability) Exists() bool {
 // qualified line form "<ns>/<type>:<id>" (the latest instance of the
 // line). Resolution and parsing are entirely eka-core's
 // (Resolver.Resolve + conformance.ParseReference).
+//
+// When the workspace is not initialized, it returns a deterministic
+// uninitialized error without leaking store paths — the MCP boundary
+// sanitizes any residual path, but the capability already avoids it.
 func (c *Capability) Get(form string) ([]byte, error) {
+	if !c.Exists() {
+		return nil, fmt.Errorf("eka: workspace not initialized")
+	}
 	u, ok, err := c.rt.Resolver.Resolve(form)
 	if err != nil {
 		return nil, err
@@ -78,6 +85,9 @@ func (c *Capability) Get(form string) ([]byte, error) {
 // compact form). The search itself is eka-core's (Knowledge.Search);
 // NewCollection provides the deterministic domain projection.
 func (c *Capability) Domain(projectID, domain string) ([]byte, error) {
+	if !c.Exists() {
+		return nil, fmt.Errorf("eka: workspace not initialized")
+	}
 	units, err := c.rt.Knowledge.Search(runtime.SearchQuery{ProjectID: projectID, Domain: domain})
 	if err != nil {
 		return nil, err
@@ -91,7 +101,24 @@ func (c *Capability) Domain(projectID, domain string) ([]byte, error) {
 
 // Status returns the aggregated workspace status as JSON (eka-core's
 // Workspace.Status — the same aggregation `eka status` serves).
+//
+// When the workspace is not initialized (detached runtime, EKA_HOME
+// unset or empty), it returns a deterministic uninitialized shape
+// instead of an error, so the MCP server answers cleanly without a
+// workspace — the initialized flag is the deterministic signal.
 func (c *Capability) Status() ([]byte, error) {
+	if !c.Exists() {
+		return json.Marshal(map[string]any{
+			"schema":      "eka-status-v1",
+			"initialized": false,
+			"path":        c.rt.Path(),
+			"message":     "workspace not initialized: run 'eka project register' to create it",
+			"objects":     0,
+			"payloads":    0,
+			"attachments": 0,
+			"projects":    []any{},
+		})
+	}
 	st, err := c.rt.Workspace.Status()
 	if err != nil {
 		return nil, err
@@ -107,6 +134,9 @@ func (c *Capability) Context(subject, projectID, depth string) ([]byte, error) {
 	d, ok := contexts.ParseDepth(depth)
 	if !ok {
 		return nil, fmt.Errorf("eka: unknown context depth %q (allowed: local, dependency, engineering)", depth)
+	}
+	if !c.Exists() {
+		return nil, fmt.Errorf("eka: workspace not initialized")
 	}
 	obj, err := contexts.New(c.rt).Build(subject, projectID, d, contexts.Options{})
 	if err != nil {

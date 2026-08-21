@@ -64,6 +64,15 @@ Supported kinds: `skills` (each `eka-*` directory installed as a subtree) and
 `commands` (each command file installed as a single file). `--dry-run` reports
 the plan without touching the filesystem.
 
+**`eka-mcp configure [--target opencode|claude|codex] [--dir <dir>] [--dry-run] --json`** —
+per-agent configuration UX (outside the fixed manifest/install contract): writes
+the MCP client config entry for the target ecosystem (absolute binary path +
+`EKA_HOME` when set) and delegates skill/command install. `--dry-run` prints the
+plan without writing. Unsupported `--target` fails deterministically listing the
+supported targets. The write merges without overwriting other servers' entries and
+is idempotent. Default `--target` is `opencode`; `--dir` defaults to the current
+working directory (workspace root).
+
 ## The MCP server
 
 Running `eka-mcp serve` (or `eka-mcp --stdio`, or no subcommand at all) starts
@@ -71,18 +80,33 @@ the MCP server over stdio (JSON-RPC 2.0, newline-delimited). It reports MCP
 protocol version `2024-11-05` and advertises the `tools` and `resources`
 capabilities.
 
-The server exposes three tools and one resource over the EKA capability layer:
+The server exposes 13 tools and three resource families over the EKA capability
+layer:
 
 | Tool / resource | Description |
 |---|---|
+| `context` | Build the deterministic Context Object around one subject (schema `eka-context-v1`). |
 | `get` | Fetch one Canonical Knowledge Object by identity form (canonical `"<ns>/<type>:<id>:<v>"` or qualified line `"<ns>/<type>:<id>"`), returned as a machine document (schema `eka-cko-v2`). |
 | `domain` | Return every unit of one Engineering Domain of a project as a machine collection (schema `eka-cko-v2`, sorted by canonical form). |
-| `status` | Return the aggregated EKA workspace status (path, schema version, projects, canonical store totals). |
+| `status` | Return the aggregated EKA workspace status (path, schema version, projects, canonical store totals). When no workspace is present it returns `{"initialized":false,…}` deterministically. |
+| `validate` | Run the authoring conformance gate over a repository. |
+| `new` | Scaffold one draft (schema `eka-draft-v1`). |
+| `publish` | Publish one draft (schema `eka-publish-result-v1`). |
+| `transition` | Move a work item along the transition table (schema `eka-transition-result-v1`). |
+| `note` | Create one `cmt-` note draft (schema `eka-note-result-v1`). |
+| `view` | Return one draft file content verbatim. |
+| `draft_list` | List the draft backlog. |
+| `integrity_check` | Verify the canonical store. |
+| `discard` | Delete one draft without publishing. |
 | `eka://status` (resource) | The same workspace status, as a readable resource (`application/json`). |
+| `eka://skills/<name>` (resource) | The `SKILL.md` of one embedded skill (read-only). |
+| `eka://templates/<type>` (resource) | The v2.0 JSON draft template of one type (read-only). |
 
 The server opens the EKA Runtime **read-only** (`runtime.Open`), so it starts
-cleanly even before a workspace exists — retrieval then reports the
-uninitialized state instead of failing.
+cleanly even before a workspace exists — `initialize` and `tools/list` always
+answer, and retrieval tools report the uninitialized state deterministically
+(`status` returns `initialized:false`; `get`/`domain`/`context` return
+`workspace not initialized`) instead of crashing or leaking stack traces.
 
 ### Hardening contract
 
@@ -146,12 +170,81 @@ token families and a smoke test.
 
 ```sh
 eka plugin install mcp
+eka-mcp configure --target opencode --dir . --json   # writes MCP client config + installs skills/commands
 ```
 
 This installs the official `eka-mcp` plugin from its GitHub release with
 checksum verification, then delegates the skill-pack installation
 (`eka-mcp install skills` / `eka-mcp install commands`) into your agent
-configuration directory.
+configuration directory. The `configure` subcommand is the per-agent setup:
+it writes the MCP client config entry (absolute `eka-mcp` binary path +
+`EKA_HOME` when set) and delegates the skill/command install. Use
+`--dry-run` to preview, `--target opencode|claude|codex` to select the
+ecosystem (default `opencode`).
+
+### Manual MCP client configuration (without the subcommand)
+
+If you skip `eka-mcp configure`, add the entry for `eka` to your agent's
+MCP config by hand. Replace `/absolute/path/to/eka-mcp` with the absolute
+path to the built binary (`which eka-mcp` or `go build -o /path/eka-mcp ./cmd/eka-mcp`),
+and set `EKA_HOME` only when your workspace lives outside `~/.eka`.
+
+**opencode** — `opencode.json` (`mcp` section, workspace-local `opencode.json` or
+`~/.config/opencode/opencode.json`):
+
+```json
+{
+  "mcp": {
+    "eka": {
+      "type": "local",
+      "command": ["/absolute/path/to/eka-mcp"],
+      "enabled": true,
+      "environment": {
+        "EKA_HOME": "/absolute/path/to/workspace-home"
+      }
+    }
+  }
+}
+```
+
+Omit `environment.EKA_HOME` when `EKA_HOME` is unset (the server then uses
+`~/.eka`).
+
+**Claude Code** — `~/.claude.json` (`mcpServers` section):
+
+```json
+{
+  "mcpServers": {
+    "eka": {
+      "command": "/absolute/path/to/eka-mcp",
+      "args": [],
+      "env": {
+        "EKA_HOME": "/absolute/path/to/workspace-home"
+      }
+    }
+  }
+}
+```
+
+**Codex** — `~/.codex` (or `~/.codex/config.json` when `~/.codex` is a directory,
+`mcpServers` section):
+
+```json
+{
+  "mcpServers": {
+    "eka": {
+      "command": "/absolute/path/to/eka-mcp",
+      "args": [],
+      "env": {
+        "EKA_HOME": "/absolute/path/to/workspace-home"
+      }
+    }
+  }
+}
+```
+
+All three merges preserve other servers' entries; re-running `eka-mcp
+configure` is idempotent. Verify with `--dry-run --json`.
 
 ### Standalone binary
 
@@ -163,7 +256,7 @@ go build ./cmd/eka-mcp
 
 Then run `./eka-mcp serve` as your MCP client's stdio server, or use
 `./eka-mcp manifest --json` / `./eka-mcp install <kind> --dir <dir> --json`
-directly.
+/ `./eka-mcp configure --target <target> --dir <dir> --json` directly.
 
 ## Versioning
 
