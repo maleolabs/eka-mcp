@@ -142,3 +142,7 @@ eka integrity check
 
 - [The AI Workflow](../docs/workflow.md) — the complete walkthrough with the six-step loop in depth.
 - [The MCP Boundary](../docs/mcp-boundary.md) — how this behavior layer will sit on future transports.
+
+## Review trail convention (phase 2)
+
+Per-reviewer `cmt-` trail: one note per reviewer, agent identity via `--by --by-kind agent|worker`, verdict `approve` is advisory, `resolve` only releases `done` (see `eka-knowledge-review`).
