@@ -1,7 +1,7 @@
 # EKA AI Skill Pack
 
 > The official EKA Skill Pack: modular skill definitions that teach AI coding agents how to work with an EKA-enabled project — what Engineering Knowledge is, how EKA organizes it, how to retrieve it, how to construct context, how to modify it safely, and how to preserve its invariants.
-> Status: **experimental (v0.1)**. Companion to the [Knowledge Runtime Architecture](../reference/runtime-architecture.md) and the [Context Engine](../reference/decisions/adr-021-context-engine.md). Convention zone, not an EKA artifact (no `type`/`id`).
+> Status: **stable (v1.0.0)**. Companion to the [Knowledge Runtime Architecture](../reference/runtime-architecture.md) and the [Context Engine](../reference/decisions/adr-021-context-engine.md). Convention zone, not an EKA artifact (no `type`/`id`).
 > Anchor decision: [ADR-022 — AI Skill Pack](../reference/decisions/adr-022-ai-skill-pack.md).
 
 ## What the Skill Pack is

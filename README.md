@@ -47,7 +47,7 @@ installer can actually install:
 {
   "contract": "v1",
   "name": "mcp",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "EKA MCP — the AI-agent integration layer: an MCP server over the EKA Runtime plus the EKA AI Skill Pack installer",
   "artifacts": [
     { "kind": "skills", "entries": ["eka-router", "eka-orientation", "…"] },
@@ -261,7 +261,7 @@ Then run `./eka-mcp serve` as your MCP client's stdio server, or use
 ## Versioning
 
 - **Semantic versioning**, tag-driven. The single version constant
-  (`pack.Version`, currently `0.1.0`) is reported in the plugin manifest, the
+  (`pack.Version`, currently `1.0.0`) is reported in the plugin manifest, the
   `install` result, and the MCP `serverInfo` — one version across all three
   roles, so they never drift.
 

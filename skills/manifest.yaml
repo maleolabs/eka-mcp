@@ -6,9 +6,9 @@
 
 pack:
   name: eka-ai-skill-pack
-  version: 0.3.2
-  status: experimental
-  requiresEka: ">= 0.6.0"
+  version: 1.0.0
+  status: stable
+  requiresEka: ">= 1.0.0"
   anchorDecision: "reference/decisions/adr-022-ai-skill-pack.md"
   installCommand: "eka install skills|commands (pack embedded in the eka binary since ADR-023)"
 
