@@ -86,8 +86,11 @@ bodies stay description-only in the pack; frontmatter is rendered per target at
 install time, and the active role→agent delegation table travels alongside as a
 non-.md `DELEGATION.txt` sidecar (next to the installed commands for
 opencode/claude, inside the skills subtree for codex) so legacy command dirs
-never see a phantom `.md` command. Re-installing overwrites only pack-owned
-files; foreign files are never touched; symlinked targets refuse.
+never see a phantom `.md` command. `DELEGATION.txt` is a **reserved sidecar
+name**: every install writes/overwrites it, so do not store your own content
+under that name in the install directories. Re-installing overwrites only
+pack-owned files; foreign files are never touched; a symlinked final path
+component refuses (intermediate directory symlinks are followed).
 
 ## The MCP server
 
@@ -185,7 +188,17 @@ pre-rendered role→agent delegation tables per ecosystem (`opencode.toml` — t
 default reference mapping, `claude.toml`, `codex.toml`) of
 req:agent-agnostic-skill-pack R4: one closed 9-role vocabulary, declarative
 per-ecosystem resolution (`delegate` to a named agent or explicit `solo`
-degrade), rendered to plain text for the future DELEGATION.txt sidecar.
+degrade).
+
+### Mapping burden
+
+Per-ecosystem adaptation is **declarative, not editorial**: the command bodies
+never name agents, so porting to a new ecosystem means editing (or adding) a
+`mappings/*.toml` table — never a command body. At install time the active
+table is rendered to the plain-text `DELEGATION.txt` sidecar next to the
+installed artifacts, and the bodies resolve their delegation rows from it.
+Bodies and tables cannot drift silently: a build-time consistency test asserts
+that every role cited by the command bodies resolves in every mapping table.
 
 ## Installation
 

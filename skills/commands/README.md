@@ -18,8 +18,8 @@ Skills teach *how to behave* and are loaded on demand by the agent itself. Comma
 The commands are embedded in the `eka-mcp` binary (the pack-distribution vehicle per ADR-030). The official installation path is the plugin's configure surface:
 
 ```sh
-eka-mcp configure --target opencode --with-commands   # install eka-discuss.md + eka-execute.md
-eka-mcp configure --target opencode --with-all        # skills + commands + MCP client config
+eka-mcp configure --target opencode --with-commands --json   # install eka-discuss.md + eka-execute.md (--json is REQUIRED — configure refuses without it)
+eka-mcp configure --target opencode --with-all --json        # skills + commands + MCP client config
 ```
 
 `configure` supports `--target opencode|claude|codex` (default `opencode`), `--dir <path>` for an explicit directory, and `--dry-run` to preview the plan (paths + `create|overwrite|skip`, nothing written). Without a `--with-*` flag nothing is copied — the pack stays reachable as MCP resources (`eka://skills/*`, `eka://templates/*`). Re-running after an upgrade refreshes the installed files — overwriting **only pack-owned files**; foreign files in the install directories are never touched.
@@ -32,7 +32,7 @@ Install destinations are the conventional per-target directories under an anchor
 | **claude** | `<base>/.claude/commands/` | `<base>/.claude/skills/` | `DELEGATION.txt` next to the commands |
 | **codex** | — not installable (codex-cli removed the prompts directory in 0.117.0; `--with-commands` / `--with-all` refuse deterministically) | `<base>/.agents/skills/` | `DELEGATION.txt` inside the skills subtree |
 
-Every command install also writes the active role→agent mapping table as a **non-.md sidecar** (`DELEGATION.txt`) — deliberately not `.md`, because legacy command directories scan every `*.md` as a command.
+Every command install also writes the active role→agent mapping table as a **non-.md sidecar** (`DELEGATION.txt`) — deliberately not `.md`, because legacy command directories scan every `*.md` as a command. `DELEGATION.txt` is a **reserved file name** in the install directories: every install writes/overwrites it unconditionally, so never store your own content under that name.
 
 Manual copy remains a valid fallback:
 
@@ -44,7 +44,7 @@ mkdir -p .opencode/commands
 cp skills/commands/*.md .opencode/commands/
 ```
 
-Then run `/eka-discuss` or `/eka-execute` in the agent's TUI. The canonical bodies carry **description-only frontmatter**; provider-specific frontmatter is rendered at install time per target. The primary orchestrating agent runs the command; delegation happens through the role contract inside the command body.
+Then run `/eka-discuss` or `/eka-execute` in the agent's TUI. The canonical bodies carry **description-only frontmatter**; provider-specific frontmatter is rendered into the installed copies at install time per target — the canonical pack files stay byte-identical. The primary orchestrating agent runs the command; delegation happens through the role contract inside the command body.
 
 ## How commands load skills
 
