@@ -64,14 +64,17 @@ Supported kinds: `skills` (each `eka-*` directory installed as a subtree) and
 `commands` (each command file installed as a single file). `--dry-run` reports
 the plan without touching the filesystem.
 
-**`eka-mcp configure [--target opencode|claude|codex] [--dir <dir>] [--dry-run] --json`** —
+**`eka-mcp configure [--target opencode|claude|codex] [--dir <dir>] [--with-skills] [--with-commands] [--with-all] [--dry-run] --json`** —
 per-agent configuration UX (outside the fixed manifest/install contract): writes
 the MCP client config entry for the target ecosystem (absolute binary path +
-`EKA_HOME` when set) and delegates skill/command install. `--dry-run` prints the
-plan without writing. Unsupported `--target` fails deterministically listing the
-supported targets. The write merges without overwriting other servers' entries and
-is idempotent. Default `--target` is `opencode`; `--dir` defaults to the current
-working directory (workspace root).
+`EKA_HOME` when set). By default it **only** writes the MCP client config — skills
+and commands are accessible via MCP resources `eka://skills/*` and
+`eka://templates/*` and are **not** installed unless opted in via `--with-skills`,
+`--with-commands`, or `--with-all` (`--with-all` = both). `--dry-run` prints the
+plan without writing (and reflects only the opted-in installs). Unsupported
+`--target` fails deterministically listing the supported targets. The write merges
+without overwriting other servers' entries and is idempotent. Default `--target` is
+`opencode`; `--dir` defaults to the current working directory (workspace root).
 
 ## The MCP server
 
@@ -170,17 +173,20 @@ token families and a smoke test.
 
 ```sh
 eka plugin install mcp
-eka-mcp configure --target opencode --dir . --json   # writes MCP client config + installs skills/commands
+eka-mcp configure --target opencode --dir . --json                          # only writes MCP client config (skills/commands via MCP resources)
+eka-mcp configure --target opencode --dir . --with-all --json               # also installs skills + commands to <dir>
+eka-mcp configure --target opencode --dir . --with-skills --json            # only skills, --with-commands for commands only
 ```
 
 This installs the official `eka-mcp` plugin from its GitHub release with
-checksum verification, then delegates the skill-pack installation
-(`eka-mcp install skills` / `eka-mcp install commands`) into your agent
-configuration directory. The `configure` subcommand is the per-agent setup:
+checksum verification. The `configure` subcommand is the per-agent setup:
 it writes the MCP client config entry (absolute `eka-mcp` binary path +
-`EKA_HOME` when set) and delegates the skill/command install. Use
-`--dry-run` to preview, `--target opencode|claude|codex` to select the
-ecosystem (default `opencode`).
+`EKA_HOME` when set) and, only when opted in, delegates the skill/command
+install (`--with-skills` / `--with-commands` / `--with-all`). Without those
+flags no files are copied — skills and templates remain available via MCP
+resources `eka://skills/*` and `eka://templates/*`. Use `--dry-run` to
+preview, `--target opencode|claude|codex` to select the ecosystem (default
+`opencode`).
 
 ### Manual MCP client configuration (without the subcommand)
 

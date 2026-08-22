@@ -37,6 +37,12 @@ func main() {
 // run dispatches the subcommand. out receives the machine-readable
 // output of the plugin subcommands (the MCP server writes to its own
 // transport streams, not to out).
+//
+// B1 note: eka-cli's deferred registration dispatches `eka mcp` as
+// `eka-mcp serve` with DisableFlagParsing (the plugin owns its flags).
+// Extra args after "serve" are the user's args (e.g. `eka mcp --help`
+// becomes `eka-mcp serve --help`), so "serve" must handle its own
+// --help and not treat it as unknown.
 func run(args []string, out io.Writer) error {
 	if len(args) == 0 {
 		return serve()
@@ -51,6 +57,17 @@ func run(args []string, out io.Writer) error {
 	case "serve", "--stdio":
 		// "--stdio" is the MCP client convention for "run the server
 		// over stdio"; it is accepted as an alias of "serve".
+		// The plugin owns its flags (B1 DisableFlagParsing), so handle
+		// --help here instead of starting the server.
+		for _, a := range args[1:] {
+			if a == "--help" || a == "-h" || a == "help" {
+				fmt.Fprintln(out, "Usage: eka-mcp serve [--stdio]")
+				fmt.Fprintln(out, "")
+				fmt.Fprintln(out, "Run the EKA MCP server over stdio (JSON-RPC 2.0, newline-delimited).")
+				fmt.Fprintln(out, "The server exposes the EKA Runtime capability layer as MCP tools and resources.")
+				return nil
+			}
+		}
 		return serve()
 	default:
 		return fmt.Errorf("unknown subcommand %q (want manifest, install, configure or serve)", args[0])

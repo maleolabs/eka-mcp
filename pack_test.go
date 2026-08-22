@@ -74,6 +74,44 @@ func TestManifestDeterminism(t *testing.T) {
 	}
 }
 
+// TestManifestIncludesCommands pins the B1 dispatch-protocol extension:
+// the manifest must declare at least the "mcp" command dispatching to
+// "serve" (the deferred-registration contract with eka-cli). The
+// contract stays "v1" — the commands array is additive.
+func TestManifestIncludesCommands(t *testing.T) {
+	m, err := BuildManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Contract != "v1" {
+		t.Errorf("contract = %q, want %q", m.Contract, "v1")
+	}
+	if len(m.Commands) == 0 {
+		t.Fatal("manifest must declare at least one command (B1)")
+	}
+	found := false
+	for _, c := range m.Commands {
+		if c.Name == "mcp" {
+			found = true
+			if c.Description == "" {
+				t.Error(`command "mcp" must have a non-empty description`)
+			}
+			if len(c.Args) == 0 || c.Args[0] != "serve" {
+				t.Errorf(`command "mcp" args = %v, want ["serve", ...]`, c.Args)
+			}
+		}
+		if c.Name == "" || c.Description == "" || len(c.Args) == 0 {
+			t.Errorf("command entries must have name, description and args, got %+v", c)
+		}
+	}
+	if !found {
+		t.Errorf("manifest must include command %q, got %v", "mcp", m.Commands)
+	}
+	if len(PluginCommands) == 0 || PluginCommands[0].Name != "mcp" {
+		t.Errorf("PluginCommands must include %q as first entry, got %v", "mcp", PluginCommands)
+	}
+}
+
 // TestInstallCommandsPreservesContent: the installed command file
 // byte-matches the embedded file.
 func TestInstallCommandsPreservesContent(t *testing.T) {

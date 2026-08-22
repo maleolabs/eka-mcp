@@ -5,6 +5,11 @@ All notable changes to `eka-mcp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **BREAKING: `eka-mcp configure` decoupling (sto:mcp-configure-decoupling)** — `configure` now **only writes the MCP client config** by default; skill/command installation is opt-in via `--with-skills`, `--with-commands`, or `--with-all` (`--with-all` = both). Previously it always delegated `pack.Install("skills")` + `pack.Install("commands")`. Old callers (`eka-mcp configure --target opencode --dir . --json`) now get an `installed` field that is absent/empty unless opted in. Skills and templates remain accessible via MCP resources `eka://skills/*` and `eka://templates/*` without any file copy. `--dry-run` reflects only the opted-in plan and still touches no filesystem. Existing `--target opencode|claude|codex`, `--dir`, `--dry-run`, `--json` flags are unchanged. The write remains idempotent and merges without overwriting other servers.
+
 ## [1.0.0] - 2026-08-21
 
 ### Changed

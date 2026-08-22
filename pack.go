@@ -48,6 +48,38 @@ const Source = "github.com/maleolabs/eka-mcp"
 // with eka-cli).
 var Capabilities = []string{"install", "mcp"}
 
+// ManifestCommand is one B1 dispatch-protocol command declaration: the
+// additive "commands" array on the v1 manifest contract (ADR-031). The
+// contract version stays "v1" — the extension is backward compatible:
+// old clients decoding into plugin.Manifest ignore the field, new
+// clients (eka-cli B1 probe) decode into pluginCommandManifest and pick
+// it up. The slice is stable and sorted by name.
+type ManifestCommand struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Args        []string `json:"args"`
+}
+
+// Manifest is the extended plugin self-description: the v1 contract
+// fields (via embedded plugin.Manifest) plus the B1 commands extension.
+// It is the JSON shape the plugin emits for "manifest --json": the
+// embedded Manifest carries contract, name, version, description,
+// artifacts, capabilities and source, while Commands carries the
+// deferred-registration dispatch table. Old clients decoding into
+// plugin.Manifest see only the v1 fields (unknown "commands" ignored).
+type Manifest struct {
+	plugin.Manifest
+	Commands []ManifestCommand `json:"commands,omitempty"`
+}
+
+// PluginCommands is the fixed B1 command set the plugin exposes via
+// deferred registration (G1-G4). At least one: "mcp" dispatching to
+// "serve" — the MCP server. The plugin owns its flags
+// (DisableFlagParsing in eka-cli), so "serve" handles its own --help.
+var PluginCommands = []ManifestCommand{
+	{Name: "mcp", Description: "EKA MCP server", Args: []string{"serve"}},
+}
+
 // skillsFS embeds the EKA AI Skill Pack. The entry names of the
 // manifest artifacts are read from this filesystem.
 //
@@ -196,28 +228,34 @@ func contains(list []string, v string) bool {
 // BuildManifest builds the plugin self-description from the embedded
 // skill pack: artifact entries are derived from the filesystem, so the
 // manifest always reflects what the installer can actually install.
-// The contract type (plugin.Manifest) carries the additive capabilities
-// and source fields of contract v1.
-func BuildManifest() (plugin.Manifest, error) {
+// The contract version stays "v1" (plugin.ContractVersion) — the B1
+// "commands" array is additive: old clients decoding into
+// plugin.Manifest ignore it, new clients (eka-cli B1 probe) pick it up.
+// The returned Manifest embeds plugin.Manifest so the core contract
+// stays authoritative, plus the Commands dispatch table.
+func BuildManifest() (Manifest, error) {
 	skills, err := SkillDirs()
 	if err != nil {
-		return plugin.Manifest{}, err
+		return Manifest{}, err
 	}
 	commands, err := CommandFiles()
 	if err != nil {
-		return plugin.Manifest{}, err
+		return Manifest{}, err
 	}
-	return plugin.Manifest{
-		Contract:    plugin.ContractVersion,
-		Name:        Name,
-		Version:     Version,
-		Description: Description,
-		Artifacts: []plugin.Artifact{
-			{Kind: "skills", Entries: skills},
-			{Kind: "commands", Entries: commands},
+	return Manifest{
+		Manifest: plugin.Manifest{
+			Contract:    plugin.ContractVersion,
+			Name:        Name,
+			Version:     Version,
+			Description: Description,
+			Artifacts: []plugin.Artifact{
+				{Kind: "skills", Entries: skills},
+				{Kind: "commands", Entries: commands},
+			},
+			Capabilities: Capabilities,
+			Source:       Source,
 		},
-		Capabilities: Capabilities,
-		Source:       Source,
+		Commands: PluginCommands,
 	}, nil
 }
 
