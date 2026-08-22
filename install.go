@@ -237,10 +237,11 @@ type TargetInstallReport struct {
 //
 // Idempotent by construction: only pack-owned file NAMES are ever written;
 // foreign files are never touched. Existing regular files with identical
-// content are skipped. Symlinked or otherwise non-regular targets REFUSE
-// with an error — the installer never writes through a link. With dryRun
-// nothing is created (not even directories) and the returned actions
-// describe exactly what a real run would write.
+// content are skipped. A symlinked or otherwise non-regular FINAL path
+// component REFUSES with an error; intermediate directory symlinks are
+// followed as usual (the dotfiles workflow). With dryRun nothing is created
+// (not even directories) and the returned actions describe exactly what a
+// real run would write.
 func InstallForTarget(target, dir string, withSkills, withCommands, dryRun bool) (TargetInstallReport, error) {
 	if !contains(InstallTargets, target) {
 		return TargetInstallReport{}, unsupportedTargetError(target)
@@ -358,8 +359,9 @@ func InstallForTarget(target, dir string, withSkills, withCommands, dryRun bool)
 
 // classifyTarget decides the action for one planned file WITHOUT writing:
 // create when absent, skip when a regular file with identical content
-// exists, overwrite when a regular file differs — and a hard refusal for
-// symlinks or special files (the installer never writes through a link).
+// exists, overwrite when a regular file differs — and a hard refusal when
+// the FINAL path component is a symlink or special file (Lstat never
+// follows it). Intermediate directory symlinks are followed as usual.
 func classifyTarget(path string, content []byte) (string, error) {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
@@ -381,11 +383,13 @@ func classifyTarget(path string, content []byte) (string, error) {
 	return "overwrite", nil
 }
 
-// writeFileScoped writes content to path WITHOUT following symlinks: the
-// payload is staged in a temporary file in the destination directory and
-// renamed over the target, so even a racing symlink can never be written
-// through (rename replaces the link itself). Classification has already
-// refused non-regular targets before this runs.
+// writeFileScoped writes content to path so the FINAL path component is
+// replaced, never written through: the payload is staged in a temporary
+// file in the destination directory and renamed over the target, so even
+// a racing symlink is replaced by the rename instead of being followed.
+// Intermediate directory symlinks are followed as usual (the dotfiles
+// workflow). Classification has already refused non-regular final
+// components before this runs.
 func writeFileScoped(path string, content []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

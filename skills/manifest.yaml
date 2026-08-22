@@ -10,7 +10,7 @@ pack:
   status: stable
   requiresEka: ">= 1.0.0"
   anchorDecision: "reference/decisions/adr-022-ai-skill-pack.md"
-  installCommand: "eka install skills|commands (pack embedded in the eka binary since ADR-023)"
+  installCommand: "eka-mcp configure --target opencode|claude|codex [--with-skills|--with-commands|--with-all] --json (pack-distribution vehicle per ADR-030; eka-cli exposes no install surface)"
 
 skills:
   - name: eka-router
