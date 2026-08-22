@@ -16,6 +16,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/BurntSushi/toml"
 
 	"github.com/maleolabs/eka-core/plugin"
 )
@@ -217,6 +220,212 @@ func TemplateFile(typeToken string) ([]byte, error) {
 		return nil, fmt.Errorf("pack: no draft template for type %q", typeToken)
 	}
 	return fs.ReadFile(packFS, filepath.Join(templateDir, typeToken+templateSuffix))
+}
+
+// --- Delegation mappings (req:agent-agnostic-skill-pack R4) ---
+
+// RoleVocabulary is the closed set of delegation roles shared by every
+// mapping table (req R2): product-review absorbs UX-review duties, and
+// backend/frontend cover their light/ui variants through row notes.
+// The set is CLOSED — adding or removing a role is a breaking pack
+// change (R12). The order below is the canonical pipeline order and the
+// deterministic render order of every table.
+var RoleVocabulary = []string{
+	"architect",
+	"backend",
+	"frontend",
+	"security-review",
+	"code-review",
+	"product-review",
+	"qa",
+	"devops",
+	"documenter",
+}
+
+// Mapping resolution modes of a role row.
+const (
+	// ModeDelegate routes the role to a concrete named agent.
+	ModeDelegate = "delegate"
+	// ModeSolo records the explicit degrade path (req R8): the primary
+	// agent performs the role inline — never silently.
+	ModeSolo = "solo"
+)
+
+// SoloAgent is the explicit primary/solo marker of a solo row.
+const SoloAgent = "primary"
+
+// DefaultEcosystem is the default reference mapping key (req R4):
+// opencode + maleolabs agents is the canonical resolution every other
+// ecosystem table is measured against.
+const DefaultEcosystem = "opencode"
+
+// mappingSuffix selects mapping table files inside the embedded
+// mappings/ directory: <ecosystem>.toml is one delegation table.
+const mappingSuffix = ".toml"
+
+// mappingsFS embeds the pre-rendered role→agent delegation tables, one
+// TOML file per ecosystem, co-located with the embedded pack (req R4/R6).
+//
+//go:embed mappings
+var mappingsFS embed.FS
+
+// mappingFS is the embedded filesystem rooted at the mappings/ directory
+// itself (same Sub pattern as packFS).
+var mappingFS = mustSub(mappingsFS, "mappings")
+
+// MappingMeta is the metadata header of one delegation table.
+type MappingMeta struct {
+	Ecosystem string `toml:"ecosystem"`
+	Name      string `toml:"name"`
+	Source    string `toml:"source"`
+}
+
+// MappingRole is one role→agent resolution row.
+type MappingRole struct {
+	Agent string `toml:"agent"` // concrete agent name, or SoloAgent when ModeSolo
+	Mode  string `toml:"mode"`  // ModeDelegate or ModeSolo
+	Note  string `toml:"note"`  // optional variant/absorption note
+}
+
+// MappingTable is one parsed delegation table: metadata plus exactly one
+// row per RoleVocabulary role.
+type MappingTable struct {
+	Meta  MappingMeta            `toml:"meta"`
+	Roles map[string]MappingRole `toml:"roles"`
+}
+
+// MappingEcosystems lists the embedded mapping table keys (the *.toml
+// file names minus the suffix under mappings/), sorted — the
+// deterministic enumeration of available ecosystems.
+func MappingEcosystems() ([]string, error) {
+	entries, err := fs.ReadDir(mappingFS, ".")
+	if err != nil {
+		return nil, fmt.Errorf("pack: cannot read embedded mappings: %w", err)
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, mappingSuffix) {
+			continue
+		}
+		out = append(out, strings.TrimSuffix(name, mappingSuffix))
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// LoadMappingTable resolves the delegation table of one ecosystem key
+// and returns it parsed and validated. The embedded filesystem is the
+// source of truth, so an unknown ecosystem is refused deterministically;
+// a table that does not cover the closed role vocabulary exactly is a
+// pack defect and refuses loudly instead of degrading silently.
+func LoadMappingTable(ecosystem string) (*MappingTable, error) {
+	keys, err := MappingEcosystems()
+	if err != nil {
+		return nil, err
+	}
+	if !contains(keys, ecosystem) {
+		return nil, fmt.Errorf("pack: unknown mapping ecosystem %q (have %v)", ecosystem, keys)
+	}
+	data, err := fs.ReadFile(mappingFS, ecosystem+mappingSuffix)
+	if err != nil {
+		return nil, fmt.Errorf("pack: reading mapping %q: %w", ecosystem, err)
+	}
+	var t MappingTable
+	if err := toml.Unmarshal(data, &t); err != nil {
+		return nil, fmt.Errorf("pack: parsing mapping %q: %w", ecosystem, err)
+	}
+	if err := t.validate(ecosystem); err != nil {
+		return nil, fmt.Errorf("pack: invalid mapping %q: %w", ecosystem, err)
+	}
+	return &t, nil
+}
+
+// validate enforces the table contract against the expected ecosystem
+// key: complete metadata, exactly the closed role vocabulary (no gaps,
+// no extras), known modes, mode-consistent agent targets, and
+// single-line fields (the plain-text renderer relies on that).
+func (t *MappingTable) validate(ecosystem string) error {
+	if t.Meta.Ecosystem == "" || t.Meta.Name == "" || t.Meta.Source == "" {
+		return fmt.Errorf("meta must define non-empty ecosystem, name and source")
+	}
+	if t.Meta.Ecosystem != ecosystem {
+		return fmt.Errorf("meta.ecosystem %q does not match table key %q", t.Meta.Ecosystem, ecosystem)
+	}
+	for role := range t.Roles {
+		if !contains(RoleVocabulary, role) {
+			return fmt.Errorf("unknown role %q (the role vocabulary is closed)", role)
+		}
+	}
+	for _, role := range RoleVocabulary {
+		r, ok := t.Roles[role]
+		if !ok {
+			return fmt.Errorf("missing role %q", role)
+		}
+		switch r.Mode {
+		case ModeDelegate:
+			if r.Agent == "" || r.Agent == SoloAgent {
+				return fmt.Errorf("role %q: mode %q needs a concrete agent target, got %q", role, ModeDelegate, r.Agent)
+			}
+		case ModeSolo:
+			if r.Agent != SoloAgent {
+				return fmt.Errorf("role %q: mode %q must resolve to %q, got %q", role, ModeSolo, SoloAgent, r.Agent)
+			}
+		default:
+			return fmt.Errorf("role %q: unknown mode %q (want %q or %q)", role, r.Mode, ModeDelegate, ModeSolo)
+		}
+		for field, val := range map[string]string{"agent": r.Agent, "note": r.Note} {
+			if strings.ContainsAny(val, "\r\n") {
+				return fmt.Errorf("role %q: %s must be single-line", role, field)
+			}
+		}
+	}
+	return nil
+}
+
+// RenderText renders the table as deterministic plain text suitable for
+// the DELEGATION.txt sidecar (req R5): a comment header carrying the
+// table provenance, then one aligned row per role in canonical
+// RoleVocabulary order. Same table → same bytes, always.
+func (t *MappingTable) RenderText() (string, error) {
+	if err := t.validate(t.Meta.Ecosystem); err != nil {
+		return "", fmt.Errorf("pack: cannot render invalid mapping table: %w", err)
+	}
+	type row [4]string // role, mode, agent, note
+	header := row{"role", "mode", "agent", "note"}
+	rows := make([]row, 0, len(RoleVocabulary))
+	for _, role := range RoleVocabulary {
+		r := t.Roles[role]
+		rows = append(rows, row{role, r.Mode, r.Agent, r.Note})
+	}
+	var widths [4]int
+	for i, cell := range header {
+		widths[i] = len(cell)
+	}
+	for _, r := range rows {
+		for i, cell := range r {
+			if n := utf8.RuneCountInString(cell); n > widths[i] {
+				widths[i] = n
+			}
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "# EKA delegation table — rendered from the embedded eka-mcp skill pack v%s\n", Version)
+	fmt.Fprintf(&b, "# ecosystem: %s\n", t.Meta.Ecosystem)
+	fmt.Fprintf(&b, "# name:      %s\n", t.Meta.Name)
+	fmt.Fprintf(&b, "# source:    %s\n", t.Meta.Source)
+	b.WriteString("# roles form the closed 9-role vocabulary of req:agent-agnostic-skill-pack (R2)\n")
+	b.WriteString("\n")
+	for _, r := range append([]row{header}, rows...) {
+		line := fmt.Sprintf("%-*s  %-*s  %-*s  %s",
+			widths[0], r[0], widths[1], r[1], widths[2], r[2], r[3])
+		b.WriteString(strings.TrimRight(line, " "))
+		b.WriteString("\n")
+	}
+	return b.String(), nil
 }
 
 // contains reports whether v is in the list.

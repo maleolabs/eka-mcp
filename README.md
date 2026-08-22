@@ -167,6 +167,13 @@ Commands: `eka-discuss` (planning discussion) and `eka-execute` (autonomous
 execution + resume). The pack also ships reference draft templates for all 26
 token families and a smoke test.
 
+Alongside the pack, the embedded [`mappings/`](mappings) directory ships the
+pre-rendered role→agent delegation tables per ecosystem (`opencode.toml` — the
+default reference mapping, `claude.toml`, `codex.toml`) of
+req:agent-agnostic-skill-pack R4: one closed 9-role vocabulary, declarative
+per-ecosystem resolution (`delegate` to a named agent or explicit `solo`
+degrade), rendered to plain text for the future DELEGATION.txt sidecar.
+
 ## Installation
 
 ### As an eka-cli plugin (recommended)

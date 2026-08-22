@@ -1,0 +1,53 @@
+# EKA delegation table — Codex ecosystem (deliberate solo policy).
+#
+# SAFETY NOTE — this is NOT a capability claim about Codex. Codex ships
+# native sub-agents today: built-in agents (default, worker, explorer)
+# plus custom agents defined via .codex/agents/*.toml.
+#
+# Solo here is DELIBERATE PACK POLICY per req:agent-agnostic-skill-pack
+# (R4 + ratified PM decision): until a planning revision ratifies a
+# named-agent delegation table for Codex, every role degrades EXPLICITLY
+# to the primary agent performing the role inline (mode: solo — recorded,
+# never silent, per R8). Named-agent delegation for Codex is deferred to
+# a planning revision; upgrading later means editing this table only.
+
+[meta]
+ecosystem = "codex"
+name = "codex (solo policy)"
+source = "req:agent-agnostic-skill-pack R4/R8; codex named-agent delegation deferred to a planning revision"
+
+[roles.architect]
+agent = "primary"
+mode = "solo"
+
+[roles.backend]
+agent = "primary"
+mode = "solo"
+
+[roles.frontend]
+agent = "primary"
+mode = "solo"
+
+[roles.security-review]
+agent = "primary"
+mode = "solo"
+
+[roles.code-review]
+agent = "primary"
+mode = "solo"
+
+[roles.product-review]
+agent = "primary"
+mode = "solo"
+
+[roles.qa]
+agent = "primary"
+mode = "solo"
+
+[roles.devops]
+agent = "primary"
+mode = "solo"
+
+[roles.documenter]
+agent = "primary"
+mode = "solo"

@@ -1,0 +1,54 @@
+# EKA delegation table — opencode ecosystem.
+#
+# This is the DEFAULT REFERENCE mapping of req:agent-agnostic-skill-pack
+# (R4): opencode with the maleolabs agent set is the canonical role→agent
+# resolution every other ecosystem table is measured against.
+#
+# Roles are the closed 9-role vocabulary (R2). Adding or removing a role
+# is a BREAKING pack change (R12); changing an agent target here is not.
+# Ecosystem adaptation is declarative: bodies never name agents, so this
+# table can evolve without touching command bodies (no drift).
+
+[meta]
+ecosystem = "opencode"
+name = "opencode + maleolabs agents"
+source = "req:agent-agnostic-skill-pack R4 (default reference mapping)"
+
+[roles.architect]
+agent = "alex-architect"
+mode = "delegate"
+
+[roles.backend]
+agent = "alex-backend"
+mode = "delegate"
+note = "light variant: alex-backend-light"
+
+[roles.frontend]
+agent = "alex-frontend"
+mode = "delegate"
+note = "advanced UI variant: alex-frontend-ui"
+
+[roles.security-review]
+agent = "alex-security"
+mode = "delegate"
+
+[roles.code-review]
+agent = "alex-reviewer"
+mode = "delegate"
+
+[roles.product-review]
+agent = "althea-product-specialist"
+mode = "delegate"
+note = "absorbs althea-ux-specialist and althea-review-specialist (R2)"
+
+[roles.qa]
+agent = "alex-qa"
+mode = "delegate"
+
+[roles.devops]
+agent = "alex-devops"
+mode = "delegate"
+
+[roles.documenter]
+agent = "alex-documenter"
+mode = "delegate"
