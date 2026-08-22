@@ -4,8 +4,8 @@ The command layer of the EKA AI Skill Pack: two **custom commands** that turn th
 
 | Command | File | Purpose | Touches source code? |
 |---|---|---|---|
-| `/eka-discuss` | [`eka-discuss.md`](eka-discuss.md) | interactive planning discussion through the EKA flow: idea → discuss → propose → validate → approved → publish; creates knowledge drafts, delegates review to sub-agents | **never** |
-| `/eka-execute` | [`eka-execute.md`](eka-execute.md) | autonomous execution of approved planning (MVP scope first; selectors for container/plan/full); PM-style orchestration with the EKA state machine, team review, checkpoints, and a resume protocol; every item is implemented in its own branch + worktree created from the development branch snapshot, merged back to the development branch (PR/MR or direct merge) before the `done` transition | yes — via delegated sub-agents |
+| `/eka-discuss` | [`eka-discuss.md`](eka-discuss.md) | interactive planning discussion through the EKA flow: idea → discuss → propose → validate → approved → publish; creates knowledge drafts, delegates review through the role contract | **never** |
+| `/eka-execute` | [`eka-execute.md`](eka-execute.md) | autonomous execution of approved planning (MVP scope first; selectors for container/plan/full); PM-style orchestration with the EKA state machine, team review, checkpoints, and a resume protocol; every item is implemented in its own branch + worktree created from the development branch snapshot, merged back to the development branch (PR/MR or direct merge) before the `done` transition | yes — via delegated roles |
 
 The two commands are the two halves of one cycle: **plan in EKA, execute from EKA**. `/eka-discuss` produces approved knowledge; `/eka-execute` consumes it — the store is the handoff, no documents to reconcile.
 
@@ -13,16 +13,16 @@ The two commands are the two halves of one cycle: **plan in EKA, execute from EK
 
 Skills teach *how to behave* and are loaded on demand by the agent itself. Commands are *user-invoked workflows*: the user types `/eka-discuss` in the TUI and a complete workflow starts. The boundary from [the pack README](../README.md) holds: the commands are behavior, the CLI is the execution interface, the Runtime is the knowledge store.
 
-## Installation (opencode)
+## Installation
 
-The commands are embedded in the `eka` binary (ADR-023) — the official installation path:
+The commands are embedded in the `eka-mcp` binary (the pack-distribution vehicle per ADR-030). The official installation path is the plugin's configure surface:
 
 ```sh
-eka install skills             # install the ten eka-* skills (the commands reference them by name)
-eka install commands           # install eka-discuss.md + eka-execute.md
+eka-mcp configure --target opencode --with-commands   # install eka-discuss.md + eka-execute.md
+eka-mcp configure --target opencode --with-all        # skills + commands + MCP client config
 ```
 
-`eka install commands` auto-detects the agent configuration directory (opencode/claude); `--target opencode` forces a target, `--dir <path>` installs explicitly (project-scoped: `.opencode/commands/`), `--dry-run` previews the plan. Re-running after a CLI upgrade refreshes the installed files.
+`configure` supports `--target opencode|claude|codex` (default `opencode`), `--dir <path>` for an explicit directory, and `--dry-run` to preview the plan. Without a `--with-*` flag nothing is copied — the pack stays reachable as MCP resources (`eka://skills/*`, `eka://templates/*`). Re-running after an upgrade refreshes the installed files.
 
 Manual copy remains a valid fallback:
 
@@ -34,19 +34,19 @@ mkdir -p .opencode/commands
 cp skills/commands/*.md .opencode/commands/
 ```
 
-Then run `/eka-discuss` or `/eka-execute` in the opencode TUI. The `agent: alex` frontmatter routes the command to the primary orchestrating agent; sub-agent delegation happens through the task tool inside the command body.
+Then run `/eka-discuss` or `/eka-execute` in the agent's TUI. The canonical bodies carry **description-only frontmatter**; provider-specific frontmatter is rendered at install time per target. The primary orchestrating agent runs the command; delegation happens through the role contract inside the command body.
 
 ## Provider mapping
 
-The command **bodies are provider-agnostic**; the frontmatter is per-provider. The files ship with opencode frontmatter (the primary target); adapt for other agents:
+The command **bodies are provider-agnostic**: canonical frontmatter is description-only, and delegation is expressed exclusively through the role contract (nine closed roles — architect, backend, frontend, security-review, code-review, product-review, qa, devops, documenter). Provider-specific frontmatter and the per-ecosystem role→agent mapping are applied at install time per target:
 
 | Provider | Mechanism | Adaptation |
 |---|---|---|
-| **opencode** | `commands/*.md` with frontmatter (`description`, `agent`) | as shipped |
+| **opencode** | `commands/*.md` with frontmatter (`description`, `agent`) | canonical body + rendered frontmatter at install |
 | **Claude Code** | skills (`.claude/skills/<name>/SKILL.md`) or legacy `.claude/commands/<name>.md` — both create `/name` | keep the body; frontmatter: `description`, `disable-model-invocation: true` (user-invoked only), optional `context: fork` + `agent:` to run the command in a subagent context |
 | **Codex** | `codex.jsonc` custom prompts → `/prompts:<name>` | keep the body as the `prompt` value; `description` in the prompts entry. For execution resume, Codex's `/goal` (persisted objective + pause/resume) complements the checkpoint protocol |
 
-The agent-name references inside the bodies (e.g. `alex-qa`, `althea-product-specialist`) are opencode agent names — map them to the equivalent sub-agents of the target ecosystem.
+Roles are duties, not agent names: each ecosystem's install-time mapping table resolves a role to that ecosystem's agents (or degrades explicitly to solo mode where no sub-agent capability exists).
 
 ## The session-context pattern (caveman reference)
 
