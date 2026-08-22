@@ -12,8 +12,10 @@ import (
 	"github.com/maleolabs/eka-mcp"
 )
 
-// supportedTargets is the fixed set the configure subcommand understands.
-var supportedTargets = []string{"opencode", "claude", "codex"}
+// supportedTargets is the fixed set the configure subcommand understands —
+// the pack's install targets (the pack owns rendering/installation per
+// req:agent-agnostic-skill-pack R6; configure only delegates to it).
+var supportedTargets = pack.InstallTargets
 
 // configureOptions holds the parsed configure flags.
 type configureOptions struct {
@@ -37,6 +39,8 @@ type configureResult struct {
 	Entry     any                 `json:"entry"`
 	Plan      string              `json:"plan,omitempty"`
 	Installed map[string][]string `json:"installed,omitempty"`
+	Changes   []pack.FileAction   `json:"changes,omitempty"`
+	Counts    *pack.ActionCounts  `json:"counts,omitempty"`
 }
 
 // runConfigure implements "eka-mcp configure [--target opencode|claude|codex] [--dir <dir>] [--with-skills] [--with-commands] [--with-all] [--dry-run] --json".
@@ -47,7 +51,18 @@ func runConfigure(args []string, out io.Writer) error {
 			fmt.Fprintln(out, "")
 			fmt.Fprintln(out, "Write the MCP client config entry for the target ecosystem (absolute binary path + EKA_HOME when set).")
 			fmt.Fprintln(out, "By default only the MCP config is written; skills and commands are available via MCP resources")
-			fmt.Fprintln(out, "eka://skills/* and eka://templates/* and require --with-skills, --with-commands or --with-all to also copy files.")
+			fmt.Fprintln(out, "eka://skills/* and eka://templates/* and require --with-skills, --with-commands or --with-all to also install.")
+			fmt.Fprintln(out, "")
+			fmt.Fprintln(out, "Install layout (conventional dirs; --dir anchors the tree for project-scoped installs):")
+			fmt.Fprintln(out, "  opencode  <base>/.config/opencode/skills + .../commands (+ DELEGATION.txt sidecar next to the commands)")
+			fmt.Fprintln(out, "  claude    <base>/.claude/skills + .../commands (+ DELEGATION.txt sidecar next to the commands)")
+			fmt.Fprintln(out, "  codex     <base>/.agents/skills (+ DELEGATION.txt inside the skills subtree); commands are NOT")
+			fmt.Fprintln(out, "            installable (codex-cli removed the prompts directory in 0.117.0) — --with-commands and")
+			fmt.Fprintln(out, "            --with-all refuse deterministically.")
+			fmt.Fprintln(out, "<base> is --dir, else the user home (opencode, claude) or the working directory (codex).")
+			fmt.Fprintln(out, "Canonical bodies stay description-only in the pack; command frontmatter is rendered per target at")
+			fmt.Fprintln(out, "install time. Re-installing overwrites only pack-owned files (foreign files are never touched);")
+			fmt.Fprintln(out, "--dry-run prints paths + create|overwrite|skip and writes nothing.")
 			return nil
 		}
 	}
@@ -61,6 +76,11 @@ func runConfigure(args []string, out io.Writer) error {
 	}
 	if !isSupportedTarget(opts.Target) {
 		return fmt.Errorf("configure: unsupported target %q (supported targets: %s)", opts.Target, strings.Join(supportedTargets, ", "))
+	}
+	// Deterministic refusal BEFORE anything is written: codex has no command
+	// target (spike V3), so command installs refuse outright.
+	if opts.Target == "codex" && (opts.WithCommands || opts.WithAll) {
+		return errors.New(`configure: target "codex" cannot install commands: codex-cli removed the prompts directory (~/.codex/prompts) in 0.117.0; use --with-skills instead — command-capable targets: opencode, claude`)
 	}
 	if !opts.JSON {
 		return errors.New("configure: missing --json")
@@ -104,20 +124,19 @@ func runConfigure(args []string, out io.Writer) error {
 			Entry:  entry,
 			Plan:   fmt.Sprintf("would write MCP server entry %q to %s (binary %s)", "eka", file, binary),
 		}
-		// Include install plan (dryRun) only for opted-in artifact families.
+		// Include the install plan (dryRun) only for opted-in artifact families.
 		// By default (no --with-*) nothing is installed; skills/commands are available via MCP resources
 		// eka://skills/* and eka://templates/* and require explicit opt-in.
-		installPlan := map[string][]string{}
-		if opts.WithSkills || opts.WithAll {
-			skills, _ := pack.SkillDirs()
-			installPlan["skills"] = skills
-		}
-		if opts.WithCommands || opts.WithAll {
-			cmds, _ := pack.CommandFiles()
-			installPlan["commands"] = cmds
-		}
-		if len(installPlan) > 0 {
-			res.Installed = installPlan
+		// The pack computes the plan (paths + create|overwrite|skip) without touching disk.
+		if opts.WithSkills || opts.WithCommands || opts.WithAll {
+			rep, err := pack.InstallForTarget(opts.Target, opts.Dir, opts.WithSkills || opts.WithAll, opts.WithCommands || opts.WithAll, true)
+			if err != nil {
+				return fmt.Errorf("configure: planning install: %w", err)
+			}
+			res.Installed = rep.Files
+			res.Changes = rep.Actions
+			counts := rep.Counts
+			res.Counts = &counts
 		}
 		return writeJSON(out, res)
 	}
@@ -130,34 +149,33 @@ func runConfigure(args []string, out io.Writer) error {
 	// Delegate skill/command install only when opted in.
 	// Default configure only writes the MCP client config; skills and commands are accessible
 	// via MCP resources (eka://skills/*, eka://templates/*) and require --with-skills / --with-commands / --with-all.
-	installDir := configureInstallDir(opts.Target, dir)
+	// The pack owns rendering/installation (req R6): rendered command frontmatter per target plus
+	// the DELEGATION.txt sidecar carrying the active mapping table.
 	installed := map[string][]string{}
-	if opts.WithSkills || opts.WithAll {
-		skillsRes, err := pack.Install("skills", installDir, false)
+	var changes []pack.FileAction
+	var counts *pack.ActionCounts
+	if opts.WithSkills || opts.WithCommands || opts.WithAll {
+		rep, err := pack.InstallForTarget(opts.Target, opts.Dir, opts.WithSkills || opts.WithAll, opts.WithCommands || opts.WithAll, false)
 		if err != nil {
-			return fmt.Errorf("configure: installing skills: %w", err)
+			return fmt.Errorf("configure: installing: %w", err)
 		}
-		installed["skills"] = skillsRes.Installed
-	}
-	if opts.WithCommands || opts.WithAll {
-		commandsRes, err := pack.Install("commands", installDir, false)
-		if err != nil {
-			return fmt.Errorf("configure: installing commands: %w", err)
-		}
-		installed["commands"] = commandsRes.Installed
+		installed = rep.Files
+		changes = rep.Actions
+		c := rep.Counts
+		counts = &c
 	}
 
 	res := configureResult{
-		Target: opts.Target,
-		File:   file,
-		Binary: binary,
-		Dir:    dir,
-		DryRun: false,
-		Env:    env,
-		Entry:  entry,
-	}
-	if len(installed) > 0 {
-		res.Installed = installed
+		Target:    opts.Target,
+		File:      file,
+		Binary:    binary,
+		Dir:       dir,
+		DryRun:    false,
+		Env:       env,
+		Entry:     entry,
+		Installed: installed,
+		Changes:   changes,
+		Counts:    counts,
 	}
 	return writeJSON(out, res)
 }
@@ -311,14 +329,6 @@ func configureTargetFileAndEntry(target, dir, binary string, env map[string]stri
 	default:
 		return "", nil, fmt.Errorf("configure: unsupported target %q (supported targets: %s)", target, strings.Join(supportedTargets, ", "))
 	}
-}
-
-// configureInstallDir resolves where skills/commands are installed for the target.
-func configureInstallDir(target, dir string) string {
-	// For all targets, delegate to the resolved dir (workspace root).
-	// The MCP client config file location already distinguishes per-target home vs workspace.
-	// This keeps delegation deterministic and testable (no hidden home writes for skills).
-	return dir
 }
 
 // writeConfigureFile merges the eka entry into the target file without overwriting other servers.

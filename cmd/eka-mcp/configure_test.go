@@ -91,14 +91,16 @@ func TestConfigureWithSkillsOnly(t *testing.T) {
 	if _, ok := res.Installed["commands"]; ok {
 		t.Errorf("Installed must not contain commands when only --with-skills, got %v", res.Installed)
 	}
+	skillsDir := filepath.Join(dir, ".config", "opencode", "skills")
 	for _, s := range skills {
-		if _, err := os.Stat(filepath.Join(dir, s, "SKILL.md")); err != nil {
-			t.Errorf("skill %s should be installed: %v", s, err)
+		if _, err := os.Stat(filepath.Join(skillsDir, s, "SKILL.md")); err != nil {
+			t.Errorf("skill %s should be installed under the conventional dir: %v", s, err)
 		}
 	}
 	cmds, _ := pack.CommandFiles()
+	cmdsDir := filepath.Join(dir, ".config", "opencode", "commands")
 	for _, c := range cmds {
-		if _, err := os.Stat(filepath.Join(dir, c)); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(cmdsDir, c)); !os.IsNotExist(err) {
 			t.Errorf("command %s must NOT be installed with --with-skills only, stat err = %v", c, err)
 		}
 	}
@@ -118,14 +120,27 @@ func TestConfigureWithCommandsOnly(t *testing.T) {
 	if _, ok := res.Installed["skills"]; ok {
 		t.Errorf("Installed must not contain skills when only --with-commands, got %v", res.Installed)
 	}
+	cmdsDir := filepath.Join(dir, ".config", "opencode", "commands")
 	for _, c := range cmds {
-		if _, err := os.Stat(filepath.Join(dir, c)); err != nil {
+		if _, err := os.Stat(filepath.Join(cmdsDir, c)); err != nil {
 			t.Errorf("command %s should be installed: %v", c, err)
 		}
 	}
+	// Sidecar: DELEGATION.txt (non-.md) next to the installed commands,
+	// carrying exactly the active mapping table's RenderText output.
+	sidecar, err := os.ReadFile(filepath.Join(cmdsDir, "DELEGATION.txt"))
+	if err != nil {
+		t.Fatalf("DELEGATION.txt sidecar must sit next to the commands: %v", err)
+	}
+	table, _ := pack.LoadMappingTable("opencode")
+	want, _ := table.RenderText()
+	if string(sidecar) != want {
+		t.Errorf("sidecar content must equal RenderText output")
+	}
 	skills, _ := pack.SkillDirs()
+	skillsDir := filepath.Join(dir, ".config", "opencode", "skills")
 	for _, s := range skills {
-		if _, err := os.Stat(filepath.Join(dir, s)); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(skillsDir, s)); !os.IsNotExist(err) {
 			t.Errorf("skill %s must NOT be installed with --with-commands only, stat err = %v", s, err)
 		}
 	}
@@ -146,15 +161,30 @@ func TestConfigureWithAll(t *testing.T) {
 	if !equalStrings(res.Installed["commands"], cmds) {
 		t.Errorf("Installed[commands] = %v, want %v", res.Installed["commands"], cmds)
 	}
+	skillsDir := filepath.Join(dir, ".config", "opencode", "skills")
+	cmdsDir := filepath.Join(dir, ".config", "opencode", "commands")
 	for _, s := range skills {
-		if _, err := os.Stat(filepath.Join(dir, s, "SKILL.md")); err != nil {
+		if _, err := os.Stat(filepath.Join(skillsDir, s, "SKILL.md")); err != nil {
 			t.Errorf("skill %s should be installed with --with-all: %v", s, err)
 		}
 	}
 	for _, c := range cmds {
-		if _, err := os.Stat(filepath.Join(dir, c)); err != nil {
-			t.Errorf("command %s should be installed with --with-all: %v", c, err)
+		data, err := os.ReadFile(filepath.Join(cmdsDir, c))
+		if err != nil {
+			t.Fatalf("command %s should be installed with --with-all: %v", c, err)
 		}
+		// Rendered frontmatter: description preserved, no provider keys invented (V2).
+		text := string(data)
+		if !strings.HasPrefix(text, "---\ndescription: ") {
+			t.Errorf("installed command %s must carry rendered description-only frontmatter, got %.40q", c, text)
+		}
+		head := text[len("---\n"):strings.Index(text, "\n---\n")]
+		if strings.Contains(head, "agent:") {
+			t.Errorf("installed command %s must not invent an agent key (V2 omission)", c)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(cmdsDir, "DELEGATION.txt")); err != nil {
+		t.Errorf("DELEGATION.txt sidecar expected next to the commands: %v", err)
 	}
 	// Also combining explicit flags should give same result
 	dir2 := t.TempDir()
@@ -284,8 +314,9 @@ func TestConfigureTargetsStillWork(t *testing.T) {
 }
 
 func TestConfigureWithAllTargets(t *testing.T) {
-	// Ensure --with-all works for all targets and still writes config
-	for _, target := range []string{"opencode", "claude", "codex"} {
+	// Ensure --with-all works for opencode/claude and still writes config.
+	// codex refuses command installs (spike V3) — covered separately.
+	for _, target := range []string{"opencode", "claude"} {
 		t.Run(target+"_with_all", func(t *testing.T) {
 			tmpHome := t.TempDir()
 			t.Setenv("HOME", tmpHome)
@@ -304,6 +335,164 @@ func TestConfigureWithAllTargets(t *testing.T) {
 				t.Errorf("target %s --with-all commands = %v, want %v", target, res.Installed["commands"], cmds)
 			}
 		})
+	}
+}
+
+// TestConfigureClaudeLayout pins the claude conventional dirs and sidecar:
+// <dir>/.claude/{skills,commands} with DELEGATION.txt next to the commands.
+func TestConfigureClaudeLayout(t *testing.T) {
+	dir := t.TempDir()
+	var out bytes.Buffer
+	if err := run([]string{"configure", "--target", "claude", "--dir", dir, "--with-all", "--json"}, &out); err != nil {
+		t.Fatalf("configure claude --with-all failed: %v", err)
+	}
+	cmdsDir := filepath.Join(dir, ".claude", "commands")
+	skillsDir := filepath.Join(dir, ".claude", "skills")
+	cmds, _ := pack.CommandFiles()
+	for _, c := range cmds {
+		if _, err := os.Stat(filepath.Join(cmdsDir, c)); err != nil {
+			t.Errorf("command %s must install to .claude/commands: %v", c, err)
+		}
+	}
+	sidecar, err := os.ReadFile(filepath.Join(cmdsDir, "DELEGATION.txt"))
+	if err != nil {
+		t.Fatalf("DELEGATION.txt expected in .claude/commands: %v", err)
+	}
+	table, _ := pack.LoadMappingTable("claude")
+	want, _ := table.RenderText()
+	if string(sidecar) != want {
+		t.Errorf("claude sidecar content must equal RenderText output")
+	}
+	skills, _ := pack.SkillDirs()
+	for _, s := range skills {
+		if _, err := os.Stat(filepath.Join(skillsDir, s, "SKILL.md")); err != nil {
+			t.Errorf("skill %s must install to .claude/skills: %v", s, err)
+		}
+	}
+}
+
+// TestConfigureCodexRefusesCommands (req R7): codex has no command target —
+// --with-commands AND --with-all refuse deterministically before writing
+// anything (not even the MCP config file).
+func TestConfigureCodexRefusesCommands(t *testing.T) {
+	for _, flags := range [][]string{{"--with-commands"}, {"--with-all"}} {
+		t.Run(strings.Join(flags, ""), func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "untouched")
+			args := append([]string{"configure", "--target", "codex", "--dir", dir}, flags...)
+			args = append(args, "--json")
+			var out bytes.Buffer
+			err := run(args, &out)
+			if err == nil {
+				t.Fatal("codex command install must refuse")
+			}
+			for _, want := range []string{"codex", "prompts", "0.117.0", "--with-skills"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("refusal must mention %q, got: %v", want, err)
+				}
+			}
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Errorf("refused run must not create anything, stat err = %v", err)
+			}
+		})
+	}
+}
+
+// TestConfigureCodexSkillsSubtree (spike V3): codex installs ONLY skills,
+// as a subtree under <dir>/.agents/skills, with DELEGATION.txt INSIDE the
+// subtree — never a prompts path.
+func TestConfigureCodexSkillsSubtree(t *testing.T) {
+	dir := t.TempDir()
+	var out bytes.Buffer
+	if err := run([]string{"configure", "--target", "codex", "--dir", dir, "--with-skills", "--json"}, &out); err != nil {
+		t.Fatalf("configure codex --with-skills failed: %v", err)
+	}
+	res := decodeConfigureResult(t, out)
+	skills, _ := pack.SkillDirs()
+	if !equalStrings(res.Installed["skills"], skills) {
+		t.Errorf("Installed[skills] = %v, want %v", res.Installed["skills"], skills)
+	}
+	skillsRoot := filepath.Join(dir, ".agents", "skills")
+	for _, s := range skills {
+		if _, err := os.Stat(filepath.Join(skillsRoot, s, "SKILL.md")); err != nil {
+			t.Errorf("skill %s must install under .agents/skills: %v", s, err)
+		}
+	}
+	sidecar, err := os.ReadFile(filepath.Join(skillsRoot, "DELEGATION.txt"))
+	if err != nil {
+		t.Fatalf("DELEGATION.txt must sit inside the skills subtree: %v", err)
+	}
+	table, _ := pack.LoadMappingTable("codex")
+	want, _ := table.RenderText()
+	if string(sidecar) != want {
+		t.Errorf("codex sidecar content must equal RenderText output")
+	}
+}
+
+// TestConfigureDryRunActionsFidelity (req R7): dry-run prints exactly what
+// would be written — full paths + create|overwrite|skip — while writing
+// nothing at all.
+func TestConfigureDryRunActionsFidelity(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "absent")
+	var out bytes.Buffer
+	if err := run([]string{"configure", "--target", "opencode", "--dir", dir, "--dry-run", "--with-all", "--json"}, &out); err != nil {
+		t.Fatalf("dry-run failed: %v", err)
+	}
+	res := decodeConfigureResult(t, out)
+	if len(res.Changes) == 0 {
+		t.Fatal("dry-run must report changes")
+	}
+	if res.Counts == nil || res.Counts.Created != len(res.Changes) {
+		t.Fatalf("dry-run counts = %+v, want all-create over %d actions", res.Counts, len(res.Changes))
+	}
+	cmdsDir := filepath.Join(dir, ".config", "opencode", "commands")
+	wantSidecar := filepath.Join(cmdsDir, "DELEGATION.txt")
+	foundSidecar := false
+	for _, a := range res.Changes {
+		if a.Action != "create" {
+			t.Errorf("fresh dry-run action = %q (%s), want create", a.Action, a.Path)
+		}
+		if !strings.HasPrefix(a.Path, dir) {
+			t.Errorf("action path %q escapes base %q", a.Path, dir)
+		}
+		if a.Path == wantSidecar {
+			foundSidecar = true
+		}
+	}
+	if !foundSidecar {
+		t.Errorf("sidecar %s missing from dry-run plan", wantSidecar)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("dry-run must not create directories either, stat err = %v", err)
+	}
+}
+
+// TestConfigureReinstallCountsAndScoping: second run overwrites nothing
+// fresh (all skip), foreign files survive, counts report accurately.
+func TestConfigureReinstallCountsAndScoping(t *testing.T) {
+	dir := t.TempDir()
+	var out bytes.Buffer
+	if err := run([]string{"configure", "--target", "opencode", "--dir", dir, "--with-all", "--json"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	cmdsDir := filepath.Join(dir, ".config", "opencode", "commands")
+	foreign := filepath.Join(cmdsDir, "my-own.md")
+	if err := os.WriteFile(foreign, []byte("# mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := run([]string{"configure", "--target", "opencode", "--dir", dir, "--with-all", "--json"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	res := decodeConfigureResult(t, out)
+	if res.Counts == nil {
+		t.Fatal("reinstall must report counts")
+	}
+	if res.Counts.Created != 0 || res.Counts.Overwritten != 0 || res.Counts.Skipped != len(res.Changes) {
+		t.Errorf("reinstall counts = %+v over %d actions, want all skip", res.Counts, len(res.Changes))
+	}
+	got, err := os.ReadFile(foreign)
+	if err != nil || string(got) != "# mine\n" {
+		t.Errorf("foreign file must survive reinstall untouched: %v %q", err, got)
 	}
 }
 

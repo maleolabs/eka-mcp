@@ -76,6 +76,19 @@ plan without writing (and reflects only the opted-in installs). Unsupported
 without overwriting other servers' entries and is idempotent. Default `--target` is
 `opencode`; `--dir` defaults to the current working directory (workspace root).
 
+Opted-in installs land in the target's conventional directories under an anchor
+(`<base>` = `--dir`, else the user home for opencode/claude and the working
+directory for codex): `opencode` → `<base>/.config/opencode/{skills,commands}`,
+`claude` → `<base>/.claude/{skills,commands}`, `codex` → `<base>/.agents/skills`
+(skills only — codex-cli removed the prompts directory in 0.117.0, so
+`--with-commands`/`--with-all` refuse deterministically). Canonical command
+bodies stay description-only in the pack; frontmatter is rendered per target at
+install time, and the active role→agent delegation table travels alongside as a
+non-.md `DELEGATION.txt` sidecar (next to the installed commands for
+opencode/claude, inside the skills subtree for codex) so legacy command dirs
+never see a phantom `.md` command. Re-installing overwrites only pack-owned
+files; foreign files are never touched; symlinked targets refuse.
+
 ## The MCP server
 
 Running `eka-mcp serve` (or `eka-mcp --stdio`, or no subcommand at all) starts
@@ -181,7 +194,7 @@ degrade), rendered to plain text for the future DELEGATION.txt sidecar.
 ```sh
 eka plugin install mcp
 eka-mcp configure --target opencode --dir . --json                          # only writes MCP client config (skills/commands via MCP resources)
-eka-mcp configure --target opencode --dir . --with-all --json               # also installs skills + commands to <dir>
+eka-mcp configure --target opencode --dir . --with-all --json               # also installs skills + commands (.config/opencode/{skills,commands} under <dir>) + DELEGATION.txt
 eka-mcp configure --target opencode --dir . --with-skills --json            # only skills, --with-commands for commands only
 ```
 
@@ -192,8 +205,8 @@ it writes the MCP client config entry (absolute `eka-mcp` binary path +
 install (`--with-skills` / `--with-commands` / `--with-all`). Without those
 flags no files are copied — skills and templates remain available via MCP
 resources `eka://skills/*` and `eka://templates/*`. Use `--dry-run` to
-preview, `--target opencode|claude|codex` to select the ecosystem (default
-`opencode`).
+preview (paths + create|overwrite|skip, nothing written), `--target
+opencode|claude|codex` to select the ecosystem (default `opencode`).
 
 ### Manual MCP client configuration (without the subcommand)
 
