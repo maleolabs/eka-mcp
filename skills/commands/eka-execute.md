@@ -26,6 +26,14 @@ Every EKA capability this command uses is a **primitive** with two transports: t
 
 Reality check: the MCP column cites only tools the eka-mcp binary exposes today; `—` means no MCP tool exists yet for that primitive. MCP citations are gated to the mcp-production milestone — re-verify this table against the server's tool list before relying on the MCP transport.
 
+## Skill loading
+
+This body references EKA skills by name (`eka-orientation`, `eka-knowledge-authoring`, …) — as imperative loads and as inline citations alike. Every such reference resolves through this load-order protocol: take the first step that yields the skill, never skip ahead, and never treat a missing skill as a blocker.
+
+1. **Installed skill directory (primary path).** If the pack is installed on disk (`eka-mcp configure --with-skills` or `eka-mcp install skills`), read the skill's `SKILL.md` from its installed directory — `<install-dir>/<name>/SKILL.md`; detect the installation directory from the workspace, never assume one. Found → use it, stop here.
+2. **MCP resource (secondary path).** Otherwise, if an eka-mcp server is connected, read the resource `eka://skills/<name>` (`text/markdown`): it serves the embedded SKILL.md verbatim, and the resource listing carries each skill's frontmatter description for discovery. Found → use it, stop here.
+3. **Inline hard rules (fallback).** If neither path yields the skill, proceed without it: this body is self-sufficient — the Hard rules section below carries the non-negotiable behavior, and the transport-primitive table above carries the full CLI/MCP surface. Degrade explicitly: state once which skills were unavailable and that the run proceeds on inline rules alone — never silently, and never invent a skill's guidance.
+
 ## Role contract
 
 Delegation is expressed exclusively through this role contract — nine roles, a closed set ratified by the orchestrator (adding or removing a role is a breaking pack change). A role is a duty, not an agent name: each ecosystem maps roles to its own agents at install time; the semantics below are ecosystem-independent.
