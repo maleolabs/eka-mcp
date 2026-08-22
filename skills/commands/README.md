@@ -54,7 +54,7 @@ The command **bodies are provider-agnostic**: canonical frontmatter is descripti
 | **Claude Code** | skills (`.claude/skills/<name>/SKILL.md`) or legacy `.claude/commands/<name>.md` — both create `/name` | keep the body; frontmatter: `description`, `disable-model-invocation: true` (user-invoked only), optional `context: fork` + `agent:` to run the command in a subagent context |
 | **Codex** | `codex.jsonc` custom prompts → `/prompts:<name>` | keep the body as the `prompt` value; `description` in the prompts entry. For execution resume, Codex's `/goal` (persisted objective + pause/resume) complements the checkpoint protocol |
 
-Roles are duties, not agent names: each ecosystem's install-time mapping table resolves a role to that ecosystem's agents (or degrades explicitly to solo mode where no sub-agent capability exists).
+Roles are duties, not agent names: each ecosystem's install-time mapping table resolves a role to that ecosystem's agents. Both bodies carry an identical **Delegation mode** section: before any delegation attempt the primary resolves the rows from the installed `DELEGATION.txt` sidecar (else the pack's mapping table) — all-`solo` rows ⇒ `mode: solo`, any named agent ⇒ `mode: delegated` — and records the resolved mode in the session preamble and checkpoints, never silently. In `mode: solo` the primary performs every role inline (analysis roles as labeled perspectives; implementing roles under the same branch/worktree isolation rules, with review as explicit, recorded self-review); in `mode: delegated` behavior is unchanged.
 
 ## The session-context pattern (caveman reference)
 
