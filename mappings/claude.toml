@@ -1,0 +1,60 @@
+# EKA delegation table — Claude Code ecosystem.
+#
+# Sourced from the current Claude Code documentation
+# (https://code.claude.com/docs/en/sub-agents, verified 2026-08-23):
+#   - Stock Claude Code ships built-in subagents — Explore, Plan and
+#     general-purpose — invoked through the Agent/Task tool.
+#   - Custom named agents are Markdown files with YAML frontmatter
+#     (required fields: name, description) placed in .claude/agents/
+#     (project scope) or ~/.claude/agents/ (user scope).
+#
+# Default resolution below targets the built-in `general-purpose` agent
+# for every role, so the mapping works on STOCK Claude Code with zero
+# custom agent files (req:agent-agnostic-skill-pack R4).
+#
+# OPTIONAL UPGRADE (documented, not required): define dedicated named
+# agents — e.g. .claude/agents/eka-security.md with a restricted tool
+# set for security-review, or an eka-reviewer agent for code-review —
+# then point the affected rows at those names. The upgrade is a purely
+# declarative edit of this table; command bodies never change (no drift).
+
+[meta]
+ecosystem = "claude"
+name = "claude code (stock general-purpose)"
+source = "code.claude.com/docs/en/sub-agents (verified 2026-08-23); req:agent-agnostic-skill-pack R4"
+
+[roles.architect]
+agent = "general-purpose"
+mode = "delegate"
+
+[roles.backend]
+agent = "general-purpose"
+mode = "delegate"
+
+[roles.frontend]
+agent = "general-purpose"
+mode = "delegate"
+
+[roles.security-review]
+agent = "general-purpose"
+mode = "delegate"
+
+[roles.code-review]
+agent = "general-purpose"
+mode = "delegate"
+
+[roles.product-review]
+agent = "general-purpose"
+mode = "delegate"
+
+[roles.qa]
+agent = "general-purpose"
+mode = "delegate"
+
+[roles.devops]
+agent = "general-purpose"
+mode = "delegate"
+
+[roles.documenter]
+agent = "general-purpose"
+mode = "delegate"
