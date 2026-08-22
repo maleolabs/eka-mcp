@@ -184,6 +184,39 @@ func SkillFile(name string) ([]byte, error) {
 	return data, nil
 }
 
+// SkillDescription returns the frontmatter description of one embedded
+// skill's SKILL.md — the resource-listing description of
+// eka://skills/<name> (req:agent-agnostic-skill-pack R9: the resource
+// carries the description from the frontmatter). The frontmatter is the
+// `---`-delimited head of the file; the description is its single-line
+// `description:` field. A skill without a parseable non-empty
+// description refuses deterministically (callers degrade to their
+// generic fallback).
+func SkillDescription(name string) (string, error) {
+	data, err := SkillFile(name)
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Split(string(data), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return "", fmt.Errorf("pack: skill %q has no frontmatter", name)
+	}
+	for _, line := range lines[1:] {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "---" {
+			break
+		}
+		if value, ok := strings.CutPrefix(trimmed, "description:"); ok {
+			description := strings.TrimSpace(value)
+			if description == "" {
+				return "", fmt.Errorf("pack: skill %q has an empty frontmatter description", name)
+			}
+			return description, nil
+		}
+	}
+	return "", fmt.Errorf("pack: skill %q has no frontmatter description", name)
+}
+
 // TemplateTypes lists the draft template type tokens of the embedded
 // pack (the *-template.json file names minus the suffix), sorted — the
 // deterministic resource enumeration of eka://templates/<type>.

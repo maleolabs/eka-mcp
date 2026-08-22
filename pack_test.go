@@ -159,6 +159,49 @@ func TestInstallSkillsSubtree(t *testing.T) {
 	}
 }
 
+// TestSkillDescriptionFromFrontmatter (req:agent-agnostic-skill-pack
+// R9): every embedded skill exposes a non-empty frontmatter description
+// — the resource-listing description of eka://skills/<name> — and the
+// value is exactly the SKILL.md frontmatter line.
+func TestSkillDescriptionFromFrontmatter(t *testing.T) {
+	dirs, err := SkillDirs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dirs) == 0 {
+		t.Fatal("the pack must embed at least one skill")
+	}
+	for _, name := range dirs {
+		description, err := SkillDescription(name)
+		if err != nil {
+			t.Errorf("SkillDescription(%q): %v", name, err)
+			continue
+		}
+		if description == "" {
+			t.Errorf("SkillDescription(%q) must not be empty", name)
+		}
+		if strings.Contains(description, "\n") {
+			t.Errorf("SkillDescription(%q) must be single-line, got %q", name, description)
+		}
+	}
+	// Pin one known value so a frontmatter regression cannot pass silently.
+	got, err := SkillDescription("eka-orientation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got, "Use when working in an EKA-enabled project") {
+		t.Errorf("eka-orientation description drifted, got %q", got)
+	}
+}
+
+// TestSkillDescriptionUnknownRefused: unknown skill names refuse
+// deterministically (the embedded filesystem is the source of truth).
+func TestSkillDescriptionUnknownRefused(t *testing.T) {
+	if _, err := SkillDescription("bogus"); err == nil {
+		t.Fatal("unknown skill must error, got nil")
+	}
+}
+
 // TestInstallUnknownKind refuses unknown kinds.
 func TestInstallUnknownKind(t *testing.T) {
 	_, err := Install("bogus", t.TempDir(), false)

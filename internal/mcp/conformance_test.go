@@ -29,6 +29,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	pack "github.com/maleolabs/eka-mcp"
 )
 
 // conformanceServer returns a server wired to a deterministic fake
@@ -213,6 +215,39 @@ func TestConformanceResourcesList(t *testing.T) {
 	r := resources[0].(map[string]any)
 	if r["uri"] != "eka://status" {
 		t.Errorf("resource uri = %v, want eka://status", r["uri"])
+	}
+}
+
+// TestConformanceResourcesListSkillDescriptions (req:agent-agnostic-skill-pack
+// R9): every eka://skills/<name> resource-listing entry carries the
+// description from the SKILL.md frontmatter — the discoverability
+// contract the skill load-order protocol (step 2) relies on.
+func TestConformanceResourcesListSkillDescriptions(t *testing.T) {
+	s := conformanceServer()
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"resources/list"}`)
+	res := mustResult(t, out)
+	byURI := map[string]map[string]any{}
+	for _, r := range res["resources"].([]any) {
+		m := r.(map[string]any)
+		byURI[m["uri"].(string)] = m
+	}
+	skills := mustSkillDirs(t)
+	if len(skills) == 0 {
+		t.Fatal("the pack must embed at least one skill")
+	}
+	for _, name := range skills {
+		entry, ok := byURI["eka://skills/"+name]
+		if !ok {
+			t.Errorf("resources/list is missing eka://skills/%s", name)
+			continue
+		}
+		want, err := pack.SkillDescription(name)
+		if err != nil {
+			t.Fatalf("SkillDescription(%q): %v", name, err)
+		}
+		if entry["description"] != want {
+			t.Errorf("eka://skills/%s description = %q, want the frontmatter description %q", name, entry["description"], want)
+		}
 	}
 }
 
