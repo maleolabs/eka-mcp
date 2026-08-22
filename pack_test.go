@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -422,6 +423,96 @@ func TestMappingValidateRejectsBadTables(t *testing.T) {
 			t.Fatalf("valid table must pass, got %v", err)
 		}
 	})
+}
+
+// --- Mapping-vs-body drift guard (req:agent-agnostic-skill-pack M3) ---
+
+// roleContractRoles extracts the role tokens of one command body's
+// "## Role contract" section: the first column of the contract's markdown
+// table, skipping the header and separator rows. The section format is
+// stable pack canon; a missing section or table fails loudly instead of
+// passing vacuously.
+func roleContractRoles(t *testing.T, name, body string) []string {
+	t.Helper()
+	const heading = "## Role contract\n"
+	start := strings.Index(body, heading)
+	if start < 0 {
+		t.Fatalf("%s has no %q section", name, strings.TrimSpace(heading))
+	}
+	rest := body[start+len(heading):]
+	if end := strings.Index(rest, "\n## "); end >= 0 {
+		rest = rest[:end]
+	}
+	var roles []string
+	for _, line := range strings.Split(rest, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "|") {
+			continue
+		}
+		cell := strings.TrimSpace(strings.TrimPrefix(line, "|"))
+		first := strings.TrimSpace(strings.SplitN(cell, "|", 2)[0])
+		if first == "" || first == "Role" || strings.Trim(first, "-: ") == "" {
+			continue // blank, header or separator row
+		}
+		roles = append(roles, first)
+	}
+	if len(roles) == 0 {
+		t.Fatalf("%s: %q section carries no role table rows", name, strings.TrimSpace(heading))
+	}
+	return roles
+}
+
+// TestRoleContractMatchesMappingTables is the build-time consistency check
+// (req M3): every role cited by a command body must resolve in EVERY
+// mappings/*.toml table. Chosen approach (the robust one): instead of
+// scanning free prose for role mentions, assert that RoleVocabulary ==
+// the role contract listed in BOTH bodies' "## Role contract" sections
+// (section extraction + role-token comparison), AND that every embedded
+// table resolves exactly RoleVocabulary (loader-validated, pinned here).
+// Drift in either direction — a body citing an unmapped role, a table
+// row no body cites, a vocabulary change not propagated everywhere —
+// fails loudly.
+func TestRoleContractMatchesMappingTables(t *testing.T) {
+	files, err := CommandFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no command files embedded")
+	}
+	want := append([]string(nil), RoleVocabulary...)
+	sort.Strings(want)
+
+	for _, name := range files {
+		data, err := fs.ReadFile(packFS, filepath.Join("commands", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := roleContractRoles(t, name, string(data))
+		sort.Strings(got)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s role contract drifted from RoleVocabulary:\n got = %v\nwant = %v", name, got, want)
+		}
+	}
+
+	keys, err := MappingEcosystems()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range keys {
+		table, err := LoadMappingTable(key)
+		if err != nil {
+			t.Fatalf("LoadMappingTable(%q): %v", key, err)
+		}
+		tableRoles := make([]string, 0, len(table.Roles))
+		for role := range table.Roles {
+			tableRoles = append(tableRoles, role)
+		}
+		sort.Strings(tableRoles)
+		if !reflect.DeepEqual(tableRoles, want) {
+			t.Errorf("mapping %q resolves %v, want exactly the bodies' role contract %v", key, tableRoles, want)
+		}
+	}
 }
 
 func containsString(s []string, v string) bool {
