@@ -92,7 +92,7 @@ The Skill Pack drives the **`eka` CLI** — it is the current execution interfac
 
 - `eka` installed (Go 1.24+; see [Installation](../README.md#installation) and [docs/installation.md](docs/installation.md)).
 - For runtime commands (`eka get`, `eka context`, `eka view`, `eka transition`, …): an **EKA Workspace** (`~/.eka` or `$EKA_HOME`) with the target repository **registered once** (`eka sync` at intake — registration persists; reads and transitions then run directly on the shared store, no per-read sync. Full `eka sync` / `eka sync pull` re-seeds the store from the snapshot/docs tree and can overwrite newer states with older instances — use `eka sync push` during active execution).
-- The pack is **embedded in the `eka-mcp` binary**: `eka-mcp configure --with-skills` (per ADR-030) is the official installation path, and the installed pack version always equals the binary's pack version (no drift on the install path; manual copies can still drift — re-running install fixes them).
+- The pack is **embedded in the `eka-mcp` binary**: `eka-mcp configure --with-skills --json` (per ADR-030; `--json` is required) is the official installation path, and the installed pack version always equals the binary's pack version (no drift on the install path; manual copies can still drift — re-running configure restores pack-owned files).
 
 **Command reality check — the skills only reference commands that exist.** The command surface evolves; when uncertain, inspect it:
 
