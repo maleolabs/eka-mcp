@@ -36,6 +36,14 @@ cp skills/commands/*.md .opencode/commands/
 
 Then run `/eka-discuss` or `/eka-execute` in the agent's TUI. The canonical bodies carry **description-only frontmatter**; provider-specific frontmatter is rendered at install time per target. The primary orchestrating agent runs the command; delegation happens through the role contract inside the command body.
 
+## How commands load skills
+
+Both command bodies reference pack skills by name. Every such reference resolves through a single load-order protocol (identical in both bodies), so file installation stays the primary delivery path while the MCP server remains a full fallback — and the commands keep working when **nothing** is installed:
+
+1. **Installed skill directory** — read `<install-dir>/<name>/SKILL.md` from the pack installed by `eka-mcp configure --with-skills` / `eka-mcp install skills`.
+2. **MCP resource** — read `eka://skills/<name>` from a connected eka-mcp server (`text/markdown`; serves the embedded SKILL.md verbatim, with each skill's frontmatter description in the resource listing).
+3. **Inline hard rules** — if neither path yields the skill, proceed without it: each body carries its own Hard rules and transport-primitive table, and states explicitly which skills were unavailable (never a silent degrade).
+
 ## Provider mapping
 
 The command **bodies are provider-agnostic**: canonical frontmatter is description-only, and delegation is expressed exclusively through the role contract (nine closed roles — architect, backend, frontend, security-review, code-review, product-review, qa, devops, documenter). Provider-specific frontmatter and the per-ecosystem role→agent mapping are applied at install time per target:
@@ -65,4 +73,4 @@ The checkpoint file is **operational state, not knowledge** — deliberately out
 ## Maintenance
 
 - The command bodies are the canonical content; frontmatter changes per provider. When the pack's skills or the CLI surface evolve, update the bodies to match (the skills' own reality-check rule applies: commands only reference commands that exist — verify with `eka --help`).
-- The commands reference skills by name (`eka-orientation`, `eka-adoption`, …) — install the pack's skills alongside the commands; without the skills the commands still work but lose the behavioral depth.
+- The commands reference skills by name (`eka-orientation`, `eka-adoption`, …) — every reference resolves through the [load-order protocol](#how-commands-load-skills): installed skill dir first, then the `eka://skills/<name>` MCP resource, else the body's inline hard rules. Installing the pack's skills alongside the commands keeps the full behavioral depth; without them the commands still work on inline rules alone.

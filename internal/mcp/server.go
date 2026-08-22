@@ -957,7 +957,10 @@ func parseContent(raw json.RawMessage) (map[string]any, error) {
 // workspace status resource (a real, readable view over eka-core) plus
 // the read-only embedded pack resources — every skill's SKILL.md and
 // every draft template type. The enumeration is deterministic (the
-// embedded filesystem is the source of truth).
+// embedded filesystem is the source of truth). Skill resource
+// descriptions come from the SKILL.md frontmatter
+// (req:agent-agnostic-skill-pack R9); a skill without a parseable
+// description degrades to the generic form.
 func (s *Server) handleResourcesList(req request) []byte {
 	resources := []any{
 		map[string]any{
@@ -972,10 +975,14 @@ func (s *Server) handleResourcesList(req request) []byte {
 		return s.errorResponse(req.ID, codeInternalError, "listing skills: "+SanitizeError(err))
 	}
 	for _, name := range skills {
+		description := "The SKILL.md of the embedded " + name + " skill (read-only)."
+		if d, err := pack.SkillDescription(name); err == nil && d != "" {
+			description = d
+		}
 		resources = append(resources, map[string]any{
 			"uri":         "eka://skills/" + name,
 			"name":        "EKA skill " + name,
-			"description": "The SKILL.md of the embedded " + name + " skill (read-only).",
+			"description": description,
 			"mimeType":    "text/markdown",
 		})
 	}
