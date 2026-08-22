@@ -22,7 +22,17 @@ eka-mcp configure --target opencode --with-commands   # install eka-discuss.md +
 eka-mcp configure --target opencode --with-all        # skills + commands + MCP client config
 ```
 
-`configure` supports `--target opencode|claude|codex` (default `opencode`), `--dir <path>` for an explicit directory, and `--dry-run` to preview the plan. Without a `--with-*` flag nothing is copied — the pack stays reachable as MCP resources (`eka://skills/*`, `eka://templates/*`). Re-running after an upgrade refreshes the installed files.
+`configure` supports `--target opencode|claude|codex` (default `opencode`), `--dir <path>` for an explicit directory, and `--dry-run` to preview the plan (paths + `create|overwrite|skip`, nothing written). Without a `--with-*` flag nothing is copied — the pack stays reachable as MCP resources (`eka://skills/*`, `eka://templates/*`). Re-running after an upgrade refreshes the installed files — overwriting **only pack-owned files**; foreign files in the install directories are never touched.
+
+Install destinations are the conventional per-target directories under an anchor (`<base>` = `--dir`, else the user home for opencode/claude and the working directory for codex):
+
+| Target | Commands | Skills | Delegation sidecar |
+|---|---|---|---|
+| **opencode** | `<base>/.config/opencode/commands/` | `<base>/.config/opencode/skills/` | `DELEGATION.txt` next to the commands |
+| **claude** | `<base>/.claude/commands/` | `<base>/.claude/skills/` | `DELEGATION.txt` next to the commands |
+| **codex** | — not installable (codex-cli removed the prompts directory in 0.117.0; `--with-commands` / `--with-all` refuse deterministically) | `<base>/.agents/skills/` | `DELEGATION.txt` inside the skills subtree |
+
+Every command install also writes the active role→agent mapping table as a **non-.md sidecar** (`DELEGATION.txt`) — deliberately not `.md`, because legacy command directories scan every `*.md` as a command.
 
 Manual copy remains a valid fallback:
 
@@ -50,9 +60,9 @@ The command **bodies are provider-agnostic**: canonical frontmatter is descripti
 
 | Provider | Mechanism | Adaptation |
 |---|---|---|
-| **opencode** | `commands/*.md` with frontmatter (`description`, `agent`) | canonical body + rendered frontmatter at install |
-| **Claude Code** | skills (`.claude/skills/<name>/SKILL.md`) or legacy `.claude/commands/<name>.md` — both create `/name` | keep the body; frontmatter: `description`, `disable-model-invocation: true` (user-invoked only), optional `context: fork` + `agent:` to run the command in a subagent context |
-| **Codex** | `codex.jsonc` custom prompts → `/prompts:<name>` | keep the body as the `prompt` value; `description` in the prompts entry. For execution resume, Codex's `/goal` (persisted objective + pause/resume) complements the checkpoint protocol |
+| **opencode** | `commands/*.md` with frontmatter | canonical body + rendered frontmatter at install; `description` always, `agent:` only when it resolves from the active mapping (today never — the commands are primary-agent orchestrators, so the key is omitted per V2 rather than guessed) |
+| **Claude Code** | skills (`.claude/skills/<name>/SKILL.md`) or `.claude/commands/<name>.md` — both create `/name` | keep the body; rendered frontmatter follows the same resolve-or-omit rule (`description` only today); optional keys like `disable-model-invocation: true` or `context: fork` are user-side refinements, not pack-rendered |
+| **Codex** | skills subtree `.agents/skills/` (repo-local; codex-cli removed `~/.codex/prompts` in 0.117.0, so commands install is refused) | install via `--with-skills`; the codex mapping table is deliberately all-`solo` (explicit primary-agent degrade, never silent). For execution resume, Codex's `/goal` (persisted objective + pause/resume) complements the checkpoint protocol |
 
 Roles are duties, not agent names: each ecosystem's install-time mapping table resolves a role to that ecosystem's agents. Both bodies carry an identical **Delegation mode** section: before any delegation attempt the primary resolves the rows from the installed `DELEGATION.txt` sidecar (else the pack's mapping table) — all-`solo` rows ⇒ `mode: solo`, any named agent ⇒ `mode: delegated` — and records the resolved mode in the session preamble and checkpoints, never silently. In `mode: solo` the primary performs every role inline (analysis roles as labeled perspectives; implementing roles under the same branch/worktree isolation rules, with review as explicit, recorded self-review); in `mode: delegated` behavior is unchanged.
 
