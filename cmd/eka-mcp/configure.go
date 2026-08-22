@@ -17,10 +17,10 @@ var supportedTargets = []string{"opencode", "claude", "codex"}
 
 // configureOptions holds the parsed configure flags.
 type configureOptions struct {
-	Target      string
-	Dir         string
-	DryRun      bool
-	JSON        bool
+	Target       string
+	Dir          string
+	DryRun       bool
+	JSON         bool
 	WithSkills   bool
 	WithCommands bool
 	WithAll      bool
