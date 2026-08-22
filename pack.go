@@ -73,11 +73,15 @@ type Manifest struct {
 }
 
 // PluginCommands is the fixed B1 command set the plugin exposes via
-// deferred registration (G1-G4). At least one: "mcp" dispatching to
-// "serve" — the MCP server. The plugin owns its flags
-// (DisableFlagParsing in eka-cli), so "serve" handles its own --help.
+// deferred registration (G1-G4). The single command "mcp" proxies the
+// WHOLE binary: Args is empty, so every user argument passes through
+// unchanged — the bare executable defaults to the MCP server, and
+// "configure …", "install …" or "manifest --json" reach their
+// subcommands directly. Pinning a fixed prefix (e.g. ["serve"]) would
+// trap every invocation into that one subcommand. The plugin owns its
+// flags (DisableFlagParsing in eka-cli).
 var PluginCommands = []ManifestCommand{
-	{Name: "mcp", Description: "EKA MCP server", Args: []string{"serve"}},
+	{Name: "mcp", Description: "EKA MCP server and plugin tooling", Args: []string{}},
 }
 
 // skillsFS embeds the EKA AI Skill Pack. The entry names of the

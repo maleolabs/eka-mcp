@@ -75,9 +75,10 @@ func TestManifestDeterminism(t *testing.T) {
 }
 
 // TestManifestIncludesCommands pins the B1 dispatch-protocol extension:
-// the manifest must declare at least the "mcp" command dispatching to
-// "serve" (the deferred-registration contract with eka-cli). The
-// contract stays "v1" — the commands array is additive.
+// the manifest must declare at least the "mcp" command with EMPTY args
+// — a whole-binary proxy (the bare executable defaults to the MCP
+// server; every other subcommand passes through). The contract stays
+// "v1" — the commands array is additive.
 func TestManifestIncludesCommands(t *testing.T) {
 	m, err := BuildManifest()
 	if err != nil {
@@ -96,12 +97,12 @@ func TestManifestIncludesCommands(t *testing.T) {
 			if c.Description == "" {
 				t.Error(`command "mcp" must have a non-empty description`)
 			}
-			if len(c.Args) == 0 || c.Args[0] != "serve" {
-				t.Errorf(`command "mcp" args = %v, want ["serve", ...]`, c.Args)
+			if len(c.Args) != 0 {
+				t.Errorf(`command "mcp" args = %v, want empty (whole-binary proxy)`, c.Args)
 			}
 		}
-		if c.Name == "" || c.Description == "" || len(c.Args) == 0 {
-			t.Errorf("command entries must have name, description and args, got %+v", c)
+		if c.Name == "" || c.Description == "" {
+			t.Errorf("command entries must have name and description, got %+v", c)
 		}
 	}
 	if !found {

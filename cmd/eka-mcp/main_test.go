@@ -135,8 +135,8 @@ func TestManifestJSON(t *testing.T) {
 			if c.Description == "" {
 				t.Error(`B1 command "mcp" must have a description`)
 			}
-			if len(c.Args) == 0 || c.Args[0] != "serve" {
-				t.Errorf(`B1 command "mcp" args = %v, want ["serve", ...]`, c.Args)
+			if len(c.Args) != 0 {
+				t.Errorf(`B1 command "mcp" args = %v, want empty (whole-binary proxy)`, c.Args)
 			}
 		}
 	}
@@ -146,8 +146,8 @@ func TestManifestJSON(t *testing.T) {
 	// Raw JSON must carry the "commands" key (additive, still v1).
 	if _, ok := raw["commands"]; !ok {
 		t.Error(`raw manifest JSON must include "commands" (B1 additive extension)`)
-	} else if got := compact(raw["commands"]); !strings.Contains(got, `"name":"mcp"`) || !strings.Contains(got, `"serve"`) {
-		t.Errorf(`raw commands = %s, want to contain mcp/serve`, got)
+	} else if got := compact(raw["commands"]); !strings.Contains(got, `"name":"mcp"`) {
+		t.Errorf(`raw commands = %s, want to contain mcp`, got)
 	}
 	// Contract stays v1 — B1 is additive, not a version bump.
 	if b1.Contract != "v1" {

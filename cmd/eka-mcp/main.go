@@ -21,6 +21,8 @@ import (
 	"io"
 	"os"
 
+	"github.com/mattn/go-isatty"
+
 	"github.com/maleolabs/eka-core/plugin"
 	"github.com/maleolabs/eka-mcp"
 	"github.com/maleolabs/eka-mcp/internal/eka"
@@ -155,6 +157,25 @@ func writeJSON(out io.Writer, v any) error {
 // MCP client captures): the same refusal-class policy as the MCP
 // boundary — no workspace paths, no store details.
 func serve() error {
+	// Interactive notice: the server speaks newline-delimited JSON-RPC
+	// over stdio — stdout is the protocol stream and stays silent until
+	// a client sends requests. A human running "eka mcp" (or
+	// "eka-mcp serve") directly on a terminal would see nothing and
+	// reasonably conclude it is stuck, so say what is happening on
+	// STDERR (never stdout: that would corrupt the protocol framing)
+	// and how to actually attach a client. Non-TTY runs (a real MCP
+	// client, a pipe) print nothing.
+	if isatty.IsTerminal(os.Stdin.Fd()) {
+		fmt.Fprintf(os.Stderr, `eka-mcp: stdio MCP server listening (protocol 2024-11-05)
+  stdout speaks JSON-RPC 2.0 — no interactive output; press Ctrl-C to stop.
+
+  Attach an agent client:
+    eka-mcp configure --target opencode --dir . --json   (or claude, codex)
+
+  Or drive it by hand:
+    echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"hand","version":"0"}}}' | eka mcp
+`)
+	}
 	cap, err := eka.Open()
 	if err != nil {
 		return fmt.Errorf("cannot open the EKA workspace: %s", mcp.SanitizeError(err))
