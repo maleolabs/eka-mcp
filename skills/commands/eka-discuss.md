@@ -55,6 +55,19 @@ Contract rules:
 - Analysis-only roles never implement; implementing roles never approve.
 - Every role escalates to the **primary agent** — the orchestrating agent running this command, the only party that talks to the user.
 
+## Delegation mode
+
+Before the first delegation attempt of a session, the primary agent resolves its **delegation mode** from delegation data — never from assumptions about the environment:
+
+1. **Resolve the rows.** Read the active delegation table: the `DELEGATION.txt` sidecar installed next to these commands when present, else the pack's mapping table for the resolved target. Each row maps one role-contract role to an agent target plus a mode: `delegate` (a named agent performs the role) or `solo` (the primary performs it inline).
+2. **Determine the mode.** Every role resolving to `solo`/`primary` ⇒ the session runs as **`mode: solo`**. Any role resolving to a named agent ⇒ **`mode: delegated`**. Resolution happens once at session start, is re-checked on resume, and always precedes the first delegation attempt.
+3. **Record the mode.** State the resolved mode in the session preamble (`mode: solo` or `mode: delegated`) and carry it into every checkpoint and closing summary. A missing or unreadable delegation source is stated explicitly and defaults to `mode: solo` with that assumption recorded — the degrade is never silent, in either direction.
+
+Mode semantics:
+
+- **`mode: delegated`** — nothing changes: every role goes to its mapped agent exactly as the role contract defines.
+- **`mode: solo`** — the primary performs every role itself, inline, in role order, labeling each contribution with the role it fulfills (e.g. `[role: architect]`). Analysis-only roles become clearly labeled perspectives held to the same inputs and deliverables as delegated ones. Implementing roles are performed by the primary under exactly the rules each body sets for delegated implementation — in execution: dedicated branch + worktree per item created from the latest development branch snapshot, quality gates re-run, review sign-off before `done`. Solo never drops a role's duties and never skips review: where no second agent exists, review is an explicit self-review against the same checklist, applied in full and recorded as self-review.
+
 ## Input
 
 $ARGUMENTS — optional: a topic, a knowledge identity (`<ns>/<type>:<id>`), or an issue number (`#<n>`). Without input, propose a subject and confirm with the user.
@@ -86,6 +99,7 @@ Start the session with EKA context (the context-first principle):
   - architecture impact + deep knowledge discovery (existing related knowledge) → `architect` (input: the context object + the proposal)
   - product intent / prioritization → `product-review`
   - UX / experience → `product-review` (the role absorbs UX review)
+- In `mode: solo` (Delegation mode): perform these analyses inline as clearly labeled perspectives — `[role: architect]`, `[role: product-review]` — against the same inputs and deliverables; the discussion flow and its outputs are unchanged.
 - Roles never ask the user; they report to the primary agent, which discusses with the user.
 - Record the discussion as evidence: the `note` primitive (`--role implementation|review`; cmt drafts discussing the subject), or a `ses` draft for session-style records.
 
@@ -102,6 +116,7 @@ Start the session with EKA context (the context-first principle):
   - `qa` — conformance, state/change-log integrity, consistency, R10/R12 traceability
   - `code-review` — technical correctness of the proposal content
   - `product-review` — holistic product/experience review (user-facing proposals)
+- In `mode: solo` (Delegation mode): run each review inline as a clearly labeled perspective (`[role: qa]`, `[role: code-review]`, `[role: product-review]`) against the same checklists; findings still block approval, and verdicts are recorded noting the solo self-review.
 - Every finding must be addressed in the draft. Validation findings **block approval**.
 
 ### Gate 5 — Approved → Publish
@@ -139,6 +154,7 @@ A planning session is not complete until the execution state is prepared — sti
 Close with a planning summary:
 
 - subject, family/stratum, and the existing knowledge it touches;
+- the delegation mode (`mode: solo` / `mode: delegated`) and, in solo mode, which roles were performed inline as perspectives;
 - draft identities created and their states (draft / approved);
 - review verdicts and the evidence trail (note identities);
 - approval status, and what blocks approval if not approved;
