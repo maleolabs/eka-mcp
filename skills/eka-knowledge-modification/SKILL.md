@@ -9,13 +9,16 @@ Engineering Knowledge is **immutable and append-only**. There is no edit path fo
 
 **Never mutate an existing canonical object. Never edit a published form. Never rewrite the store.**
 
-## Two sanctioned change paths
+## Sanctioned change paths
 
 | Change kind | Path | Mechanism |
 |---|---|---|
 | **State change** (work item, plan, container) | `eka transition` | publishes a new immutable payload for the line with the new state + appended change-log entry; the reference moves forward |
 | **Content/knowledge revision** (new content, correction, new relationship set) | new draft on the same line → `eka publish` | a new draft of `<type>:<id>` publishes as the next instance version (max + 1), a new immutable object alongside the old ones |
+| **Assignment edge change** (work item → member) | `eka assign` / `eka reassign` / `eka unassign` | the single `assigned-to` edge is set, moved, or removed in place — same instance version, no churn (a published payload is re-pointed, a draft's relationships block is mutated) |
 | Legacy docs tree | edit the authoring file → `eka validate` → `eka sync` (docs-mode re-seed) | the authoring adapter's revision path; the compiled CKO replaces the old one in the store |
+
+Assignment edges are the narrow third path: neither a transition nor a revision — the explicit assignment commands rewrite the work item's single `assigned-to` edge (single-assignee, ADR-029) with no instance churn. Only work items (`sto-`/`ts-`/`bug-`/`td-`/`ch-`/`spk-`) are assignable, the member must be a resolvable `mbr-` line of the same repository, and refusals are deterministic (see [eka-engineering-workflow](../eka-engineering-workflow/SKILL.md)). Assignment never creates container membership — tickets remain the sole membership contract. The eka-mcp server exposes no assignment tools yet: CLI only today.
 
 ## Path 1 — State transitions (`eka transition`)
 
