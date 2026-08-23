@@ -63,6 +63,11 @@ func runConfigure(args []string, out io.Writer) error {
 			fmt.Fprintln(out, "Canonical bodies stay description-only in the pack; command frontmatter is rendered per target at")
 			fmt.Fprintln(out, "install time. Re-installing overwrites only pack-owned files (foreign files are never touched);")
 			fmt.Fprintln(out, "--dry-run prints paths + create|overwrite|skip and writes nothing.")
+			fmt.Fprintln(out, "")
+			fmt.Fprintln(out, "Config-file writes are safe by construction: the merged config is staged in a temporary file and")
+			fmt.Fprintln(out, "renamed into place (atomic replace, never written through). A symlinked config destination is")
+			fmt.Fprintln(out, "refused with the link left intact, and an existing config that is not valid JSON refuses with a")
+			fmt.Fprintln(out, "clear error instead of being reset — the file stays byte-untouched in both cases.")
 			return nil
 		}
 	}
@@ -331,7 +336,18 @@ func configureTargetFileAndEntry(target, dir, binary string, env map[string]stri
 	}
 }
 
-// writeConfigureFile merges the eka entry into the target file without overwriting other servers.
+// writeConfigureFile merges the eka entry into the target file without
+// overwriting other servers. Writing is hardened (td:configure-write-hardening):
+//
+//   - A symlinked or special-file destination is refused before anything
+//     happens — the link itself is left byte-untouched (Lstat never follows
+//     it). Intermediate directory symlinks are followed as usual.
+//   - Existing content that is not valid JSON refuses deterministically
+//     instead of silently resetting the file; the file stays byte-untouched.
+//   - The payload is staged in a temporary file in the destination directory
+//     and renamed over the target (CreateTemp 0600 → chmod → rename), so the
+//     final path component is replaced, never written through — matching the
+//     pack installer's writeFileScoped semantics.
 func writeConfigureFile(target, file string, entry any) error {
 	var topKey string
 	switch target {
@@ -343,14 +359,23 @@ func writeConfigureFile(target, file string, entry any) error {
 		return fmt.Errorf("configure: unsupported target %q", target)
 	}
 
-	// Read existing file or start empty.
+	// Refuse non-regular final path components up front so a symlinked
+	// config destination is never replaced or written through.
+	if info, err := os.Lstat(file); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("configure: refusing to write %s: not a regular config file (symlink or special file); resolve or remove it first — nothing was modified", file)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("configure: cannot inspect %s: %w", file, err)
+	}
+
+	// Read existing file or start empty; unparseable JSON refuses instead
+	// of resetting (the user's file is left exactly as-is).
 	data := map[string]any{}
 	if b, err := os.ReadFile(file); err == nil {
 		if len(strings.TrimSpace(string(b))) > 0 {
 			if err := json.Unmarshal(b, &data); err != nil {
-				// Treat invalid JSON as empty — but don't silently destroy: keep parse error as deterministic?
-				// For idempotency, start fresh with a warning-less reset; other keys are lost only if file was invalid.
-				data = map[string]any{}
+				return fmt.Errorf("configure: refusing to rewrite %s: existing content is not valid JSON (%v); fix or remove the file first — it was left untouched", file, err)
 			}
 		}
 	} else if !os.IsNotExist(err) {
@@ -366,18 +391,47 @@ func writeConfigureFile(target, file string, entry any) error {
 	section["eka"] = entry
 	data[topKey] = section
 
-	// Ensure directory exists.
-	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-		return fmt.Errorf("configure: cannot create directory for %s: %w", file, err)
-	}
-	// Deterministic write with indent.
+	// Deterministic serialization with indent.
 	out, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return fmt.Errorf("configure: cannot marshal %s: %w", file, err)
 	}
 	out = append(out, '\n')
-	if err := os.WriteFile(file, out, 0o644); err != nil {
-		return fmt.Errorf("configure: cannot write %s: %w", file, err)
+
+	return writeConfigScoped(file, out)
+}
+
+// writeConfigScoped stages content in a temporary file inside the
+// destination directory and renames it over path, so the FINAL path
+// component is replaced atomically and never written through (a racing
+// symlink would be replaced by the rename, not followed). The temporary
+// file is created 0600 by CreateTemp, chmod-ed to 0644 to match the
+// historical config-file mode, then renamed. Non-regular destinations are
+// already refused by the caller before this runs.
+func writeConfigScoped(path string, content []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("configure: cannot create directory for %s: %w", path, err)
+	}
+	tmp, err := os.CreateTemp(dir, ".ekacfg-*")
+	if err != nil {
+		return fmt.Errorf("configure: cannot stage %s: %w", path, err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op after a successful rename
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return fmt.Errorf("configure: cannot stage %s: %w", path, err)
+	}
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		return fmt.Errorf("configure: cannot stage %s: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("configure: cannot stage %s: %w", path, err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("configure: cannot write %s: %w", path, err)
 	}
 	return nil
 }
