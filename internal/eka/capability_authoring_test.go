@@ -437,6 +437,70 @@ func TestViewDraft(t *testing.T) {
 	}
 }
 
+// TestDraftReadDraft: DraftRead returns the draft file content verbatim (renamed tool, td:mcp-view-naming-fix).
+func TestDraftReadDraft(t *testing.T) {
+	authoringRuntime(t)
+	cap, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cap.Close()
+
+	if _, err := cap.NewDraft(mcp.NewDraftRequest{
+		Project:   "feather",
+		Namespace: "feather",
+		Type:      "adr",
+		ID:        "004-draft-read",
+		By:        mcp.AuthorIdentity{Kind: "agent", Name: "mcp-agent"},
+	}); err != nil {
+		t.Fatalf("NewDraft failed: %v", err)
+	}
+
+	data, err := cap.DraftRead("feather/adr:004-draft-read", "feather")
+	if err != nil {
+		t.Fatalf("DraftRead failed: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("DraftRead must return the draft JSON: %v\n%s", err, data)
+	}
+	if doc["type"] != "adr" || doc["id"] != "004-draft-read" {
+		t.Errorf("draft_read identity = %v", doc)
+	}
+}
+
+// TestDraftReadAndViewAliasDeterministic: DraftRead and deprecated View alias return identical verbatim content.
+func TestDraftReadAndViewAliasDeterministic(t *testing.T) {
+	authoringRuntime(t)
+	cap, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cap.Close()
+
+	if _, err := cap.NewDraft(mcp.NewDraftRequest{
+		Project:   "feather",
+		Namespace: "feather",
+		Type:      "adr",
+		ID:        "004-alias",
+		By:        mcp.AuthorIdentity{Kind: "agent", Name: "mcp-agent"},
+	}); err != nil {
+		t.Fatalf("NewDraft failed: %v", err)
+	}
+
+	a, err := cap.DraftRead("feather/adr:004-alias", "feather")
+	if err != nil {
+		t.Fatalf("DraftRead failed: %v", err)
+	}
+	b, err := cap.View("feather/adr:004-alias", "feather")
+	if err != nil {
+		t.Fatalf("View failed: %v", err)
+	}
+	if string(a) != string(b) {
+		t.Errorf("DraftRead and View alias must return identical verbatim content, got %q vs %q", a, b)
+	}
+}
+
 // TestDraftList: DraftList returns the draft backlog (schema
 // eka-draft-list-v1) with the scaffolded draft.
 func TestDraftList(t *testing.T) {

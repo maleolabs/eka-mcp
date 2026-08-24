@@ -67,8 +67,12 @@ func (f *fakeCapability) Note(req NoteRequest) ([]byte, error) {
 	return []byte(`{"schema":"eka-note-result-v1","id":"x-implementation","target":` + mustQuote(req.Target) + `,"subjectState":"","path":"/tmp/drafts/cmt-x-implementation.json","by":{"kind":"agent","name":"mcp-agent"}}`), nil
 }
 
-func (f *fakeCapability) View(target, project string) ([]byte, error) {
+func (f *fakeCapability) DraftRead(target, project string) ([]byte, error) {
 	return []byte(`{"namespace":"feather","type":"adr","id":"001","revision":1,"content":{}}`), nil
+}
+
+func (f *fakeCapability) View(target, project string) ([]byte, error) {
+	return f.DraftRead(target, project)
 }
 
 func (f *fakeCapability) DraftList(project string) ([]byte, error) {
@@ -159,7 +163,7 @@ func TestToolsList(t *testing.T) {
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	res := out["result"].(map[string]any)
 	tools := res["tools"].([]any)
-	want := []string{"context", "get", "domain", "status", "validate", "new", "publish", "transition", "note", "view", "draft_list", "integrity_check", "discard"}
+	want := []string{"context", "get", "domain", "status", "validate", "new", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard"}
 	got := make([]string, 0, len(tools))
 	for _, tl := range tools {
 		tm := tl.(map[string]any)
@@ -170,6 +174,54 @@ func TestToolsList(t *testing.T) {
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("tools = %v, want %v", got, want)
+	}
+	// Deprecated alias `view` must be flagged with migration note to `draft_read`.
+	for _, tl := range tools {
+		tm := tl.(map[string]any)
+		if tm["name"] == "view" {
+			desc, _ := tm["description"].(string)
+			if !strings.Contains(strings.ToLower(desc), "deprecated") || !strings.Contains(desc, "draft_read") {
+				t.Errorf("tool view description = %q, want deprecated flag with migration note to draft_read", desc)
+			}
+		}
+		if tm["name"] == "draft_read" {
+			desc, _ := tm["description"].(string)
+			if strings.Contains(strings.ToLower(desc), "deprecated") {
+				t.Errorf("tool draft_read must not be marked deprecated, got %q", desc)
+			}
+		}
+	}
+}
+
+func TestToolsCallDraftReadAndViewAlias(t *testing.T) {
+	cap := &fakeCapability{statusJSON: `{}`}
+	s := NewServer(cap)
+	for _, name := range []string{"draft_read", "view"} {
+		out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"`+name+`","arguments":{"target":"feather/adr:001","project":"feather"}}}`)
+		res, ok := out["result"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: expected result, got %v", name, out)
+		}
+		if res["isError"] != false {
+			t.Errorf("%s: isError = %v, want false", name, res["isError"])
+		}
+		content := res["content"].([]any)[0].(map[string]any)
+		text := content["text"].(string)
+		var doc map[string]any
+		if err := json.Unmarshal([]byte(text), &doc); err != nil {
+			t.Fatalf("%s: tool text must be JSON: %v", name, err)
+		}
+		if doc["type"] != "adr" {
+			t.Errorf("%s: type = %v, want adr", name, doc["type"])
+		}
+	}
+	// Both names are deterministic and return identical verbatim content.
+	a := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"draft_read","arguments":{"target":"feather/adr:001"}}}`)
+	b := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"view","arguments":{"target":"feather/adr:001"}}}`)
+	aText := a["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	bText := b["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if aText != bText {
+		t.Errorf("draft_read and view alias must return identical verbatim content, got %q vs %q", aText, bText)
 	}
 }
 

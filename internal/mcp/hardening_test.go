@@ -227,6 +227,10 @@ func (f *failingStatusCapability) Note(req NoteRequest) ([]byte, error) {
 	return nil, errors.New("unreachable")
 }
 
+func (f *failingStatusCapability) DraftRead(target, project string) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
 func (f *failingStatusCapability) View(target, project string) ([]byte, error) {
 	return nil, errors.New("unreachable")
 }

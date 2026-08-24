@@ -70,8 +70,15 @@ type Capability interface {
 	Transition(req TransitionRequest) ([]byte, error)
 	// Note creates one cmt- note draft (schema eka-note-result-v1).
 	Note(req NoteRequest) ([]byte, error)
-	// View returns one draft file content (the v2.0 JSON authoring
-	// document, verbatim).
+	// DraftRead returns one draft file content verbatim (the v2.0 JSON
+	// authoring document) — the editable draft behind a target. It is
+	// the renamed MCP tool for draft reading (td:mcp-view-naming-fix);
+	// deterministic and verbatim.
+	DraftRead(target, project string) ([]byte, error)
+	// View is the deprecated alias of DraftRead (td:mcp-view-naming-fix).
+	// It remains functional for one minor version after 1.1.3 and will be
+	// removed in the next minor. Use DraftRead. This alias exists to
+	// avoid breaking existing MCP clients during migration.
 	View(target, project string) ([]byte, error)
 	// DraftList lists the draft backlog (schema eka-draft-list-v1).
 	DraftList(project string) ([]byte, error)
@@ -571,9 +578,30 @@ func (s *Server) handleToolsList(req request) []byte {
 			},
 		},
 		map[string]any{
-			"name": "view",
+			"name": "draft_read",
 			"description": "Return one draft file content verbatim (the v2.0 JSON authoring document) — " +
 				"the editable draft behind a target.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"target": map[string]any{
+						"type":        "string",
+						"description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\".",
+					},
+					"project": map[string]any{
+						"type":        "string",
+						"description": "Optional project scope (default: the cwd repository's project).",
+					},
+				},
+				"required": []string{"target"},
+			},
+		},
+		// TODO(td:mcp-view-naming-fix): remove deprecated `view` alias in next minor version after 1.1.3.
+		// It remains for one minor version as migration window for MCP clients.
+		map[string]any{
+			"name": "view",
+			"description": "Deprecated: use draft_read. Return one draft file content verbatim (the v2.0 JSON authoring document) — " +
+				"the editable draft behind a target. This alias will be removed in the next minor version; migrate to draft_read.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -857,7 +885,22 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			return "", err
 		}
 		return string(data), nil
+	case "draft_read":
+		var p struct {
+			Target  string `json:"target"`
+			Project string `json:"project"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" {
+			return "", fmt.Errorf("draft_read requires {\"target\": string}")
+		}
+		data, err := s.cap.DraftRead(p.Target, p.Project)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
 	case "view":
+		// Deprecated alias for draft_read (td:mcp-view-naming-fix).
+		// TODO(td:mcp-view-naming-fix): remove in next minor version after 1.1.3 — then delete this case and the View method.
 		var p struct {
 			Target  string `json:"target"`
 			Project string `json:"project"`

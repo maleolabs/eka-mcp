@@ -55,13 +55,18 @@ Consequences for this milestone:
 | [eka-knowledge-modification](../eka-knowledge-modification/SKILL.md) | transition tools with the same gates (gates are Runtime-side, not CLI-side) |
 | [eka-knowledge-review](../eka-knowledge-review/SKILL.md) | validation/integrity tools — same reports, same verdicts |
 
+## MCP tool naming: draft file reader vs human projection
+
+- **MCP `draft_read`** — draft-file reader (authoring aid): returns one draft file content verbatim (the v2.0 JSON authoring document). Deterministic, no rendering. The previous name `view` is retained as a **deprecated alias** for one minor version (td:mcp-view-naming-fix) with a deprecation notice in `tools/list`; migrate to `draft_read`.
+- **CLI `eka view` / `eka watch`** — human-oriented projections: Kanban, roadmap, dependency tree, cards, timeline, ticket detail — live/TTY rendering for human consumption. These remain **CLI-only** and are deliberately not exposed as MCP tools or resources (see req:eka-mcp-production §8). Agents must not conflate `draft_read` with `eka view`.
+
 ## Boundary rules for this milestone
 
-- **Do not implement MCP** — no protocol work, no server scaffolding, no tool-definition files pretending to be MCP. The pack documents the boundary only.
+- **Do not implement MCP** — no protocol work, no server scaffolding, no tool-definition files pretending to be MCP. The pack documents the boundary only. *(Historical: the MCP server is now implemented in `eka-mcp`; this rule scoped the original Skill Pack milestone.)*
 - **Do not introduce a new Runtime API** — the skill pack adds zero runtime surface.
 - **Do not extend the CLI** — the skills use existing commands; if a capability is missing, that is a CLI/Runtime milestone, not a skill concern (the skills instruct agents to inspect `eka help` when uncertain).
 - **Do not design skills around MCP** — design them around behavior; transport follows.
 
 ## Status
 
-MCP integration: **not started** — intentionally out of scope for the AI Skill Pack milestone. This document is the agreed boundary so that when the MCP milestone begins, the contracts (Runtime API, Authoring API, Context Object, CKO JSON schemas) are already the interface — and the Skill Pack sits unchanged on top.
+MCP integration: **implemented** in `eka-mcp` (stdio JSON-RPC 2.0, protocol `2024-11-05`) — tools `context`, `get`, `domain`, `status`, `validate`, `new`, `publish`, `transition`, `note`, `draft_read` (+ deprecated alias `view`), `draft_list`, `integrity_check`, `discard`; resources `eka://status`, `eka://skills/*`, `eka://templates/*`. Human projections (`eka view`/`eka watch`) remain CLI-only. This document is the agreed boundary so that the contracts (Runtime API, Authoring API, Context Object, CKO JSON schemas) remain the interface — and the Skill Pack sits unchanged on top.
