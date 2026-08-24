@@ -114,6 +114,52 @@ func TestManifestIncludesCommands(t *testing.T) {
 	}
 }
 
+// TestMcpHelpDisclosureManifest (bug:mcp-help-subcommands-hidden) pins
+// the disclosure surface: the manifest must list every actual
+// cmd/eka-mcp subcommand (manifest, install, configure, serve) so
+// `eka mcp -h` can disclose them. The mcp proxy remains the first entry.
+func TestMcpHelpDisclosureManifest(t *testing.T) {
+	m, err := BuildManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"manifest", "install", "configure", "serve"} {
+		found := false
+		for _, c := range m.Commands {
+			if c.Name == want {
+				found = true
+				if c.Description == "" {
+					t.Errorf("disclosure command %q must have description", want)
+				}
+				break
+			}
+		}
+		if !found {
+			t.Errorf("manifest disclosure must include %q, got %v", want, m.Commands)
+		}
+	}
+	for _, want := range []string{"manifest", "install", "configure", "serve"} {
+		found := false
+		for _, c := range PluginCommands {
+			if c.Name == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("PluginCommands must include disclosure %q, got %v", want, PluginCommands)
+		}
+	}
+	// Ensure the 4 disclosure commands match the actual binary subcommands.
+	// The binary's run() handles manifest/install/configure/serve (plus --stdio alias for serve).
+	wantSet := map[string]bool{"manifest": true, "install": true, "configure": true, "serve": true, "mcp": true}
+	for _, c := range m.Commands {
+		if !wantSet[c.Name] {
+			t.Errorf("unexpected command %q in disclosure manifest, want only %v", c.Name, wantSet)
+		}
+	}
+}
+
 // TestInstallCommandsPreservesContent: the installed command file
 // byte-matches the embedded file.
 func TestInstallCommandsPreservesContent(t *testing.T) {
