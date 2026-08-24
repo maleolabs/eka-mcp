@@ -73,7 +73,12 @@ and commands are accessible via MCP resources `eka://skills/*` and
 `--with-commands`, or `--with-all` (`--with-all` = both). `--dry-run` prints the
 plan without writing (and reflects only the opted-in installs). Unsupported
 `--target` fails deterministically listing the supported targets. The write merges
-without overwriting other servers' entries and is idempotent. Default `--target` is
+without overwriting other servers' entries and is idempotent. Config-file writes are
+hardened: the merged config is staged in a temporary file and renamed into place
+(atomic replace — the final path component is never written through), a symlinked
+config destination refuses with the link left intact, and an existing config that is
+not valid JSON refuses with a clear error instead of being silently reset (the file
+stays byte-untouched in both refusal cases). Default `--target` is
 `opencode`; `--dir` defaults to the current working directory (workspace root).
 
 Opted-in installs land in the target's conventional directories under an anchor
