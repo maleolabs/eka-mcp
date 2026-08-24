@@ -93,6 +93,15 @@ type Capability interface {
 	// `eka sync push` (deterministic snapshot, same digest, same refusals);
 	// a failed push writes nothing partially.
 	SyncPush(repoPath string, adopt, override bool) ([]byte, error)
+	// Assign sets the assigned-to edge of a work item (schema eka-assignment-v1).
+	// Same semantics, validation and refusal classes as `eka assign`.
+	Assign(req AssignmentRequest) ([]byte, error)
+	// Reassign moves the assigned-to edge in one operation (schema eka-assignment-v1).
+	// Same semantics as `eka reassign`.
+	Reassign(req AssignmentRequest) ([]byte, error)
+	// Unassign removes the assigned-to edge (schema eka-assignment-v1).
+	// Same semantics as `eka unassign`.
+	Unassign(req UnassignRequest) ([]byte, error)
 }
 
 // AuthorIdentity is the change-log authority of a write tool: the kind
@@ -150,6 +159,21 @@ type NoteRequest struct {
 	Domain   string
 	By       AuthorIdentity
 	Content  map[string]any
+}
+
+// AssignmentRequest describes one assign/reassign operation.
+type AssignmentRequest struct {
+	RepoPath string
+	Target   string
+	To       string
+	By       AuthorIdentity
+}
+
+// UnassignRequest describes one unassign operation.
+type UnassignRequest struct {
+	RepoPath string
+	Target   string
+	By       AuthorIdentity
 }
 
 // Server is the MCP server: it dispatches JSON-RPC 2.0 requests to the
@@ -689,6 +713,92 @@ func (s *Server) handleToolsList(req request) []byte {
 				},
 			},
 		},
+		map[string]any{
+			"name": "assign",
+			"description": "Assign a work item to a member (schema eka-assignment-v1): the assigned-to edge (work item -> member) is added — same engine as CLI `eka assign` — same target forms, same validation, same refusal classes including deterministic refusal when already assigned to a different member; idempotent on the same member. Single-assignee, deterministic; a failed assignment writes nothing.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"target": map[string]any{
+						"type":        "string",
+						"description": "The work item line: \"<ns>/<type>:<id>\" or \"<type>:<id>\" (same as CLI `eka assign <item>`).",
+					},
+					"to": map[string]any{
+						"type":        "string",
+						"description": "The member line to assign to: \"<mbr-id>\", \"mbr:<id>\", \"mbr-<id>\", or \"<ns>/mbr:<id>\" (same as CLI --to).",
+					},
+					"repoPath": map[string]any{
+						"type":        "string",
+						"description": "Optional repository path (default: the server cwd).",
+					},
+					"by": map[string]any{
+						"type":        "string",
+						"description": "Optional change-log authority name (defaults to the agent identity).",
+					},
+					"byKind": map[string]any{
+						"type":        "string",
+						"description": "Optional authority kind: user | agent | worker (default agent).",
+					},
+				},
+				"required": []string{"target", "to"},
+			},
+		},
+		map[string]any{
+			"name": "reassign",
+			"description": "Move a work item's assignment to another member in one operation (schema eka-assignment-v1): same engine as CLI `eka reassign` — same validation and refusal classes; deterministic refusal when not assigned (use assign) and idempotent on the same member; a failed reassign writes nothing.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"target": map[string]any{
+						"type":        "string",
+						"description": "The work item line: \"<ns>/<type>:<id>\" or \"<type>:<id>\" (same as CLI `eka reassign <item>`).",
+					},
+					"to": map[string]any{
+						"type":        "string",
+						"description": "The member line to move to: \"<mbr-id>\", \"mbr:<id>\", \"mbr-<id>\", or \"<ns>/mbr:<id>\" (same as CLI --to).",
+					},
+					"repoPath": map[string]any{
+						"type":        "string",
+						"description": "Optional repository path (default: the server cwd).",
+					},
+					"by": map[string]any{
+						"type":        "string",
+						"description": "Optional change-log authority name (defaults to the agent identity).",
+					},
+					"byKind": map[string]any{
+						"type":        "string",
+						"description": "Optional authority kind: user | agent | worker (default agent).",
+					},
+				},
+				"required": []string{"target", "to"},
+			},
+		},
+		map[string]any{
+			"name": "unassign",
+			"description": "Remove a work item's assigned-to edge (schema eka-assignment-v1): same engine as CLI `eka unassign` — same validation and refusal classes; deterministic no-op when already unassigned; a failed unassign writes nothing.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"target": map[string]any{
+						"type":        "string",
+						"description": "The work item line: \"<ns>/<type>:<id>\" or \"<type>:<id>\" (same as CLI `eka unassign <item>`).",
+					},
+					"repoPath": map[string]any{
+						"type":        "string",
+						"description": "Optional repository path (default: the server cwd).",
+					},
+					"by": map[string]any{
+						"type":        "string",
+						"description": "Optional change-log authority name (defaults to the agent identity).",
+					},
+					"byKind": map[string]any{
+						"type":        "string",
+						"description": "Optional authority kind: user | agent | worker (default agent).",
+					},
+				},
+				"required": []string{"target"},
+			},
+		},
 	}
 	return s.resultResponse(req.ID, map[string]any{"tools": tools})
 }
@@ -1004,6 +1114,79 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			}
 		}
 		data, err := s.cap.SyncPush(p.RepoPath, p.Adopt, p.Override)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "assign":
+		var p struct {
+			Target   string `json:"target"`
+			To       string `json:"to"`
+			RepoPath string `json:"repoPath"`
+			By       string `json:"by"`
+			ByKind   string `json:"byKind"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" || p.To == "" {
+			return "", fmt.Errorf("assign requires {\"target\": string, \"to\": string}")
+		}
+		by, err := resolveAuthor(p.By, p.ByKind)
+		if err != nil {
+			return "", err
+		}
+		data, err := s.cap.Assign(AssignmentRequest{
+			RepoPath: p.RepoPath,
+			Target:   p.Target,
+			To:       p.To,
+			By:       by,
+		})
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "reassign":
+		var p struct {
+			Target   string `json:"target"`
+			To       string `json:"to"`
+			RepoPath string `json:"repoPath"`
+			By       string `json:"by"`
+			ByKind   string `json:"byKind"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" || p.To == "" {
+			return "", fmt.Errorf("reassign requires {\"target\": string, \"to\": string}")
+		}
+		by, err := resolveAuthor(p.By, p.ByKind)
+		if err != nil {
+			return "", err
+		}
+		data, err := s.cap.Reassign(AssignmentRequest{
+			RepoPath: p.RepoPath,
+			Target:   p.Target,
+			To:       p.To,
+			By:       by,
+		})
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "unassign":
+		var p struct {
+			Target   string `json:"target"`
+			RepoPath string `json:"repoPath"`
+			By       string `json:"by"`
+			ByKind   string `json:"byKind"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" {
+			return "", fmt.Errorf("unassign requires {\"target\": string}")
+		}
+		by, err := resolveAuthor(p.By, p.ByKind)
+		if err != nil {
+			return "", err
+		}
+		data, err := s.cap.Unassign(UnassignRequest{
+			RepoPath: p.RepoPath,
+			Target:   p.Target,
+			By:       by,
+		})
 		if err != nil {
 			return "", err
 		}

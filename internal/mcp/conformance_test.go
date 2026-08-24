@@ -129,7 +129,7 @@ func TestConformanceToolsListExact(t *testing.T) {
 	if !ok {
 		t.Fatalf("tools = %v, want an array", res["tools"])
 	}
-	want := []string{"context", "get", "domain", "status", "validate", "new", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard", "sync_push"}
+	want := []string{"context", "get", "domain", "status", "validate", "new", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard", "sync_push", "assign", "reassign", "unassign"}
 	if len(tools) != len(want) {
 		t.Fatalf("tools = %v, want exactly %v", tools, want)
 	}
@@ -543,6 +543,162 @@ func TestConformanceSyncPushTool(t *testing.T) {
 	}
 }
 
+// TestConformanceAssignmentTools (td:mcp-assignment-tools AC #1-3): assign/reassign/unassign
+// expose the same engine as CLI with deterministic refusals and agent identity.
+func TestConformanceAssignmentTools(t *testing.T) {
+	s := conformanceServer()
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	res := mustResult(t, out)
+	tools := res["tools"].([]any)
+	byName := map[string]map[string]any{}
+	for _, tl := range tools {
+		tm := tl.(map[string]any)
+		byName[tm["name"].(string)] = tm
+	}
+	for _, name := range []string{"assign", "reassign", "unassign"} {
+		tm, ok := byName[name]
+		if !ok {
+			t.Fatalf("tools/list is missing %s", name)
+		}
+		schema := tm["inputSchema"].(map[string]any)
+		props := schema["properties"].(map[string]any)
+		if props["target"] == nil {
+			t.Errorf("%s inputSchema must carry target, got %v", name, props)
+		}
+		desc := tm["description"].(string)
+		if !strings.Contains(desc, "eka-assignment-v1") {
+			t.Errorf("%s description = %q, want eka-assignment-v1", name, desc)
+		}
+		if !strings.Contains(strings.ToLower(desc), "eka "+name) && !strings.Contains(desc, "assign") {
+			t.Errorf("%s description = %q, want mention of CLI semantics", name, desc)
+		}
+	}
+	// assign/reassign require to, unassign does not
+	for _, name := range []string{"assign", "reassign"} {
+		tm := byName[name]
+		schema := tm["inputSchema"].(map[string]any)
+		props := schema["properties"].(map[string]any)
+		if props["to"] == nil {
+			t.Errorf("%s inputSchema must carry to, got %v", name, props)
+		}
+		req, _ := schema["required"].([]any)
+		hasTarget, hasTo := false, false
+		for _, r := range req {
+			if r == "target" {
+				hasTarget = true
+			}
+			if r == "to" {
+				hasTo = true
+			}
+		}
+		if !hasTarget || !hasTo {
+			t.Errorf("%s required = %v, want target and to", name, req)
+		}
+	}
+	tm := byName["unassign"]
+	schema := tm["inputSchema"].(map[string]any)
+	req, _ := schema["required"].([]any)
+	hasTarget := false
+	for _, r := range req {
+		if r == "target" {
+			hasTarget = true
+		}
+	}
+	if !hasTarget {
+		t.Errorf("unassign required = %v, want target", req)
+	}
+
+	// tools/call assign succeeds with deterministic byte-identical output and agent identity
+	a := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1","to":"mbr:alice"}}}`)
+	b := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1","to":"mbr:alice"}}}`)
+	aText := mustResult(t, a)["content"].([]any)[0].(map[string]any)["text"].(string)
+	bText := mustResult(t, b)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if aText != bText {
+		t.Errorf("assign must be byte-deterministic for identical state, got %q vs %q", aText, bText)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(aText), &doc); err != nil {
+		t.Fatalf("assign text must be JSON: %v", err)
+	}
+	if doc["schema"] != "eka-assignment-v1" {
+		t.Errorf("assign schema = %v, want eka-assignment-v1", doc["schema"])
+	}
+	if doc["by"] == nil || doc["by"] == "" {
+		t.Errorf("assign result must carry by (agent identity), got %v", doc["by"])
+	}
+	// reassign and unassign also deterministic
+	for _, name := range []string{"reassign", "unassign"} {
+		arg := `{"target":"acme/sto:1","to":"mbr:bob"}`
+		if name == "unassign" {
+			arg = `{"target":"acme/sto:1"}`
+		}
+		aa := mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"`+name+`","arguments":`+arg+`}}`)
+		bb := mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"`+name+`","arguments":`+arg+`}}`)
+		at := mustResult(t, aa)["content"].([]any)[0].(map[string]any)["text"].(string)
+		bt := mustResult(t, bb)["content"].([]any)[0].(map[string]any)["text"].(string)
+		if at != bt {
+			t.Errorf("%s must be byte-deterministic, got %q vs %q", name, at, bt)
+		}
+	}
+
+	// Malformed / missing args refuse deterministically as isError=true (no JSON-RPC error)
+	for _, tc := range []struct {
+		name string
+		msg  string
+	}{
+		{"assign missing to", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1"}}}`},
+		{"assign missing target", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"to":"mbr:alice"}}}`},
+		{"reassign missing to", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"reassign","arguments":{"target":"acme/sto:1"}}}`},
+		{"unassign missing target", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unassign","arguments":{}}}`},
+		{"assign unknown byKind", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1","to":"mbr:alice","by":"x","byKind":"bogus"}}}`},
+	} {
+		out := mustHandle(t, s, tc.msg)
+		res := mustResult(t, out)
+		if res["isError"] != true {
+			t.Errorf("%s must be isError=true, got %v", tc.name, res)
+		}
+	}
+
+	// Capability-level refusal (member does not resolve, non-work-item) surfaces as isError with sanitized text
+	cap := &failingAssignmentCapability{err: errors.New("assign refused: member acme/mbr:alice does not resolve; available members of the repository: ")}
+	s2 := NewServer(cap)
+	out = mustHandle(t, s2, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1","to":"mbr:alice"}}}`)
+	res2 := mustResult(t, out)
+	if res2["isError"] != true {
+		t.Errorf("assign capability refusal must be isError=true, got %v", res2)
+	}
+	text := res2["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "does not resolve") {
+		t.Errorf("assign refusal text = %q, want deterministic refusal", text)
+	}
+}
+
+// failingAssignmentCapability is a tiny fake that only fails assignment, for refusal tests.
+type failingAssignmentCapability struct {
+	err error
+}
+
+func (f *failingAssignmentCapability) Get(form string) ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) Domain(p, d string) ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) Status() ([]byte, error) { return []byte(`{}`), nil }
+func (f *failingAssignmentCapability) Context(s, p, d string) ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) Validate(root string) ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) NewDraft(req NewDraftRequest) ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) Publish(req PublishRequest) ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) Transition(req TransitionRequest) ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) Note(req NoteRequest) ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) DraftRead(t, p string) ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) View(t, p string) ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) DraftList(p string) ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) IntegrityCheck() ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) Discard(t, p string) ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) SyncPush(repoPath string, adopt, override bool) ([]byte, error) {
+	return nil, nil
+}
+func (f *failingAssignmentCapability) Assign(req AssignmentRequest) ([]byte, error) { return nil, f.err }
+func (f *failingAssignmentCapability) Reassign(req AssignmentRequest) ([]byte, error) { return nil, f.err }
+func (f *failingAssignmentCapability) Unassign(req UnassignRequest) ([]byte, error) { return nil, f.err }
+
 // failingSyncPushCapability is a tiny fake that only fails sync_push, for the path-leak test.
 type failingSyncPushCapability struct {
 	err error
@@ -565,3 +721,6 @@ func (f *failingSyncPushCapability) Discard(t, p string) ([]byte, error) { retur
 func (f *failingSyncPushCapability) SyncPush(repoPath string, adopt, override bool) ([]byte, error) {
 	return nil, f.err
 }
+func (f *failingSyncPushCapability) Assign(req AssignmentRequest) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) Reassign(req AssignmentRequest) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) Unassign(req UnassignRequest) ([]byte, error) { return nil, nil }

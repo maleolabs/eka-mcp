@@ -104,7 +104,7 @@ the MCP server over stdio (JSON-RPC 2.0, newline-delimited). It reports MCP
 protocol version `2024-11-05` and advertises the `tools` and `resources`
 capabilities.
 
-The server exposes 15 tools (including one deprecated alias) and three resource families over the EKA capability
+The server exposes 18 tools (including one deprecated alias) and three resource families over the EKA capability
 layer:
 
 | Tool / resource | Description |
@@ -124,6 +124,9 @@ layer:
 | `integrity_check` | Verify the canonical store. |
 | `discard` | Delete one draft without publishing. |
 | `sync_push` | Push the repository snapshot from the workspace store (schema `eka-sync-push-result-v1`). Same engine as CLI `eka sync push` — deterministic snapshot & digest, same refusal classes; crash-safe atomic swap so a failed push writes nothing partially. Pull / --from-docs is not exposed (silent regression hazard; use CLI `eka sync pull`). |
+| `assign` | Assign a work item to a member (schema `eka-assignment-v1`). Same engine as CLI `eka assign` — same target forms, same validation, same refusal classes (already assigned to different member → deterministic refusal; idempotent on same member). |
+| `reassign` | Move a work item's assignment in one operation (schema `eka-assignment-v1`). Same engine as CLI `eka reassign` — same validation and refusal classes; refusal when not assigned, idempotent on same member. |
+| `unassign` | Remove a work item's assigned-to edge (schema `eka-assignment-v1`). Same engine as CLI `eka unassign` — same validation; no-op when already unassigned. |
 | `eka://status` (resource) | The same workspace status, as a readable resource (`application/json`). |
 | `eka://skills/<name>` (resource) | The `SKILL.md` of one embedded skill (read-only). |
 | `eka://templates/<type>` (resource) | The v2.0 JSON draft template of one type (read-only). |
