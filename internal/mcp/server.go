@@ -772,7 +772,7 @@ func (s *Server) handleToolsList(req request) []byte {
 			},
 		},
 		map[string]any{
-			"name": "assign",
+			"name":        "assign",
 			"description": "Assign a work item to a member (schema eka-assignment-v1): the assigned-to edge (work item -> member) is added — same engine as CLI `eka assign` — same target forms, same validation, same refusal classes including deterministic refusal when already assigned to a different member; idempotent on the same member. Single-assignee, deterministic; a failed assignment writes nothing.",
 			"inputSchema": map[string]any{
 				"type": "object",
@@ -802,7 +802,7 @@ func (s *Server) handleToolsList(req request) []byte {
 			},
 		},
 		map[string]any{
-			"name": "reassign",
+			"name":        "reassign",
 			"description": "Move a work item's assignment to another member in one operation (schema eka-assignment-v1): same engine as CLI `eka reassign` — same validation and refusal classes; deterministic refusal when not assigned (use assign) and idempotent on the same member; a failed reassign writes nothing.",
 			"inputSchema": map[string]any{
 				"type": "object",
@@ -832,7 +832,7 @@ func (s *Server) handleToolsList(req request) []byte {
 			},
 		},
 		map[string]any{
-			"name": "unassign",
+			"name":        "unassign",
 			"description": "Remove a work item's assigned-to edge (schema eka-assignment-v1): same engine as CLI `eka unassign` — same validation and refusal classes; deterministic no-op when already unassigned; a failed unassign writes nothing.",
 			"inputSchema": map[string]any{
 				"type": "object",
@@ -858,7 +858,7 @@ func (s *Server) handleToolsList(req request) []byte {
 			},
 		},
 		map[string]any{
-			"name": "feedback_new",
+			"name":        "feedback_new",
 			"description": "Create a feedback draft under EKA_HOME/feedback (YAML frontmatter + markdown body) — schema eka-feedback-new-v1. Same engine as CLI `eka feedback new`: same validation, same per-type scaffold, same id generation (fbk-YYYYMMDD-slug), same 0600/0700 permissions. Feedback is meta-information about the tool (ADR-026) — it NEVER enters the canonical store and never becomes a CKO.",
 			"inputSchema": map[string]any{
 				"type": "object",
@@ -892,7 +892,7 @@ func (s *Server) handleToolsList(req request) []byte {
 			},
 		},
 		map[string]any{
-			"name": "feedback_list",
+			"name":        "feedback_list",
 			"description": "List all local feedback under EKA_HOME/feedback (schema eka-feedback-list-v1) — drafts and published, id descending (newest first, mirrors `eka feedback list`). Deterministic; the first malformed file fails the whole list naming the file. Feedback is meta-information outside the knowledge model — never a CKO, never part of the canonical store.",
 			"inputSchema": map[string]any{
 				"type":       "object",
@@ -900,7 +900,7 @@ func (s *Server) handleToolsList(req request) []byte {
 			},
 		},
 		map[string]any{
-			"name": "feedback_publish",
+			"name":        "feedback_publish",
 			"description": "Publish a feedback draft as a GitHub issue on the fixed target repository (schema eka-feedback-publish-v1) — same engine as CLI `eka feedback publish`. Inherited constraints: release-binary token gate (refuses with \"issue token not bundled — use a release binary\" when not a release), missing/invalid token refuses deterministically naming remediation (never raw HTTP error), token never appears in outputs/errors/logs, already-published refuses idempotently, unknown id refuses deterministically. Feedback never enters the canonical store.",
 			"inputSchema": map[string]any{
 				"type": "object",
