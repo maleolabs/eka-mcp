@@ -461,6 +461,57 @@ func (t *MappingTable) RenderText() (string, error) {
 	return b.String(), nil
 }
 
+// PackInfo describes the embedded skill pack manifest (skills/manifest.yaml)
+// — the pack distribution identity. The pack name/version/status are the
+// distribution coordinates; they are read from the embedded filesystem so the
+// banner and the manifest stay deterministic and never drift.
+type PackInfo struct {
+	Name    string
+	Version string
+	Status  string
+}
+
+// ReadPackInfo returns the embedded skill pack identity from
+// skills/manifest.yaml. It parses the minimal pack header without a YAML
+// dependency (the file is small and line-oriented), so the banner has no
+// extra import.
+func ReadPackInfo() (PackInfo, error) {
+	data, err := fs.ReadFile(packFS, "manifest.yaml")
+	if err != nil {
+		return PackInfo{}, fmt.Errorf("pack: cannot read pack manifest: %w", err)
+	}
+	var info PackInfo
+	lines := strings.Split(string(data), "\n")
+	inPack := false
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "pack:" {
+			inPack = true
+			continue
+		}
+		if inPack {
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			// pack block ends when indentation returns to 0 (no leading spaces in trimmed? but we use raw)
+			if len(raw) > 0 && raw[0] != ' ' && raw[0] != '\t' {
+				break
+			}
+			if v, ok := strings.CutPrefix(line, "name:"); ok {
+				info.Name = strings.TrimSpace(v)
+			} else if v, ok := strings.CutPrefix(line, "version:"); ok {
+				info.Version = strings.TrimSpace(v)
+			} else if v, ok := strings.CutPrefix(line, "status:"); ok {
+				info.Status = strings.TrimSpace(v)
+			}
+		}
+	}
+	if info.Name == "" || info.Version == "" || info.Status == "" {
+		return PackInfo{}, fmt.Errorf("pack: manifest missing pack name/version/status")
+	}
+	return info, nil
+}
+
 // contains reports whether v is in the list.
 func contains(list []string, v string) bool {
 	for _, x := range list {
