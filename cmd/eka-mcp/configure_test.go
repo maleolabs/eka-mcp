@@ -563,3 +563,161 @@ func TestConfigureJSONStability(t *testing.T) {
 		t.Errorf("skills not sorted/complete")
 	}
 }
+
+// TestConfigureWriteHardening (td:configure-write-hardening): table-driven
+// coverage of the hardened config-file writer — fresh write, overwrite of a
+// tool-owned file, symlink refusal (link + target intact), and invalid-JSON
+// refusal (file byte-untouched). Refusals must be deterministic errors (the
+// CLI exits non-zero on them) and every case must leave no staging temp
+// files behind.
+func TestConfigureWriteHardening(t *testing.T) {
+	hasEkaEntry := func(t *testing.T, file string) {
+		t.Helper()
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("config file not written: %v", err)
+		}
+		var cfg map[string]any
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			t.Fatalf("config file must be valid JSON: %v\n%s", err, data)
+		}
+		mcp, ok := cfg["mcp"].(map[string]any)
+		if !ok {
+			t.Fatalf("mcp section missing: %v", cfg)
+		}
+		if _, ok := mcp["eka"]; !ok {
+			t.Errorf("eka entry missing from mcp: %v", mcp)
+		}
+	}
+	isRegular0644 := func(t *testing.T, file string) {
+		t.Helper()
+		info, err := os.Stat(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.Mode().IsRegular() {
+			t.Errorf("written file must be regular, got mode %v", info.Mode())
+		}
+		if info.Mode().Perm() != 0o644 {
+			t.Errorf("written file perm = %v, want 0644", info.Mode().Perm())
+		}
+	}
+	noTempLeftovers := func(t *testing.T, dir string) {
+		t.Helper()
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read dir: %v", err)
+		}
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".ekacfg-") {
+				t.Errorf("staging temp file left behind: %s", e.Name())
+			}
+		}
+	}
+
+	tests := []struct {
+		name    string
+		seed    func(t *testing.T, dir, file string)
+		wantErr []string // required refusal substrings; empty = run must succeed
+		verify  func(t *testing.T, dir, file string)
+	}{
+		{
+			name: "fresh-write",
+			verify: func(t *testing.T, dir, file string) {
+				hasEkaEntry(t, file)
+				isRegular0644(t, file)
+			},
+		},
+		{
+			name: "overwrite-pack-owned",
+			seed: func(t *testing.T, dir, file string) {
+				// First configure run makes the file tool-owned.
+				var out bytes.Buffer
+				if err := run([]string{"configure", "--target", "opencode", "--dir", dir, "--json"}, &out); err != nil {
+					t.Fatalf("seeding configure run failed: %v", err)
+				}
+			},
+			verify: func(t *testing.T, dir, file string) {
+				hasEkaEntry(t, file)
+				isRegular0644(t, file)
+			},
+		},
+		{
+			name: "symlink-refusal",
+			seed: func(t *testing.T, dir, file string) {
+				real := filepath.Join(dir, "real-config.json")
+				if err := os.WriteFile(real, []byte(`{"keep":true}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(real, file); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr: []string{"refusing", "symlink", "nothing was modified"},
+			verify: func(t *testing.T, dir, file string) {
+				info, err := os.Lstat(file)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if info.Mode()&os.ModeSymlink == 0 {
+					t.Fatalf("destination must remain a symlink, got mode %v", info.Mode())
+				}
+				got, err := os.ReadFile(file) // read through the link
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(got) != `{"keep":true}` {
+					t.Errorf("symlink target must stay byte-untouched, got %q", got)
+				}
+			},
+		},
+		{
+			name: "invalid-json-refusal",
+			seed: func(t *testing.T, dir, file string) {
+				if err := os.WriteFile(file, []byte("{ not valid json"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr: []string{"refusing", "not valid JSON", "left untouched"},
+			verify: func(t *testing.T, dir, file string) {
+				got, err := os.ReadFile(file)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(got) != "{ not valid json" {
+					t.Errorf("invalid-JSON file must stay byte-untouched, got %q", got)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			file := filepath.Join(dir, "opencode.json")
+			if tt.seed != nil {
+				tt.seed(t, dir, file)
+			}
+			var out bytes.Buffer
+			err := run([]string{"configure", "--target", "opencode", "--dir", dir, "--json"}, &out)
+			if len(tt.wantErr) == 0 {
+				if err != nil {
+					t.Fatalf("configure must succeed: %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatal("configure must refuse deterministically")
+				}
+				for _, want := range tt.wantErr {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("refusal must mention %q, got: %v", want, err)
+					}
+				}
+			}
+			if tt.verify != nil {
+				tt.verify(t, dir, file)
+			}
+			noTempLeftovers(t, dir)
+		})
+	}
+}

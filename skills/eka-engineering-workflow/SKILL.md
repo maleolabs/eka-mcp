@@ -1,6 +1,6 @@
 ---
 name: eka-engineering-workflow
-description: Use when a task is software-engineering work inside an EKA-enabled project — implementation planning, ticket execution, architecture changes, reviews, operations. Teaches how EKA relates to software development, how Engineering Knowledge evolves through the canonical domains, methodology independence (no Scrum/PRD/ADR assumptions), and the full Understand → Context → Reason → Change → Validate → Publish loop.
+description: Use when a task is software-engineering work inside an EKA-enabled project — implementation planning, ticket execution, architecture changes, reviews, operations. Teaches how EKA relates to software development, how Engineering Knowledge evolves through the canonical domains, methodology independence (no Scrum/PRD/ADR assumptions), the full Understand → Context → Reason → Change → Validate → Publish loop, and work-item assignment (claim/reassign/unassign).
 ---
 
 # Engineering Workflow
@@ -70,8 +70,27 @@ Do not modify based solely on source code; do not modify knowledge based solely 
 
 - **New knowledge** → [eka-knowledge-authoring](../eka-knowledge-authoring/SKILL.md): draft → validate → publish.
 - **State changes** → [eka-knowledge-modification](../eka-knowledge-modification/SKILL.md): `eka transition` (gates apply), never direct mutation. Before ANY transition: `eka get <line>` — read the line's actual current state, compare it with the state the work stage requires, and transition only the mismatch (Status Context Protocol: get → compare → align). Forward-only while an execution is active; pull-back is a deliberate, documented correction, never an automatic step. After the transition: `eka sync push` (never a full `eka sync` mid-execution — the pull side can re-point references to older instances and silently regress states), then verify with `eka get`.
+- **Assignment (who owns the item)** → the explicit assignment commands — `eka assign` / `eka reassign` / `eka unassign` (see *Assignment* below); the authoring commands never assign as a side effect.
 - **Revisions/corrections** → new instance version, same line, same stratum (R12).
 - **Source code** → ordinary development; knowledge and code stay consistent — a code change that contradicts Architecture in force is a knowledge conflict to resolve (downward), not a silent code-only change.
+
+### Assignment — claiming work at item intake
+
+Work items carry at most one **assigned-to** edge (single-assignee, ADR-029). Assignment is relationship-only: it records who owns the item and nothing else — it **never creates container membership** (tickets are the sole membership contract; see "Execution membership" in [eka-knowledge-authoring](../eka-knowledge-authoring/SKILL.md)). At item intake, read the edge (`eka get <work-item>`) and align it before starting:
+
+```sh
+eka assign <item> --to <member>      # set the first assignee — idempotent on the SAME member,
+                                     # refused when a DIFFERENT member holds it (use reassign)
+eka reassign <item> --to <member>    # move the assignment in ONE operation — refused when
+                                     # nobody holds it yet (use assign)
+eka unassign <item>                  # remove the edge — back to the 'No assignee' pool
+                                     # (no-op, exit 0, when nobody holds it)
+```
+
+- **Valid targets** — work items only (`sto-`/`ts-`/`bug-`/`td-`/`ch-`/`spk-`), in any execution state, published or pending-draft alike: the edge is written with the SAME instance version (no instance churn). `<member>` resolves like an assign target — `<mbr-id>`, `mbr:<id>`, `mbr-<id>`, or `<ns>/mbr:<id>` — and must be a resolvable `mbr-` line of the SAME repository (cross-repository is refused).
+- **Deterministic refusals (exit 1)** — assign onto an item held by a different member; reassign with no assignee; unresolvable member (the known member lines are listed); non-work-item target; cross-namespace item; validation findings. Exit `0` = the edge is in the requested state (including idempotent no-ops); exit `2` = usage or internal error.
+- **Axis discipline** — assignment is the member axis ('No assignee'); membership is the container axis ('unassigned', ticket-derived). Assigning never makes an item a container member, and ticketing never assigns a member.
+- **Transports** — CLI today (`--json` emits schema `eka-assignment-v1`; authority via `--by`/`--by-kind`). The eka-mcp server exposes no assignment tools yet (approved, not shipped) — re-verify against the server's tool list before assuming MCP transport; until then the CLI is the only assignment surface.
 
 ### Validate
 
@@ -104,7 +123,7 @@ Full guidance — quality bar, refusals, when not to report: [eka-feedback](../e
 | Task | Flow |
 |---|---|
 | **Implementation planning** | Context: `eka context <plan|scope>` + `eka get planning` → Reason: what execution work does the plan imply → Change: new work item drafts → Validate → Publish |
-| **Ticket execution** | Context: `eka context <work-item>` (constraints, dependencies) → verify the actual state: `eka get <work-item>` (never assume from a board or memory) → Change: `eka transition <work-item> in-progress` **before coding** (`in-progress` marks active work, never a post-completion blip) — transition only when the current state differs from the required stage; forward-only during execution → code → evidence via `eka note --role implementation` → `in-review` (gated on resolved implementation note) → `done` (gated on all notes resolved) → after each transition `eka sync push`; never a full `eka sync` mid-execution (the pull side can re-point references to older instances and silently regress states) |
+| **Ticket execution** | Context: `eka context <work-item>` (constraints, dependencies) → verify the actual state: `eka get <work-item>` (never assume from a board or memory) → intake: align the assignee on that same read — claim with `eka assign` when unassigned, `eka reassign` only as an explicit handoff (assignment never creates container membership) → Change: `eka transition <work-item> in-progress` **before coding** (`in-progress` marks active work, never a post-completion blip) — transition only when the current state differs from the required stage; forward-only during execution → code → evidence via `eka note --role implementation` → `in-review` (gated on resolved implementation note) → `done` (gated on all notes resolved) → after each transition `eka sync push`; never a full `eka sync` mid-execution (the pull side can re-point references to older instances and silently regress states) |
 | **Architecture change** | Context: `eka context <adr|arc>` `--depth engineering` (what binds the change) → Change: new `adr-`/`dec-` draft (or revision) deriving from the higher stratum → Validate → Publish |
 | **Knowledge review** | [eka-knowledge-review](../eka-knowledge-review/SKILL.md): validate → context → integrity → record the verdict as a note/review |
 | **Operations work** | Context: `eka get operations` + the runbooks (`run-`) → execute → record (`rel-`, `run-` updates as revisions) |
@@ -113,6 +132,7 @@ Full guidance — quality bar, refusals, when not to report: [eka-feedback](../e
 
 - Starting a change without context ("the code says so" is not the authority chain).
 - Treating tickets as state owners (tickets are projections — the work item owns the state, P6).
+- Treating assignment as container membership — assigning a member never puts an item in a container (tickets are the sole membership contract), and ticketing never assigns a member.
 - Skipping gates: a work item cannot be `in-review` without a resolved implementation note, cannot be `done` with unresolved notes (R13).
 - Advancing `in-progress` only after the work is done — `in-progress` means work has **started**, so the transition must land before coding, not as a visible skip on the board right before `in-review`.
 - Transitioning without reading the current state (`eka get` first) — double-transitions and unintended pull-backs come from stale assumptions; compare the observed state with the required stage and align only the mismatch.
