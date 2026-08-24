@@ -2,10 +2,13 @@ package eka
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/metadata"
 	"github.com/maleolabs/eka-core/runtime"
 	"github.com/maleolabs/eka-core/store"
 	"github.com/maleolabs/eka-core/workspace"
@@ -309,5 +312,174 @@ func TestOpenAndCloseIdempotent(t *testing.T) {
 	}
 	if err := cap.Close(); err != nil {
 		t.Errorf("Close failed: %v", err)
+	}
+}
+
+// TestSyncPushNoop: a repository with no stored units is a no-op push
+// — no snapshot written, deterministic empty result (AC #2 no partial
+// writes, AC #1 byte-deterministic).
+func TestSyncPushNoop(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("EKA_HOME", home)
+	if _, err := workspace.Ensure(); err != nil {
+		t.Fatalf("workspace.Ensure: %v", err)
+	}
+	base := t.TempDir()
+	repo := filepath.Join(base, "myrepo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := metadata.Metadata{Version: metadata.SchemaVersion, Project: "feather", Name: "myrepo", Namespace: "feather"}
+	if err := os.WriteFile(filepath.Join(repo, "eka.yaml"), m.Marshal(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cap, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cap.Close()
+
+	data, err := cap.SyncPush(repo, false, false)
+	if err != nil {
+		t.Fatalf("SyncPush noop failed: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("SyncPush must be JSON: %v\n%s", err, data)
+	}
+	if doc["schema"] != "eka-sync-push-result-v1" {
+		t.Errorf("schema = %v, want eka-sync-push-result-v1", doc["schema"])
+	}
+	if doc["project"] != "feather" || doc["repo"] != "myrepo" {
+		t.Errorf("project/repo = %v/%v, want feather/myrepo", doc["project"], doc["repo"])
+	}
+	if doc["pushedUnits"] != float64(0) {
+		t.Errorf("pushedUnits = %v, want 0 (no stored objects)", doc["pushedUnits"])
+	}
+	// Byte-deterministic for identical store state: after the first
+	// push registers the repo (newRepo:true), the next two pushes share
+	// the identical state (newRepo:false, no snapshot).
+	data2, err := cap.SyncPush(repo, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data3, err := cap.SyncPush(repo, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data2) != string(data3) {
+		t.Errorf("SyncPush must be byte-deterministic for identical store state, got %q vs %q", data2, data3)
+	}
+	// No snapshot directory created for no-op.
+	if _, err := os.Stat(filepath.Join(repo, "exchange", "snapshots")); !os.IsNotExist(err) {
+		t.Errorf("no-op push must not create snapshots dir, stat err = %v", err)
+	}
+}
+
+// TestSyncPushWithUnits: seeding one unit then pushing must emit a
+// deterministic snapshot (header.json + units/) with the digest in the
+// result; a failed push (non-repo path) writes nothing partially and
+// sanitizes the path in the error (AC #2, #4).
+func TestSyncPushWithUnits(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("EKA_HOME", home)
+	ws, err := workspace.Ensure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	base := t.TempDir()
+	repo := filepath.Join(base, "rpush")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := metadata.Metadata{Version: metadata.SchemaVersion, Project: "beather", Name: "rpush", Namespace: "beather"}
+	if err := os.WriteFile(filepath.Join(repo, "eka.yaml"), m.Marshal(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Seed one canonical unit attributed to this repo (the path a pull
+	// would have seeded).
+	u := &exchange.Unit{
+		Identity: exchange.Identity{Namespace: "beather", Type: "adr", ID: "001-x", InstanceVersion: 1},
+		CanonicalIdentityForm: "beather/adr:001-x:1",
+		Revision:              1,
+		Classification:        exchange.Classification{Dimension: "decisions", Domain: "Architecture"},
+		Content:               exchange.ContentRef{Representation: exchange.ContentRepresentation},
+		ContentPayload:        []byte("# ADR 001\n\nbody\n"),
+	}
+	unitJSON, err := exchange.MarshalUnit(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ws.Store().PutUnit(unitJSON, u.ContentPayload, store.Ref{
+		Form: "beather/adr:001-x:1", ProjectID: "beather", SourceRepo: "rpush",
+		Namespace: "beather", Type: "adr", ID: "001-x", InstanceVersion: 1,
+		Revision: 1, Dimension: "decisions", Domain: "Architecture", UpdatedAt: "2026-08-14T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Store().RecordSync(store.SyncEntry{ProjectID: "beather", Repo: "rpush", Direction: "pull", SnapshotDigest: "seed", Units: 1, At: "2026-08-14T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+
+	cap, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cap.Close()
+
+	data, err := cap.SyncPush(repo, false, false)
+	if err != nil {
+		t.Fatalf("SyncPush with units failed: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc["pushedUnits"] != float64(1) {
+		t.Errorf("pushedUnits = %v, want 1", doc["pushedUnits"])
+	}
+	if doc["snapshotDigest"] == "" {
+		t.Error("snapshotDigest must be set after pushing units")
+	}
+	if _, err := os.Stat(filepath.Join(repo, "exchange", "snapshots", "header.json")); err != nil {
+		t.Errorf("snapshot header.json must exist after push: %v", err)
+	}
+	// Determinism: second push of identical state yields same digest bytes.
+	data2, err := cap.SyncPush(repo, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc2 map[string]any
+	if err := json.Unmarshal(data2, &doc2); err != nil {
+		t.Fatal(err)
+	}
+	if doc["snapshotDigest"] != doc2["snapshotDigest"] {
+		t.Errorf("second push digest = %v, want %v (deterministic)", doc2["snapshotDigest"], doc["snapshotDigest"])
+	}
+}
+
+// TestSyncPushRefusalNoEkaYaml: SyncPush on a non-repository path must
+// refuse deterministically and not leak the absolute path (AC #4).
+func TestSyncPushRefusalNoEkaYaml(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("EKA_HOME", home)
+	notRepo := t.TempDir()
+	// Ensure workspace exists so the refusal is the repo gate, not detached.
+	if _, err := workspace.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	cap, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cap.Close()
+
+	_, err = cap.SyncPush(notRepo, false, false)
+	if err == nil {
+		t.Fatal("SyncPush on a non-repo must error")
+	}
+	if !strings.Contains(err.Error(), "is not an EKA repository") {
+		t.Errorf("refusal must name repository gate, got %v", err)
 	}
 }

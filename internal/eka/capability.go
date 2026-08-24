@@ -375,6 +375,55 @@ func (c *Capability) IntegrityCheck() ([]byte, error) {
 	})
 }
 
+// SyncPush refreshes the repository snapshot from the workspace store
+// (the push side of sync) — the same engine `eka sync push` uses
+// (Authoring.Sync Pull:false, Push:true). The snapshot is the SOURCE
+// transport (exchange.EmitSource) verified on every pull and emitted
+// deterministically; the digest is the source fingerprint. Emission is
+// crash-safe (staged in .snapshots-tmp, swapped atomically) so a
+// failed push writes nothing partially (AC #2). Pull / --from-docs
+// re-seed is deliberately NOT exposed — it re-points line references to
+// older instances (silent regression hazard) and stays an
+// operator-supervised CLI operation (`eka sync pull`).
+//
+// repoPath defaults to "." (the server cwd, same as the CLI). adopt
+// corresponds to `eka sync push --adopt` (ADR-032 Option C2): workspace-
+// native units (source_repo = "runtime") are re-attributed before the
+// push, so a clone receives them. override is the machine override of
+// the content-namespace reconciliation (ADR-020 Decision 3). Errors keep
+// their refusal classes and are sanitized at the MCP boundary.
+func (c *Capability) SyncPush(repoPath string, adopt, override bool) ([]byte, error) {
+	if repoPath == "" {
+		repoPath = "."
+	}
+	report, err := runtime.Authoring.Sync(c.rt, repoPath, runtime.SyncOptions{
+		Pull:            false,
+		Push:            true,
+		AdoptBeforePush: adopt,
+		Override:        override,
+	})
+	if err != nil {
+		return nil, err
+	}
+	warnings := report.Warnings
+	if warnings == nil {
+		warnings = []string{}
+	}
+	return json.Marshal(syncPushResult{
+		Schema:            "eka-sync-push-result-v1",
+		Workspace:         report.Workspace,
+		Project:           report.Project,
+		Repo:              report.Repo,
+		PushedUnits:       report.PushedUnits,
+		PushedAttachments: report.PushedAttachments,
+		SnapshotLabel:     report.SnapshotLabel,
+		SnapshotDigest:    report.SnapshotDigest,
+		Changed:           report.PushChanged,
+		NewRepo:           report.NewRepo,
+		Warnings:          warnings,
+	})
+}
+
 // Discard deletes one draft file without publishing (schema
 // eka-discard-result-v1). The deletion is eka-core's
 // (Authoring.DiscardDraft); the returned note names the project when
@@ -476,6 +525,20 @@ type integrityViolation struct {
 	Kind    string `json:"kind"`
 	Subject string `json:"subject"`
 	Detail  string `json:"detail"`
+}
+
+type syncPushResult struct {
+	Schema            string   `json:"schema"`
+	Workspace         string   `json:"workspace"`
+	Project           string   `json:"project"`
+	Repo              string   `json:"repo"`
+	PushedUnits       int      `json:"pushedUnits"`
+	PushedAttachments int      `json:"pushedAttachments"`
+	SnapshotLabel     string   `json:"snapshotLabel"`
+	SnapshotDigest    string   `json:"snapshotDigest"`
+	Changed           bool     `json:"changed"`
+	NewRepo           bool     `json:"newRepo"`
+	Warnings          []string `json:"warnings"`
 }
 
 // --- Helpers. ---

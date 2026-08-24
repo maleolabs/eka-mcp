@@ -88,6 +88,11 @@ type Capability interface {
 	// Discard deletes one draft without publishing (schema
 	// eka-discard-result-v1).
 	Discard(target, project string) ([]byte, error)
+	// SyncPush refreshes the repository snapshot from the workspace store
+	// (push side of sync, schema eka-sync-push-result-v1). Same engine as
+	// `eka sync push` (deterministic snapshot, same digest, same refusals);
+	// a failed push writes nothing partially.
+	SyncPush(repoPath string, adopt, override bool) ([]byte, error)
 }
 
 // AuthorIdentity is the change-log authority of a write tool: the kind
@@ -660,6 +665,30 @@ func (s *Server) handleToolsList(req request) []byte {
 				"required": []string{"target"},
 			},
 		},
+		map[string]any{
+			"name": "sync_push",
+			"description": "Push the repository snapshot from the workspace store (schema eka-sync-push-result-v1): " +
+				"the push side of `eka sync push` — same snapshot compilation, same digest, same refusal classes; " +
+				"crash-safe (staged in .snapshots-tmp, swapped atomically) so a failed push writes nothing partially. " +
+				"Pull / --from-docs re-seed is not exposed (silent regression hazard); use CLI `eka sync pull`.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"repoPath": map[string]any{
+						"type":        "string",
+						"description": "Optional repository path (default: the server cwd, same as CLI `eka sync push`).",
+					},
+					"adopt": map[string]any{
+						"type":        "boolean",
+						"description": "Adopt workspace-native units (source_repo=runtime, `eka publish` provenance) before pushing (ADR-032; same as `eka sync push --adopt`).",
+					},
+					"override": map[string]any{
+						"type":        "boolean",
+						"description": "Machine override to align the repository identity to the content namespace when they differ (same as `eka sync push --override`).",
+					},
+				},
+			},
+		},
 	}
 	return s.resultResponse(req.ID, map[string]any{"tools": tools})
 }
@@ -938,6 +967,43 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			return "", fmt.Errorf("discard requires {\"target\": string}")
 		}
 		data, err := s.cap.Discard(p.Target, p.Project)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "sync_push":
+		// Deterministic refusal for pull re-seed attempts via MCP (AC #3):
+		// the MCP surface is push-only; `eka sync pull` / --from-docs stays
+		// operator-supervised CLI because it re-points line references to
+		// older instances (silent regression hazard).
+		if len(args) != 0 && string(args) != "null" {
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(args, &raw); err == nil {
+				if _, has := raw["fromDocs"]; has {
+					return "", fmt.Errorf("sync pull is not exposed via MCP (silent regression hazard — it can re-point line references to older instances); use the operator-supervised CLI `eka sync pull`")
+				}
+				if _, has := raw["from_docs"]; has {
+					return "", fmt.Errorf("sync pull is not exposed via MCP (silent regression hazard — it can re-point line references to older instances); use the operator-supervised CLI `eka sync pull`")
+				}
+				if _, has := raw["from-docs"]; has {
+					return "", fmt.Errorf("sync pull is not exposed via MCP (silent regression hazard — it can re-point line references to older instances); use the operator-supervised CLI `eka sync pull`")
+				}
+				if _, has := raw["pull"]; has {
+					return "", fmt.Errorf("sync pull is not exposed via MCP (silent regression hazard — it can re-point line references to older instances); use the operator-supervised CLI `eka sync pull`")
+				}
+			}
+		}
+		var p struct {
+			RepoPath string `json:"repoPath"`
+			Adopt    bool   `json:"adopt"`
+			Override bool   `json:"override"`
+		}
+		if len(args) != 0 && string(args) != "null" {
+			if err := json.Unmarshal(args, &p); err != nil {
+				return "", fmt.Errorf("sync_push requires {\"repoPath\": string, \"adopt\": boolean, \"override\": boolean} (all optional)")
+			}
+		}
+		data, err := s.cap.SyncPush(p.RepoPath, p.Adopt, p.Override)
 		if err != nil {
 			return "", err
 		}
