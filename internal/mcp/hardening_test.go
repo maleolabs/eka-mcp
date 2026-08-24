@@ -263,6 +263,18 @@ func (f *failingStatusCapability) Unassign(req UnassignRequest) ([]byte, error) 
 	return nil, errors.New("unreachable")
 }
 
+func (f *failingStatusCapability) FeedbackNew(req FeedbackNewRequest) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (f *failingStatusCapability) FeedbackList() ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (f *failingStatusCapability) FeedbackPublish(req FeedbackPublishRequest) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
 // TestServeLineTooLong: a line exceeding the 64 MiB cap is refused
 // deterministically and the session continues at the next line.
 func TestServeLineTooLong(t *testing.T) {

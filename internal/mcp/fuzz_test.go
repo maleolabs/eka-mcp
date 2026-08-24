@@ -132,6 +132,9 @@ func generateCorpus(n int) [][]byte {
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get","arguments":{"form":"x/adr:y:1"}}}`,
 		`{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"eka://status"}}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_new","arguments":{"type":"bug","title":"fuzz"}}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_list","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_publish","arguments":{"id":"fbk-20260812-test"}}}`,
 	}
 	fixed := []string{
 		``, `{`, `}`, `[`, `]`, `[[]`, `{}`, `[]`, `null`, `true`, `false`, `0`, `-1`, `1.5`, `"str"`,
