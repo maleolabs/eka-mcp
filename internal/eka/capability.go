@@ -52,6 +52,48 @@ func (c *Capability) Exists() bool {
 	return c.rt.Exists()
 }
 
+// Path returns the absolute workspace root — also on a detached Runtime
+// (Open on a missing workspace), where it is the home directory that would
+// hold the workspace.
+func (c *Capability) Path() string {
+	return c.rt.Path()
+}
+
+// ProjectCount returns the number of registered projects. On a detached
+// runtime (uninitialized workspace) it returns 0 without error — the
+// banner's deterministic "not initialized" state.
+func (c *Capability) ProjectCount() (int, error) {
+	if !c.Exists() {
+		return 0, nil
+	}
+	projects, err := c.rt.Workspace.Projects()
+	if err != nil {
+		return 0, err
+	}
+	return len(projects), nil
+}
+
+// RepoCount returns the total number of registered repositories across
+// all projects. On a detached runtime it returns 0 without error.
+func (c *Capability) RepoCount() (int, error) {
+	if !c.Exists() {
+		return 0, nil
+	}
+	projects, err := c.rt.Workspace.Projects()
+	if err != nil {
+		return 0, err
+	}
+	total := 0
+	for _, p := range projects {
+		repos, err := c.rt.Workspace.Repos(p.ID)
+		if err != nil {
+			return 0, err
+		}
+		total += len(repos)
+	}
+	return total, nil
+}
+
 // Get resolves one identity form to its current Canonical Knowledge
 // Object and returns the machine document (schema eka-cko-v2, compact
 // form). Accepted forms: canonical "<ns>/<type>:<id>:<v>" or the

@@ -30,6 +30,35 @@ import (
 // 2024-11-05 baseline of the MCP spec).
 const ProtocolVersion = "2024-11-05"
 
+// toolNames is the fixed deterministic tool order the server advertises
+// in tools/list and dispatches in tools/call. The order is the contract.
+var toolNames = []string{
+	"context", "get", "domain", "status", "validate", "new", "publish",
+	"transition", "note", "draft_read", "view", "draft_list", "integrity_check",
+	"discard", "sync_push", "assign", "reassign", "unassign",
+	"feedback_new", "feedback_list", "feedback_publish",
+}
+
+// ToolCount returns the number of tools the server exposes (including the
+// deprecated alias — the capability count the banner reports).
+func ToolCount() int { return len(toolNames) }
+
+// ResourceCount returns the total number of resources the server exposes:
+// eka://status (1) plus every embedded skill plus every draft template
+// type. The counts are read from the embedded filesystem so the banner
+// never drifts from the actual capability set. Deterministic.
+func ResourceCount() (int, error) {
+	skills, err := pack.SkillDirs()
+	if err != nil {
+		return 0, err
+	}
+	types, err := pack.TemplateTypes()
+	if err != nil {
+		return 0, err
+	}
+	return 1 + len(skills) + len(types), nil
+}
+
 // JSON-RPC 2.0 error codes (spec §5.1) plus the MCP extensions.
 const (
 	codeParseError       = -32700

@@ -156,31 +156,60 @@ func writeJSON(out io.Writer, v any) error {
 // A startup failure is sanitized before it reaches stderr (which the
 // MCP client captures): the same refusal-class policy as the MCP
 // boundary — no workspace paths, no store details.
+//
+// Interactive notice: the server speaks newline-delimited JSON-RPC over
+// stdio — stdout is the protocol stream and stays silent until a client
+// sends requests. A human running "eka mcp" (or "eka-mcp serve")
+// directly on a terminal would see nothing and reasonably conclude it
+// is stuck, so the unicode banner is printed on STDERR (never stdout:
+// that would corrupt the protocol framing) when stdin is a TTY. Non-TTY
+// runs (a real MCP client, a pipe) print nothing. The banner is
+// state-derived (version, pack manifest, workspace, capabilities) and
+// deterministic — identical state yields identical bytes, no timestamps.
+// Colors are emitted only when stderr is a TTY; otherwise plain bytes.
 func serve() error {
-	// Interactive notice: the server speaks newline-delimited JSON-RPC
-	// over stdio — stdout is the protocol stream and stays silent until
-	// a client sends requests. A human running "eka mcp" (or
-	// "eka-mcp serve") directly on a terminal would see nothing and
-	// reasonably conclude it is stuck, so say what is happening on
-	// STDERR (never stdout: that would corrupt the protocol framing)
-	// and how to actually attach a client. Non-TTY runs (a real MCP
-	// client, a pipe) print nothing.
-	if isatty.IsTerminal(os.Stdin.Fd()) {
-		fmt.Fprintf(os.Stderr, `eka-mcp: stdio MCP server listening (protocol 2024-11-05)
-  stdout speaks JSON-RPC 2.0 — no interactive output; press Ctrl-C to stop.
-
-  Attach an agent client:
-    eka-mcp configure --target opencode --dir . --json   (or claude, codex)
-
-  Or drive it by hand:
-    echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"hand","version":"0"}}}' | eka mcp
-`)
-	}
+	isStdinTTY := isatty.IsTerminal(os.Stdin.Fd())
+	// Open the capability first so the banner can be state-derived. The
+	// banner is best-effort: if the workspace cannot be opened, a
+	// deterministic minimal banner is still shown on TTY before the
+	// sanitized error is returned, and non-TTY stays silent.
 	cap, err := eka.Open()
 	if err != nil {
+		if isStdinTTY {
+			// Minimal banner without store state, still Deterministic,
+			// never leaks paths (path replaced with <path> via sanitizer
+			// if error contains one, but EKA_HOME is user-controlled and
+			// safe to show as fallback? Use sanitized path or unknown.
+			// For startup failure we show a fallback without workspace
+			// counts — the error itself is sanitized.
+			st := bannerState{
+				Version:   pack.Version,
+				Protocol:  mcp.ProtocolVersion,
+				Transport: "stdio · JSON-RPC 2.0 · newline-delimited",
+			}
+			if info, ierr := pack.ReadPackInfo(); ierr == nil {
+				st.PackName = info.Name
+				st.PackVersion = info.Version
+				st.PackStatus = info.Status
+			} else {
+				st.PackName = pack.Name
+				st.PackVersion = pack.Version
+				st.PackStatus = "stable"
+			}
+			st.WorkspacePath = "<unavailable>"
+			st.ToolCount = mcp.ToolCount()
+			if rc, rerr := mcp.ResourceCount(); rerr == nil {
+				st.ResourceCount = rc
+			}
+			bs := &bannerStyle{Color: bannerColorEnabled(os.Stderr), W: os.Stderr}
+			renderBanner(bs, st)
+		}
 		return fmt.Errorf("cannot open the EKA workspace: %s", mcp.SanitizeError(err))
 	}
 	defer cap.Close()
+	if isStdinTTY {
+		writeBannerIfTTY(os.Stderr, true, cap)
+	}
 	server := mcp.NewServer(cap)
 	return server.Serve(os.Stdin, os.Stdout)
 }
