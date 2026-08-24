@@ -251,6 +251,18 @@ func (f *failingStatusCapability) SyncPush(repoPath string, adopt, override bool
 	return nil, errors.New("unreachable")
 }
 
+func (f *failingStatusCapability) Assign(req AssignmentRequest) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (f *failingStatusCapability) Reassign(req AssignmentRequest) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (f *failingStatusCapability) Unassign(req UnassignRequest) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
 // TestServeLineTooLong: a line exceeding the 64 MiB cap is refused
 // deterministically and the session continues at the next line.
 func TestServeLineTooLong(t *testing.T) {
