@@ -102,6 +102,20 @@ type Capability interface {
 	// Unassign removes the assigned-to edge (schema eka-assignment-v1).
 	// Same semantics as `eka unassign`.
 	Unassign(req UnassignRequest) ([]byte, error)
+	// FeedbackNew creates a local feedback draft under EKA_HOME/feedback
+	// (YAML frontmatter + markdown body). It mirrors `eka feedback new`
+	// semantics exactly — same validation, same scaffold, same id generation.
+	// Feedback is meta-information about the tool (ADR-026) and never enters
+	// the canonical store nor becomes a CKO.
+	FeedbackNew(req FeedbackNewRequest) ([]byte, error)
+	// FeedbackList lists all local feedback deterministically (schema
+	// eka-feedback-list-v1), mirroring `eka feedback list`.
+	FeedbackList() ([]byte, error)
+	// FeedbackPublish files a feedback draft as a GitHub issue on the fixed
+	// target repository, mirroring `eka feedback publish`. It inherits every
+	// existing constraint (release-binary token gate, deterministic refusals,
+	// token never appears in outputs).
+	FeedbackPublish(req FeedbackPublishRequest) ([]byte, error)
 }
 
 // AuthorIdentity is the change-log authority of a write tool: the kind
@@ -174,6 +188,21 @@ type UnassignRequest struct {
 	RepoPath string
 	Target   string
 	By       AuthorIdentity
+}
+
+// FeedbackNewRequest describes one feedback draft to create (mirrors `eka feedback new`).
+type FeedbackNewRequest struct {
+	Type     string `json:"type"`
+	Title    string `json:"title"`
+	Severity string `json:"severity"`
+	Source   string `json:"source"`
+	Command  string `json:"command"`
+	Content  string `json:"content"`
+}
+
+// FeedbackPublishRequest describes one feedback publish (mirrors `eka feedback publish`).
+type FeedbackPublishRequest struct {
+	ID string `json:"id"`
 }
 
 // Server is the MCP server: it dispatches JSON-RPC 2.0 requests to the
@@ -799,6 +828,62 @@ func (s *Server) handleToolsList(req request) []byte {
 				"required": []string{"target"},
 			},
 		},
+		map[string]any{
+			"name": "feedback_new",
+			"description": "Create a feedback draft under EKA_HOME/feedback (YAML frontmatter + markdown body) — schema eka-feedback-new-v1. Same engine as CLI `eka feedback new`: same validation, same per-type scaffold, same id generation (fbk-YYYYMMDD-slug), same 0600/0700 permissions. Feedback is meta-information about the tool (ADR-026) — it NEVER enters the canonical store and never becomes a CKO.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"type": map[string]any{
+						"type":        "string",
+						"description": "Feedback type: bug, suggestion, improvement, or question (mirrors --type).",
+					},
+					"title": map[string]any{
+						"type":        "string",
+						"description": "Feedback title (mirrors --title).",
+					},
+					"severity": map[string]any{
+						"type":        "string",
+						"description": "Feedback severity: low, medium, or high (default low, mirrors --severity).",
+					},
+					"source": map[string]any{
+						"type":        "string",
+						"description": "Feedback source: human or agent (default human; agents should pass agent, mirrors --source).",
+					},
+					"command": map[string]any{
+						"type":        "string",
+						"description": "The invoked command recorded in the report (default mcp:feedback_new, mirrors --command).",
+					},
+					"content": map[string]any{
+						"type":        "string",
+						"description": "Markdown feedback body (mirrors --content-file contents inline); when omitted the per-type scaffold is used (bug: Steps/Expected/Actual, others: Description).",
+					},
+				},
+				"required": []string{"type", "title"},
+			},
+		},
+		map[string]any{
+			"name": "feedback_list",
+			"description": "List all local feedback under EKA_HOME/feedback (schema eka-feedback-list-v1) — drafts and published, id descending (newest first, mirrors `eka feedback list`). Deterministic; the first malformed file fails the whole list naming the file. Feedback is meta-information outside the knowledge model — never a CKO, never part of the canonical store.",
+			"inputSchema": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		map[string]any{
+			"name": "feedback_publish",
+			"description": "Publish a feedback draft as a GitHub issue on the fixed target repository (schema eka-feedback-publish-v1) — same engine as CLI `eka feedback publish`. Inherited constraints: release-binary token gate (refuses with \"issue token not bundled — use a release binary\" when not a release), missing/invalid token refuses deterministically naming remediation (never raw HTTP error), token never appears in outputs/errors/logs, already-published refuses idempotently, unknown id refuses deterministically. Feedback never enters the canonical store.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"id": map[string]any{
+						"type":        "string",
+						"description": "Feedback id to publish: fbk-YYYYMMDD-slug (with or without .md suffix, mirrors `eka feedback publish <id>`).",
+					},
+				},
+				"required": []string{"id"},
+			},
+		},
 	}
 	return s.resultResponse(req.ID, map[string]any{"tools": tools})
 }
@@ -1187,6 +1272,57 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			Target:   p.Target,
 			By:       by,
 		})
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "feedback_new":
+		var p struct {
+			Type     string `json:"type"`
+			Title    string `json:"title"`
+			Severity string `json:"severity"`
+			Source   string `json:"source"`
+			Command  string `json:"command"`
+			Content  string `json:"content"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil || strings.TrimSpace(p.Type) == "" || strings.TrimSpace(p.Title) == "" {
+			return "", fmt.Errorf("feedback_new requires {\"type\": string, \"title\": string}")
+		}
+		data, err := s.cap.FeedbackNew(FeedbackNewRequest{
+			Type:     p.Type,
+			Title:    p.Title,
+			Severity: p.Severity,
+			Source:   p.Source,
+			Command:  p.Command,
+			Content:  p.Content,
+		})
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "feedback_list":
+		// No required args — empty object or absent args both list.
+		if len(args) != 0 && string(args) != "null" && strings.TrimSpace(string(args)) != "{}" {
+			// Allow any object but validate it's an object to fuzz deterministically.
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(args, &raw); err != nil {
+				return "", fmt.Errorf("feedback_list requires {}")
+			}
+			// Unknown fields are ignored (deterministic), but non-object already refused.
+		}
+		data, err := s.cap.FeedbackList()
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "feedback_publish":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil || strings.TrimSpace(p.ID) == "" {
+			return "", fmt.Errorf("feedback_publish requires {\"id\": string}")
+		}
+		data, err := s.cap.FeedbackPublish(FeedbackPublishRequest{ID: p.ID})
 		if err != nil {
 			return "", err
 		}

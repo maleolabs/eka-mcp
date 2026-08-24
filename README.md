@@ -104,7 +104,7 @@ the MCP server over stdio (JSON-RPC 2.0, newline-delimited). It reports MCP
 protocol version `2024-11-05` and advertises the `tools` and `resources`
 capabilities.
 
-The server exposes 18 tools (including one deprecated alias) and three resource families over the EKA capability
+The server exposes 21 tools (including one deprecated alias) and three resource families over the EKA capability
 layer:
 
 | Tool / resource | Description |
@@ -127,6 +127,9 @@ layer:
 | `assign` | Assign a work item to a member (schema `eka-assignment-v1`). Same engine as CLI `eka assign` — same target forms, same validation, same refusal classes (already assigned to different member → deterministic refusal; idempotent on same member). |
 | `reassign` | Move a work item's assignment in one operation (schema `eka-assignment-v1`). Same engine as CLI `eka reassign` — same validation and refusal classes; refusal when not assigned, idempotent on same member. |
 | `unassign` | Remove a work item's assigned-to edge (schema `eka-assignment-v1`). Same engine as CLI `eka unassign` — same validation; no-op when already unassigned. |
+| `feedback_new` | Create a feedback draft under `EKA_HOME/feedback` (YAML frontmatter + markdown body, schema `eka-feedback-new-v1`). Same engine as CLI `eka feedback new` — same validation, same per-type scaffold, same `fbk-YYYYMMDD-slug` id, same `0600/0700` permissions. Feedback is meta-information outside the knowledge model (ADR-026) — it never enters the canonical store and never becomes a CKO. |
+| `feedback_list` | List all local feedback under `EKA_HOME/feedback` (schema `eka-feedback-list-v1`) — drafts and published, id descending (newest first, same as CLI `eka feedback list`). Deterministic; first malformed file fails naming the file. |
+| `feedback_publish` | Publish a feedback draft as a GitHub issue on the fixed target repository (schema `eka-feedback-publish-v1`). Same engine as CLI `eka feedback publish` — release-binary token gate, deterministic refusals (missing/invalid token names remediation, never raw HTTP error; token never appears in outputs/errors/logs), idempotent already-published refusal, unknown id refusal. Feedback never enters the canonical store. |
 | `eka://status` (resource) | The same workspace status, as a readable resource (`application/json`). |
 | `eka://skills/<name>` (resource) | The `SKILL.md` of one embedded skill (read-only). |
 | `eka://templates/<type>` (resource) | The v2.0 JSON draft template of one type (read-only). |

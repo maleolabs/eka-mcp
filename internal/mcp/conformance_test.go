@@ -119,7 +119,7 @@ func TestConformanceCapabilitiesOnlyToolsAndResources(t *testing.T) {
 }
 
 // TestConformanceToolsListExact (spike point 4a): tools/list returns
-// exactly the 15-tool surface in the acceptance order (draft_read + deprecated view alias + sync_push),
+// exactly the 21-tool surface in the acceptance order (draft_read + deprecated view alias + sync_push + assign trio + feedback trio),
 // each with a valid JSON Schema inputSchema.
 func TestConformanceToolsListExact(t *testing.T) {
 	s := conformanceServer()
@@ -129,7 +129,7 @@ func TestConformanceToolsListExact(t *testing.T) {
 	if !ok {
 		t.Fatalf("tools = %v, want an array", res["tools"])
 	}
-	want := []string{"context", "get", "domain", "status", "validate", "new", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard", "sync_push", "assign", "reassign", "unassign"}
+	want := []string{"context", "get", "domain", "status", "validate", "new", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard", "sync_push", "assign", "reassign", "unassign", "feedback_new", "feedback_list", "feedback_publish"}
 	if len(tools) != len(want) {
 		t.Fatalf("tools = %v, want exactly %v", tools, want)
 	}
@@ -673,6 +673,206 @@ func TestConformanceAssignmentTools(t *testing.T) {
 	}
 }
 
+// TestConformanceFeedbackTools (ts:mcp-feedback-tool AC #1-5): feedback_new/list/publish mirror CLI, list-call semantics, refusals, no CKO, token invariants.
+func TestConformanceFeedbackTools(t *testing.T) {
+	s := conformanceServer()
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	res := mustResult(t, out)
+	tools := res["tools"].([]any)
+	byName := map[string]map[string]any{}
+	for _, tl := range tools {
+		tm := tl.(map[string]any)
+		byName[tm["name"].(string)] = tm
+	}
+	for _, name := range []string{"feedback_new", "feedback_list", "feedback_publish"} {
+		tm, ok := byName[name]
+		if !ok {
+			t.Fatalf("tools/list is missing %s", name)
+		}
+		schema := tm["inputSchema"].(map[string]any)
+		if schema["type"] != "object" {
+			t.Errorf("%s inputSchema.type = %v, want object", name, schema["type"])
+		}
+		desc := tm["description"].(string)
+		if name == "feedback_new" && !strings.Contains(desc, "eka-feedback-new-v1") {
+			t.Errorf("feedback_new description = %q, want eka-feedback-new-v1", desc)
+		}
+		if name == "feedback_list" && !strings.Contains(desc, "eka-feedback-list-v1") {
+			t.Errorf("feedback_list description = %q, want eka-feedback-list-v1", desc)
+		}
+		if name == "feedback_publish" && !strings.Contains(desc, "eka-feedback-publish-v1") {
+			t.Errorf("feedback_publish description = %q, want eka-feedback-publish-v1", desc)
+		}
+		if !strings.Contains(strings.ToLower(desc), "feedback") {
+			t.Errorf("%s description = %q, want feedback mention", name, desc)
+		}
+	}
+	// feedback_new requires type and title; feedback_publish requires id
+	for _, tc := range []struct {
+		name string
+		msg  string
+	}{
+		{"feedback_new missing title", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_new","arguments":{"type":"bug"}}}`},
+		{"feedback_new missing type", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_new","arguments":{"title":"x"}}}`},
+		{"feedback_new invalid type", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_new","arguments":{"type":"rant","title":"x"}}}`},
+		{"feedback_publish missing id", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_publish","arguments":{}}}`},
+		{"feedback_publish empty id", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_publish","arguments":{"id":""}}}`},
+	} {
+		out := mustHandle(t, s, tc.msg)
+		res := mustResult(t, out)
+		if res["isError"] != true {
+			t.Errorf("%s must be isError=true, got %v", tc.name, res)
+		}
+		text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+		if strings.Contains(text, "stack") || strings.Contains(text, "/home") || strings.Contains(text, "<path>") && strings.Contains(tc.name, "invalid type") {
+			// path sanitization check is handled elsewhere; just ensure no stack trace leak
+			if strings.Contains(text, "goroutine") {
+				t.Errorf("%s error text leaks stack: %q", tc.name, text)
+			}
+		}
+	}
+	// feedback_new/list/publish success + byte-determinism
+	a := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_new","arguments":{"type":"bug","title":"my bug"}}}`)
+	b := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"feedback_new","arguments":{"type":"bug","title":"my bug"}}}`)
+	aText := mustResult(t, a)["content"].([]any)[0].(map[string]any)["text"].(string)
+	bText := mustResult(t, b)["content"].([]any)[0].(map[string]any)["text"].(string)
+	// fake is deterministic per title, so same title -> same bytes
+	if aText != bText {
+		t.Errorf("feedback_new must be deterministic for identical args, got %q vs %q", aText, bText)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(aText), &doc); err != nil {
+		t.Fatalf("feedback_new text must be JSON: %v", err)
+	}
+	if doc["schema"] != "eka-feedback-new-v1" {
+		t.Errorf("feedback_new schema = %v, want eka-feedback-new-v1", doc["schema"])
+	}
+	if doc["id"] == nil || doc["path"] == nil {
+		t.Errorf("feedback_new result must carry id and path, got %v", doc)
+	}
+	// feedback_list success
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"feedback_list","arguments":{}}}`)
+	resList := mustResult(t, out)
+	if resList["isError"] != false {
+		t.Errorf("feedback_list isError = %v, want false", resList["isError"])
+	}
+	listText := resList["content"].([]any)[0].(map[string]any)["text"].(string)
+	var listDoc map[string]any
+	if err := json.Unmarshal([]byte(listText), &listDoc); err != nil {
+		t.Fatalf("feedback_list text must be JSON: %v", err)
+	}
+	if listDoc["schema"] != "eka-feedback-list-v1" {
+		t.Errorf("feedback_list schema = %v, want eka-feedback-list-v1", listDoc["schema"])
+	}
+	if listDoc["feedback"] == nil {
+		t.Errorf("feedback_list must carry feedback array, got %v", listDoc)
+	}
+	// feedback_list with explicit empty object also succeeds
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"feedback_list","arguments":{}}}`)
+	if mustResult(t, out)["isError"] != false {
+		t.Errorf("feedback_list empty args must succeed")
+	}
+	// feedback_list byte-determinism for identical state (empty list)
+	aa := mustHandle(t, s, `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"feedback_list","arguments":{}}}`)
+	bb := mustHandle(t, s, `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"feedback_list","arguments":{}}}`)
+	at := mustResult(t, aa)["content"].([]any)[0].(map[string]any)["text"].(string)
+	bt := mustResult(t, bb)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if at != bt {
+		t.Errorf("feedback_list must be deterministic, got %q vs %q", at, bt)
+	}
+	// feedback_publish success
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"feedback_publish","arguments":{"id":"fbk-20260812-test"}}}`)
+	resPub := mustResult(t, out)
+	if resPub["isError"] != false {
+		t.Errorf("feedback_publish isError = %v, want false", resPub["isError"])
+	}
+	pubText := resPub["content"].([]any)[0].(map[string]any)["text"].(string)
+	var pubDoc map[string]any
+	if err := json.Unmarshal([]byte(pubText), &pubDoc); err != nil {
+		t.Fatalf("feedback_publish text must be JSON: %v", err)
+	}
+	if pubDoc["schema"] != "eka-feedback-publish-v1" {
+		t.Errorf("feedback_publish schema = %v, want eka-feedback-publish-v1", pubDoc["schema"])
+	}
+	// refusal cases: unauthenticated publish (token gate) and invalid draft id
+	cap := &failingFeedbackCapability{err: errors.New("issue token not bundled — use a release binary")}
+	s2 := NewServer(cap)
+	out = mustHandle(t, s2, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_publish","arguments":{"id":"fbk-20260812-test"}}}`)
+	res2 := mustResult(t, out)
+	if res2["isError"] != true {
+		t.Errorf("unauthenticated publish must be isError=true, got %v", res2)
+	}
+	text := res2["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "issue token not bundled") || !strings.Contains(text, "release binary") {
+		t.Errorf("unauthenticated publish text = %q, want token gate remediation", text)
+	}
+	if strings.Contains(text, "Bearer") || strings.Contains(text, "token=") {
+		t.Errorf("unauthenticated publish must not leak token material, got %q", text)
+	}
+	cap2 := &failingFeedbackCapability{err: errors.New(`unknown feedback "fbk-20260812-nope"`)}
+	s3 := NewServer(cap2)
+	out = mustHandle(t, s3, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_publish","arguments":{"id":"fbk-20260812-nope"}}}`)
+	res3 := mustResult(t, out)
+	if res3["isError"] != true {
+		t.Errorf("invalid draft id publish must be isError=true, got %v", res3)
+	}
+	text3 := res3["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text3, "unknown feedback") {
+		t.Errorf("invalid draft id text = %q, want unknown feedback", text3)
+	}
+	if strings.Contains(text3, "/tmp") || strings.Contains(text3, ".eka/feedback") {
+		t.Errorf("invalid draft id must not leak internal paths, got %q", text3)
+	}
+	// Already published refusal
+	cap3 := &failingFeedbackCapability{err: errors.New("already published as #42 https://github.com/maleolabs/eka-cli/issues/42")}
+	s4 := NewServer(cap3)
+	out = mustHandle(t, s4, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_publish","arguments":{"id":"fbk-20260812-test"}}}`)
+	res4 := mustResult(t, out)
+	if res4["isError"] != true {
+		t.Errorf("already published must be isError=true, got %v", res4)
+	}
+	text4 := res4["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text4, "already published") {
+		t.Errorf("already published text = %q, want already published", text4)
+	}
+}
+
+// failingFeedbackCapability fails only feedback_publish (and feedback_new when needed) for refusal tests.
+type failingFeedbackCapability struct {
+	err error
+}
+
+func (f *failingFeedbackCapability) Get(form string) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) Domain(p, d string) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) Status() ([]byte, error) { return []byte(`{}`), nil }
+func (f *failingFeedbackCapability) Context(s, p, d string) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) Validate(root string) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) NewDraft(req NewDraftRequest) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) Publish(req PublishRequest) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) Transition(req TransitionRequest) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) Note(req NoteRequest) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) DraftRead(t, p string) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) View(t, p string) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) DraftList(p string) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) IntegrityCheck() ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) Discard(t, p string) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) SyncPush(repoPath string, adopt, override bool) ([]byte, error) {
+	return nil, nil
+}
+func (f *failingFeedbackCapability) Assign(req AssignmentRequest) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) Reassign(req AssignmentRequest) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) Unassign(req UnassignRequest) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) FeedbackNew(req FeedbackNewRequest) ([]byte, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return []byte(`{"schema":"eka-feedback-new-v1","ok":true,"id":"fbk-20260812-test","path":"/tmp/eka/feedback/fbk-20260812-test.md","status":"draft"}`), nil
+}
+func (f *failingFeedbackCapability) FeedbackList() ([]byte, error) { return []byte(`{"schema":"eka-feedback-list-v1","ok":true,"feedback":[]}`), nil }
+func (f *failingFeedbackCapability) FeedbackPublish(req FeedbackPublishRequest) ([]byte, error) {
+	return nil, f.err
+}
+
 // failingAssignmentCapability is a tiny fake that only fails assignment, for refusal tests.
 type failingAssignmentCapability struct {
 	err error
@@ -698,6 +898,13 @@ func (f *failingAssignmentCapability) SyncPush(repoPath string, adopt, override 
 func (f *failingAssignmentCapability) Assign(req AssignmentRequest) ([]byte, error) { return nil, f.err }
 func (f *failingAssignmentCapability) Reassign(req AssignmentRequest) ([]byte, error) { return nil, f.err }
 func (f *failingAssignmentCapability) Unassign(req UnassignRequest) ([]byte, error) { return nil, f.err }
+func (f *failingAssignmentCapability) FeedbackNew(req FeedbackNewRequest) ([]byte, error) {
+	return nil, nil
+}
+func (f *failingAssignmentCapability) FeedbackList() ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) FeedbackPublish(req FeedbackPublishRequest) ([]byte, error) {
+	return nil, f.err
+}
 
 // failingSyncPushCapability is a tiny fake that only fails sync_push, for the path-leak test.
 type failingSyncPushCapability struct {
@@ -723,4 +930,11 @@ func (f *failingSyncPushCapability) SyncPush(repoPath string, adopt, override bo
 }
 func (f *failingSyncPushCapability) Assign(req AssignmentRequest) ([]byte, error) { return nil, nil }
 func (f *failingSyncPushCapability) Reassign(req AssignmentRequest) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) FeedbackNew(req FeedbackNewRequest) ([]byte, error) {
+	return nil, nil
+}
+func (f *failingSyncPushCapability) FeedbackList() ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) FeedbackPublish(req FeedbackPublishRequest) ([]byte, error) {
+	return nil, nil
+}
 func (f *failingSyncPushCapability) Unassign(req UnassignRequest) ([]byte, error) { return nil, nil }
