@@ -9,9 +9,10 @@ package mcp
 //  3. capabilities advertise only tools + resources (no prompts,
 //     logging, completions or elicitation claims)
 //  4. tools/list = exactly context/get/domain/status/validate/new/
-//     publish/transition/note/view/draft_list/integrity_check/discard
+//     publish/transition/note/draft_read/view(draft_read alias, deprecated)/draft_list/integrity_check/discard
 //     with valid inputSchema; tools/call unknown tool → -32003;
-//     execution error → isError:true; success → text content
+//     execution error → isError:true; success → text content;
+//     draft_read and deprecated view alias return identical verbatim content
 //  5. resources/list = eka://status + every embedded skill + every
 //     embedded draft template type; resources/read on each family;
 //     unknown URI → -32002
@@ -118,8 +119,8 @@ func TestConformanceCapabilitiesOnlyToolsAndResources(t *testing.T) {
 }
 
 // TestConformanceToolsListExact (spike point 4a): tools/list returns
-// exactly the 13-tool surface in the acceptance order, each with a
-// valid JSON Schema inputSchema.
+// exactly the 14-tool surface in the acceptance order (draft_read + deprecated view alias),
+// each with a valid JSON Schema inputSchema.
 func TestConformanceToolsListExact(t *testing.T) {
 	s := conformanceServer()
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
@@ -128,7 +129,7 @@ func TestConformanceToolsListExact(t *testing.T) {
 	if !ok {
 		t.Fatalf("tools = %v, want an array", res["tools"])
 	}
-	want := []string{"context", "get", "domain", "status", "validate", "new", "publish", "transition", "note", "view", "draft_list", "integrity_check", "discard"}
+	want := []string{"context", "get", "domain", "status", "validate", "new", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard"}
 	if len(tools) != len(want) {
 		t.Fatalf("tools = %v, want exactly %v", tools, want)
 	}
@@ -150,6 +151,44 @@ func TestConformanceToolsListExact(t *testing.T) {
 		if schema["properties"] == nil {
 			t.Errorf("tool %v inputSchema must carry properties", tm["name"])
 		}
+	}
+	// Deprecated alias `view` must carry deprecation flag with migration note to `draft_read`.
+	for _, tl := range tools {
+		tm := tl.(map[string]any)
+		if tm["name"] == "view" {
+			desc, _ := tm["description"].(string)
+			if !strings.Contains(strings.ToLower(desc), "deprecated") || !strings.Contains(desc, "draft_read") {
+				t.Errorf("tool view description = %q, want deprecated flag with migration note to draft_read", desc)
+			}
+		}
+	}
+}
+
+// TestConformanceDraftReadAndViewAlias (td:mcp-view-naming-fix): both draft_read and its deprecated alias view
+// must succeed and return identical verbatim draft content (deterministic).
+func TestConformanceDraftReadAndViewAlias(t *testing.T) {
+	s := conformanceServer()
+	for _, name := range []string{"draft_read", "view"} {
+		out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"`+name+`","arguments":{"target":"feather/adr:001","project":"feather"}}}`)
+		res := mustResult(t, out)
+		if res["isError"] != false {
+			t.Errorf("%s: isError = %v, want false", name, res["isError"])
+		}
+		content := res["content"].([]any)[0].(map[string]any)
+		if content["type"] != "text" {
+			t.Errorf("%s: content type = %v, want text", name, content["type"])
+		}
+		var doc map[string]any
+		if err := json.Unmarshal([]byte(content["text"].(string)), &doc); err != nil {
+			t.Fatalf("%s: tool text must be JSON: %v", name, err)
+		}
+	}
+	a := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"draft_read","arguments":{"target":"feather/adr:001"}}}`)
+	b := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"view","arguments":{"target":"feather/adr:001"}}}`)
+	aText := mustResult(t, a)["content"].([]any)[0].(map[string]any)["text"].(string)
+	bText := mustResult(t, b)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if aText != bText {
+		t.Errorf("draft_read and view alias must return identical verbatim content, got %q vs %q", aText, bText)
 	}
 }
 

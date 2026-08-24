@@ -104,7 +104,7 @@ the MCP server over stdio (JSON-RPC 2.0, newline-delimited). It reports MCP
 protocol version `2024-11-05` and advertises the `tools` and `resources`
 capabilities.
 
-The server exposes 13 tools and three resource families over the EKA capability
+The server exposes 14 tools (including one deprecated alias) and three resource families over the EKA capability
 layer:
 
 | Tool / resource | Description |
@@ -118,13 +118,16 @@ layer:
 | `publish` | Publish one draft (schema `eka-publish-result-v1`). |
 | `transition` | Move a work item along the transition table (schema `eka-transition-result-v1`). |
 | `note` | Create one `cmt-` note draft (schema `eka-note-result-v1`). |
-| `view` | Return one draft file content verbatim. |
+| `draft_read` | Return one draft file content verbatim (the v2.0 JSON authoring document) — the editable draft behind a target. |
+| `view` (deprecated alias) | Deprecated alias of `draft_read` — same verbatim draft reader. Flagged deprecated in `tools/list` with migration note to `draft_read`; will be removed in the next minor version (td:mcp-view-naming-fix). |
 | `draft_list` | List the draft backlog. |
 | `integrity_check` | Verify the canonical store. |
 | `discard` | Delete one draft without publishing. |
 | `eka://status` (resource) | The same workspace status, as a readable resource (`application/json`). |
 | `eka://skills/<name>` (resource) | The `SKILL.md` of one embedded skill (read-only). |
 | `eka://templates/<type>` (resource) | The v2.0 JSON draft template of one type (read-only). |
+
+Human projections (`eka view` / `eka watch` — Kanban, roadmap, dependency tree, etc.) remain **CLI-only** and are not exposed as MCP tools or resources; the MCP `draft_read` tool is a draft-file reader (authoring aid), not a human projection.
 
 The server opens the EKA Runtime **read-only** (`runtime.Open`), so it starts
 cleanly even before a workspace exists — `initialize` and `tools/list` always

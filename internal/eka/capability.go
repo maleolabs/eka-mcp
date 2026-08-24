@@ -300,11 +300,11 @@ func (c *Capability) Note(req mcp.NoteRequest) ([]byte, error) {
 	})
 }
 
-// View returns one draft file content verbatim (the v2.0 JSON
+// DraftRead returns one draft file content verbatim (the v2.0 JSON
 // authoring document) — the editable draft behind a target. The
 // resolution is eka-core's (Authoring.ResolveDraft); the file bytes
-// are returned untouched.
-func (c *Capability) View(target, project string) ([]byte, error) {
+// are returned untouched. This is the renamed MCP tool (td:mcp-view-naming-fix).
+func (c *Capability) DraftRead(target, project string) ([]byte, error) {
 	ref, err := runtime.Authoring.ResolveDraft(c.rt, target, project)
 	if err != nil {
 		return nil, err
@@ -314,6 +314,12 @@ func (c *Capability) View(target, project string) ([]byte, error) {
 		return nil, fmt.Errorf("eka: cannot read draft %s: %w", target, err)
 	}
 	return data, nil
+}
+
+// View is the deprecated alias of DraftRead (td:mcp-view-naming-fix).
+// TODO(td:mcp-view-naming-fix): remove in next minor version after 1.1.3 — delete this method and keep DraftRead only.
+func (c *Capability) View(target, project string) ([]byte, error) {
+	return c.DraftRead(target, project)
 }
 
 // DraftList lists the draft backlog of one project (or every project
