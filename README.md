@@ -104,7 +104,7 @@ the MCP server over stdio (JSON-RPC 2.0, newline-delimited). It reports MCP
 protocol version `2024-11-05` and advertises the `tools` and `resources`
 capabilities.
 
-The server exposes 14 tools (including one deprecated alias) and three resource families over the EKA capability
+The server exposes 15 tools (including one deprecated alias) and three resource families over the EKA capability
 layer:
 
 | Tool / resource | Description |
@@ -123,6 +123,7 @@ layer:
 | `draft_list` | List the draft backlog. |
 | `integrity_check` | Verify the canonical store. |
 | `discard` | Delete one draft without publishing. |
+| `sync_push` | Push the repository snapshot from the workspace store (schema `eka-sync-push-result-v1`). Same engine as CLI `eka sync push` — deterministic snapshot & digest, same refusal classes; crash-safe atomic swap so a failed push writes nothing partially. Pull / --from-docs is not exposed (silent regression hazard; use CLI `eka sync pull`). |
 | `eka://status` (resource) | The same workspace status, as a readable resource (`application/json`). |
 | `eka://skills/<name>` (resource) | The `SKILL.md` of one embedded skill (read-only). |
 | `eka://templates/<type>` (resource) | The v2.0 JSON draft template of one type (read-only). |

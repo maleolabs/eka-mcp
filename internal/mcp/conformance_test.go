@@ -119,7 +119,7 @@ func TestConformanceCapabilitiesOnlyToolsAndResources(t *testing.T) {
 }
 
 // TestConformanceToolsListExact (spike point 4a): tools/list returns
-// exactly the 14-tool surface in the acceptance order (draft_read + deprecated view alias),
+// exactly the 15-tool surface in the acceptance order (draft_read + deprecated view alias + sync_push),
 // each with a valid JSON Schema inputSchema.
 func TestConformanceToolsListExact(t *testing.T) {
 	s := conformanceServer()
@@ -129,7 +129,7 @@ func TestConformanceToolsListExact(t *testing.T) {
 	if !ok {
 		t.Fatalf("tools = %v, want an array", res["tools"])
 	}
-	want := []string{"context", "get", "domain", "status", "validate", "new", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard"}
+	want := []string{"context", "get", "domain", "status", "validate", "new", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard", "sync_push"}
 	if len(tools) != len(want) {
 		t.Fatalf("tools = %v, want exactly %v", tools, want)
 	}
@@ -447,4 +447,121 @@ func TestConformanceStdioFraming(t *testing.T) {
 	if w.writes != 3 {
 		t.Errorf("underlying writes = %d, want 3 (flush per response)", w.writes)
 	}
+}
+
+// TestConformanceSyncPushTool (ts:mcp-sync-push-tool AC #1-5): sync_push
+// is push-only, deterministic (same store state -> same bytes), uses the
+// same engine as `eka sync push`, and refuses pull/fromDocs deterministically.
+func TestConformanceSyncPushTool(t *testing.T) {
+	s := conformanceServer()
+	// tools/list must carry sync_push with required properties.
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	res := mustResult(t, out)
+	tools := res["tools"].([]any)
+	found := false
+	for _, tl := range tools {
+		tm := tl.(map[string]any)
+		if tm["name"] == "sync_push" {
+			found = true
+			schema := tm["inputSchema"].(map[string]any)
+			props := schema["properties"].(map[string]any)
+			if props["repoPath"] == nil || props["adopt"] == nil || props["override"] == nil {
+				t.Errorf("sync_push inputSchema must carry repoPath, adopt, override, got %v", props)
+			}
+			desc := tm["description"].(string)
+			if !strings.Contains(desc, "eka-sync-push-result-v1") && !strings.Contains(desc, "eka sync push") {
+				t.Errorf("sync_push description = %q, want eka-sync-push-result-v1 and eka sync push mention", desc)
+			}
+			if !strings.Contains(desc, "pull") {
+				t.Errorf("sync_push description = %q, want pull refusal note", desc)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("tools/list is missing sync_push")
+	}
+
+	// tools/call sync_push succeeds with deterministic byte-identical output for identical state.
+	a := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sync_push","arguments":{}}}`)
+	b := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sync_push","arguments":{}}}`)
+	aText := mustResult(t, a)["content"].([]any)[0].(map[string]any)["text"].(string)
+	bText := mustResult(t, b)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if aText != bText {
+		t.Errorf("sync_push must be byte-deterministic for identical state, got %q vs %q", aText, bText)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(aText), &doc); err != nil {
+		t.Fatalf("sync_push text must be JSON: %v", err)
+	}
+	if doc["schema"] != "eka-sync-push-result-v1" {
+		t.Errorf("sync_push schema = %v, want eka-sync-push-result-v1", doc["schema"])
+	}
+	if doc["project"] == nil || doc["repo"] == nil || doc["snapshotDigest"] == nil {
+		t.Errorf("sync_push result must carry project/repo/snapshotDigest, got %v", doc)
+	}
+
+	// sync_push with repoPath explicitly succeeds.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sync_push","arguments":{"repoPath":"."}}}`)
+	if mustResult(t, out)["isError"] != false {
+		t.Errorf("sync_push with repoPath must succeed")
+	}
+
+	// sync pull / fromDocs via arguments refuses deterministically naming CLI.
+	for _, arg := range []string{
+		`{"fromDocs":true}`, `{"from_docs":true}`, `{"from-docs":true}`, `{"pull":true}`,
+	} {
+		out := mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"sync_push","arguments":`+arg+`}}`)
+		res := mustResult(t, out)
+		if res["isError"] != true {
+			t.Errorf("sync_push %s must be refused with isError=true, got %v", arg, res)
+		}
+		text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+		if !strings.Contains(text, "eka sync pull") || !strings.Contains(text, "not exposed") {
+			t.Errorf("sync_push pull refusal text = %q, want 'not exposed' and 'eka sync pull'", text)
+		}
+	}
+
+	// unknown tool `sync_pull` is -32003 (not exposed).
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"sync_pull","arguments":{}}}`)
+	errObj := mustError(t, out)
+	if errObj["code"] != float64(codeToolNotFound) {
+		t.Errorf("sync_pull error code = %v, want %v", errObj["code"], codeToolNotFound)
+	}
+
+	// Unknown repo via capability error surfaces as isError (sanitized).
+	cap := &fakeCapability{statusJSON: `{}`, getErr: errors.New("sync refused: <repo> is not an EKA repository (no eka.yaml); run 'eka init' first")}
+	_ = cap
+	s2 := NewServer(&failingSyncPushCapability{err: errors.New("sync refused: /tmp/not-a-repo is not an EKA repository")})
+	out = mustHandle(t, s2, `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"sync_push","arguments":{"repoPath":"/tmp/not-a-repo"}}}`)
+	res2 := mustResult(t, out)
+	if res2["isError"] != true {
+		t.Errorf("sync_push unknown repo must be isError=true, got %v", res2)
+	}
+	text2 := res2["content"].([]any)[0].(map[string]any)["text"].(string)
+	if strings.Contains(text2, "/tmp/not-a-repo") {
+		t.Errorf("sync_push error must not leak path, got %q", text2)
+	}
+}
+
+// failingSyncPushCapability is a tiny fake that only fails sync_push, for the path-leak test.
+type failingSyncPushCapability struct {
+	err error
+}
+
+func (f *failingSyncPushCapability) Get(form string) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) Domain(p, d string) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) Status() ([]byte, error) { return []byte(`{}`), nil }
+func (f *failingSyncPushCapability) Context(s, p, d string) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) Validate(root string) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) NewDraft(req NewDraftRequest) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) Publish(req PublishRequest) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) Transition(req TransitionRequest) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) Note(req NoteRequest) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) DraftRead(t, p string) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) View(t, p string) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) DraftList(p string) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) IntegrityCheck() ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) Discard(t, p string) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) SyncPush(repoPath string, adopt, override bool) ([]byte, error) {
+	return nil, f.err
 }

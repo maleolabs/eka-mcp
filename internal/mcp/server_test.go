@@ -87,6 +87,13 @@ func (f *fakeCapability) Discard(target, project string) ([]byte, error) {
 	return []byte(`{"schema":"eka-discard-result-v1","target":` + mustQuote(target) + `,"note":""}`), nil
 }
 
+func (f *fakeCapability) SyncPush(repoPath string, adopt, override bool) ([]byte, error) {
+	if repoPath == "" {
+		repoPath = "."
+	}
+	return []byte(`{"schema":"eka-sync-push-result-v1","workspace":"` + "/tmp/eka" + `","project":"p","repo":"r","pushedUnits":1,"pushedAttachments":0,"snapshotLabel":"repo:p","snapshotDigest":"abc123","changed":false,"newRepo":false,"warnings":[]}`), nil
+}
+
 func mustQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
@@ -163,7 +170,7 @@ func TestToolsList(t *testing.T) {
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	res := out["result"].(map[string]any)
 	tools := res["tools"].([]any)
-	want := []string{"context", "get", "domain", "status", "validate", "new", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard"}
+	want := []string{"context", "get", "domain", "status", "validate", "new", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard", "sync_push"}
 	got := make([]string, 0, len(tools))
 	for _, tl := range tools {
 		tm := tl.(map[string]any)
@@ -285,6 +292,69 @@ func TestToolsCallMissingArguments(t *testing.T) {
 	res := out["result"].(map[string]any)
 	if res["isError"] != true {
 		t.Errorf("missing arguments must be a tool error result, got %v", out)
+	}
+}
+
+func TestToolsCallSyncPush(t *testing.T) {
+	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	// No args (defaults to ".")
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sync_push","arguments":{}}}`)
+	res := out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Errorf("sync_push isError = %v, want false", res["isError"])
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatalf("sync_push text must be JSON: %v", err)
+	}
+	if doc["schema"] != "eka-sync-push-result-v1" {
+		t.Errorf("schema = %v, want eka-sync-push-result-v1", doc["schema"])
+	}
+	if doc["snapshotDigest"] == nil {
+		t.Error("sync_push result must carry snapshotDigest")
+	}
+	// With explicit repoPath, adopt, override
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sync_push","arguments":{"repoPath":".","adopt":false,"override":false}}}`)
+	if mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sync_push","arguments":{"repoPath":"."}}}`) == nil {
+		t.Error("sync_push with repoPath must succeed")
+	}
+	// Deterministic: two calls same state -> same bytes
+	a := mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"sync_push","arguments":{}}}`)
+	b := mustHandle(t, s, `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"sync_push","arguments":{}}}`)
+	aText := a["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	bText := b["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if aText != bText {
+		t.Errorf("sync_push must be byte-deterministic, got %q vs %q", aText, bText)
+	}
+}
+
+func TestToolsCallSyncPushPullRefused(t *testing.T) {
+	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	for _, arg := range []string{
+		`{"fromDocs":true}`, `{"from_docs":true}`, `{"from-docs":true}`, `{"pull":true}`,
+	} {
+		out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sync_push","arguments":`+arg+`}}`)
+		res := out["result"].(map[string]any)
+		if res["isError"] != true {
+			t.Errorf("sync_push %s must refuse with isError=true, got %v", arg, res)
+		}
+		text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+		if !strings.Contains(text, "eka sync pull") {
+			t.Errorf("pull refusal text = %q, want eka sync pull hint", text)
+		}
+	}
+}
+
+func TestToolsCallSyncPushUnknownTool(t *testing.T) {
+	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sync_pull","arguments":{}}}`)
+	if out["error"] == nil {
+		t.Fatalf("sync_pull unknown tool must error, got %v", out)
+	}
+	errObj := out["error"].(map[string]any)
+	if errObj["code"] != float64(codeToolNotFound) {
+		t.Errorf("code = %v, want %v", errObj["code"], codeToolNotFound)
 	}
 }
 

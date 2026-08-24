@@ -247,6 +247,10 @@ func (f *failingStatusCapability) Discard(target, project string) ([]byte, error
 	return nil, errors.New("unreachable")
 }
 
+func (f *failingStatusCapability) SyncPush(repoPath string, adopt, override bool) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
 // TestServeLineTooLong: a line exceeding the 64 MiB cap is refused
 // deterministically and the session continues at the next line.
 func TestServeLineTooLong(t *testing.T) {
