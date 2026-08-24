@@ -83,8 +83,21 @@ type Manifest struct {
 // subcommands directly. Pinning a fixed prefix (e.g. ["serve"]) would
 // trap every invocation into that one subcommand. The plugin owns its
 // flags (DisableFlagParsing in eka-cli).
+//
+// Disclosure (bug:mcp-help-subcommands-hidden): the manifest declares
+// the plugin's actual subcommands (manifest, install, configure, serve)
+// as declarative commands for help disclosure. The "mcp" entry remains
+// the B1 dispatch proxy (whole-binary); the additional entries are
+// disclosure-only and match the actual cmd/eka-mcp subcommands. eka-cli's
+// native stub help embeds the same static list as fallback, so
+// `eka mcp -h` discloses the surface even when the plugin is not
+// installed. Rich per-command descriptions remain deferred (B3).
 var PluginCommands = []ManifestCommand{
 	{Name: "mcp", Description: "EKA MCP server and plugin tooling", Args: []string{}},
+	{Name: "configure", Description: "Configure MCP client", Args: []string{"configure"}},
+	{Name: "install", Description: "Install artifact family", Args: []string{"install"}},
+	{Name: "manifest", Description: "Show plugin manifest", Args: []string{"manifest", "--json"}},
+	{Name: "serve", Description: "Run the MCP server", Args: []string{"serve"}},
 }
 
 // skillsFS embeds the EKA AI Skill Pack. The entry names of the
