@@ -165,10 +165,10 @@ func TestSidecarTextMatchesRenderText(t *testing.T) {
 func TestResolveLayout(t *testing.T) {
 	base := string(filepath.Separator) + filepath.Join("tmp", "base")
 	cases := []struct {
-		target      string
-		skills      string
-		commands    string // "" = no command target
-		sidecar     string
+		target   string
+		skills   string
+		commands string // "" = no command target
+		sidecar  string
 	}{
 		{"opencode", filepath.Join(base, ".config", "opencode", "skills"), filepath.Join(base, ".config", "opencode", "commands"), filepath.Join(base, ".config", "opencode", "commands")},
 		{"claude", filepath.Join(base, ".claude", "skills"), filepath.Join(base, ".claude", "commands"), filepath.Join(base, ".claude", "commands")},

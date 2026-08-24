@@ -842,33 +842,37 @@ type failingFeedbackCapability struct {
 	err error
 }
 
-func (f *failingFeedbackCapability) Get(form string) ([]byte, error) { return nil, nil }
-func (f *failingFeedbackCapability) Domain(p, d string) ([]byte, error) { return nil, nil }
-func (f *failingFeedbackCapability) Status() ([]byte, error) { return []byte(`{}`), nil }
-func (f *failingFeedbackCapability) Context(s, p, d string) ([]byte, error) { return nil, nil }
-func (f *failingFeedbackCapability) Validate(root string) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) Get(form string) ([]byte, error)              { return nil, nil }
+func (f *failingFeedbackCapability) Domain(p, d string) ([]byte, error)           { return nil, nil }
+func (f *failingFeedbackCapability) Status() ([]byte, error)                      { return []byte(`{}`), nil }
+func (f *failingFeedbackCapability) Context(s, p, d string) ([]byte, error)       { return nil, nil }
+func (f *failingFeedbackCapability) Validate(root string) ([]byte, error)         { return nil, nil }
 func (f *failingFeedbackCapability) NewDraft(req NewDraftRequest) ([]byte, error) { return nil, nil }
-func (f *failingFeedbackCapability) Publish(req PublishRequest) ([]byte, error) { return nil, nil }
-func (f *failingFeedbackCapability) Transition(req TransitionRequest) ([]byte, error) { return nil, nil }
-func (f *failingFeedbackCapability) Note(req NoteRequest) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) Publish(req PublishRequest) ([]byte, error)   { return nil, nil }
+func (f *failingFeedbackCapability) Transition(req TransitionRequest) ([]byte, error) {
+	return nil, nil
+}
+func (f *failingFeedbackCapability) Note(req NoteRequest) ([]byte, error)  { return nil, nil }
 func (f *failingFeedbackCapability) DraftRead(t, p string) ([]byte, error) { return nil, nil }
-func (f *failingFeedbackCapability) View(t, p string) ([]byte, error) { return nil, nil }
-func (f *failingFeedbackCapability) DraftList(p string) ([]byte, error) { return nil, nil }
-func (f *failingFeedbackCapability) IntegrityCheck() ([]byte, error) { return nil, nil }
-func (f *failingFeedbackCapability) Discard(t, p string) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) View(t, p string) ([]byte, error)      { return nil, nil }
+func (f *failingFeedbackCapability) DraftList(p string) ([]byte, error)    { return nil, nil }
+func (f *failingFeedbackCapability) IntegrityCheck() ([]byte, error)       { return nil, nil }
+func (f *failingFeedbackCapability) Discard(t, p string) ([]byte, error)   { return nil, nil }
 func (f *failingFeedbackCapability) SyncPush(repoPath string, adopt, override bool) ([]byte, error) {
 	return nil, nil
 }
-func (f *failingFeedbackCapability) Assign(req AssignmentRequest) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) Assign(req AssignmentRequest) ([]byte, error)   { return nil, nil }
 func (f *failingFeedbackCapability) Reassign(req AssignmentRequest) ([]byte, error) { return nil, nil }
-func (f *failingFeedbackCapability) Unassign(req UnassignRequest) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) Unassign(req UnassignRequest) ([]byte, error)   { return nil, nil }
 func (f *failingFeedbackCapability) FeedbackNew(req FeedbackNewRequest) ([]byte, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
 	return []byte(`{"schema":"eka-feedback-new-v1","ok":true,"id":"fbk-20260812-test","path":"/tmp/eka/feedback/fbk-20260812-test.md","status":"draft"}`), nil
 }
-func (f *failingFeedbackCapability) FeedbackList() ([]byte, error) { return []byte(`{"schema":"eka-feedback-list-v1","ok":true,"feedback":[]}`), nil }
+func (f *failingFeedbackCapability) FeedbackList() ([]byte, error) {
+	return []byte(`{"schema":"eka-feedback-list-v1","ok":true,"feedback":[]}`), nil
+}
 func (f *failingFeedbackCapability) FeedbackPublish(req FeedbackPublishRequest) ([]byte, error) {
 	return nil, f.err
 }
@@ -878,26 +882,34 @@ type failingAssignmentCapability struct {
 	err error
 }
 
-func (f *failingAssignmentCapability) Get(form string) ([]byte, error) { return nil, nil }
-func (f *failingAssignmentCapability) Domain(p, d string) ([]byte, error) { return nil, nil }
-func (f *failingAssignmentCapability) Status() ([]byte, error) { return []byte(`{}`), nil }
-func (f *failingAssignmentCapability) Context(s, p, d string) ([]byte, error) { return nil, nil }
-func (f *failingAssignmentCapability) Validate(root string) ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) Get(form string) ([]byte, error)              { return nil, nil }
+func (f *failingAssignmentCapability) Domain(p, d string) ([]byte, error)           { return nil, nil }
+func (f *failingAssignmentCapability) Status() ([]byte, error)                      { return []byte(`{}`), nil }
+func (f *failingAssignmentCapability) Context(s, p, d string) ([]byte, error)       { return nil, nil }
+func (f *failingAssignmentCapability) Validate(root string) ([]byte, error)         { return nil, nil }
 func (f *failingAssignmentCapability) NewDraft(req NewDraftRequest) ([]byte, error) { return nil, nil }
-func (f *failingAssignmentCapability) Publish(req PublishRequest) ([]byte, error) { return nil, nil }
-func (f *failingAssignmentCapability) Transition(req TransitionRequest) ([]byte, error) { return nil, nil }
-func (f *failingAssignmentCapability) Note(req NoteRequest) ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) Publish(req PublishRequest) ([]byte, error)   { return nil, nil }
+func (f *failingAssignmentCapability) Transition(req TransitionRequest) ([]byte, error) {
+	return nil, nil
+}
+func (f *failingAssignmentCapability) Note(req NoteRequest) ([]byte, error)  { return nil, nil }
 func (f *failingAssignmentCapability) DraftRead(t, p string) ([]byte, error) { return nil, nil }
-func (f *failingAssignmentCapability) View(t, p string) ([]byte, error) { return nil, nil }
-func (f *failingAssignmentCapability) DraftList(p string) ([]byte, error) { return nil, nil }
-func (f *failingAssignmentCapability) IntegrityCheck() ([]byte, error) { return nil, nil }
-func (f *failingAssignmentCapability) Discard(t, p string) ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) View(t, p string) ([]byte, error)      { return nil, nil }
+func (f *failingAssignmentCapability) DraftList(p string) ([]byte, error)    { return nil, nil }
+func (f *failingAssignmentCapability) IntegrityCheck() ([]byte, error)       { return nil, nil }
+func (f *failingAssignmentCapability) Discard(t, p string) ([]byte, error)   { return nil, nil }
 func (f *failingAssignmentCapability) SyncPush(repoPath string, adopt, override bool) ([]byte, error) {
 	return nil, nil
 }
-func (f *failingAssignmentCapability) Assign(req AssignmentRequest) ([]byte, error) { return nil, f.err }
-func (f *failingAssignmentCapability) Reassign(req AssignmentRequest) ([]byte, error) { return nil, f.err }
-func (f *failingAssignmentCapability) Unassign(req UnassignRequest) ([]byte, error) { return nil, f.err }
+func (f *failingAssignmentCapability) Assign(req AssignmentRequest) ([]byte, error) {
+	return nil, f.err
+}
+func (f *failingAssignmentCapability) Reassign(req AssignmentRequest) ([]byte, error) {
+	return nil, f.err
+}
+func (f *failingAssignmentCapability) Unassign(req UnassignRequest) ([]byte, error) {
+	return nil, f.err
+}
 func (f *failingAssignmentCapability) FeedbackNew(req FeedbackNewRequest) ([]byte, error) {
 	return nil, nil
 }
@@ -911,24 +923,26 @@ type failingSyncPushCapability struct {
 	err error
 }
 
-func (f *failingSyncPushCapability) Get(form string) ([]byte, error) { return nil, nil }
-func (f *failingSyncPushCapability) Domain(p, d string) ([]byte, error) { return nil, nil }
-func (f *failingSyncPushCapability) Status() ([]byte, error) { return []byte(`{}`), nil }
-func (f *failingSyncPushCapability) Context(s, p, d string) ([]byte, error) { return nil, nil }
-func (f *failingSyncPushCapability) Validate(root string) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) Get(form string) ([]byte, error)              { return nil, nil }
+func (f *failingSyncPushCapability) Domain(p, d string) ([]byte, error)           { return nil, nil }
+func (f *failingSyncPushCapability) Status() ([]byte, error)                      { return []byte(`{}`), nil }
+func (f *failingSyncPushCapability) Context(s, p, d string) ([]byte, error)       { return nil, nil }
+func (f *failingSyncPushCapability) Validate(root string) ([]byte, error)         { return nil, nil }
 func (f *failingSyncPushCapability) NewDraft(req NewDraftRequest) ([]byte, error) { return nil, nil }
-func (f *failingSyncPushCapability) Publish(req PublishRequest) ([]byte, error) { return nil, nil }
-func (f *failingSyncPushCapability) Transition(req TransitionRequest) ([]byte, error) { return nil, nil }
-func (f *failingSyncPushCapability) Note(req NoteRequest) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) Publish(req PublishRequest) ([]byte, error)   { return nil, nil }
+func (f *failingSyncPushCapability) Transition(req TransitionRequest) ([]byte, error) {
+	return nil, nil
+}
+func (f *failingSyncPushCapability) Note(req NoteRequest) ([]byte, error)  { return nil, nil }
 func (f *failingSyncPushCapability) DraftRead(t, p string) ([]byte, error) { return nil, nil }
-func (f *failingSyncPushCapability) View(t, p string) ([]byte, error) { return nil, nil }
-func (f *failingSyncPushCapability) DraftList(p string) ([]byte, error) { return nil, nil }
-func (f *failingSyncPushCapability) IntegrityCheck() ([]byte, error) { return nil, nil }
-func (f *failingSyncPushCapability) Discard(t, p string) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) View(t, p string) ([]byte, error)      { return nil, nil }
+func (f *failingSyncPushCapability) DraftList(p string) ([]byte, error)    { return nil, nil }
+func (f *failingSyncPushCapability) IntegrityCheck() ([]byte, error)       { return nil, nil }
+func (f *failingSyncPushCapability) Discard(t, p string) ([]byte, error)   { return nil, nil }
 func (f *failingSyncPushCapability) SyncPush(repoPath string, adopt, override bool) ([]byte, error) {
 	return nil, f.err
 }
-func (f *failingSyncPushCapability) Assign(req AssignmentRequest) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) Assign(req AssignmentRequest) ([]byte, error)   { return nil, nil }
 func (f *failingSyncPushCapability) Reassign(req AssignmentRequest) ([]byte, error) { return nil, nil }
 func (f *failingSyncPushCapability) FeedbackNew(req FeedbackNewRequest) ([]byte, error) {
 	return nil, nil

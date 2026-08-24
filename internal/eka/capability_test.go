@@ -402,7 +402,7 @@ func TestSyncPushWithUnits(t *testing.T) {
 	// Seed one canonical unit attributed to this repo (the path a pull
 	// would have seeded).
 	u := &exchange.Unit{
-		Identity: exchange.Identity{Namespace: "beather", Type: "adr", ID: "001-x", InstanceVersion: 1},
+		Identity:              exchange.Identity{Namespace: "beather", Type: "adr", ID: "001-x", InstanceVersion: 1},
 		CanonicalIdentityForm: "beather/adr:001-x:1",
 		Revision:              1,
 		Classification:        exchange.Classification{Dimension: "decisions", Domain: "Architecture"},
@@ -637,7 +637,9 @@ func newAssignReqWithBy(repo, target, to, name, kind string) mcp.AssignmentReque
 }
 
 func defaultBy() mcp.AuthorIdentity { return mcp.AuthorIdentity{Kind: "agent", Name: "mcp-agent"} }
-func byWithKind(name, kind string) mcp.AuthorIdentity { return mcp.AuthorIdentity{Kind: kind, Name: name} }
+func byWithKind(name, kind string) mcp.AuthorIdentity {
+	return mcp.AuthorIdentity{Kind: kind, Name: name}
+}
 
 // TestAssignDifferentTargetRefused: assigning already-assigned to different member is refused, no partial write.
 func TestAssignDifferentTargetRefused(t *testing.T) {

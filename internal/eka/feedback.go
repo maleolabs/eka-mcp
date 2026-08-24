@@ -64,8 +64,6 @@ type feedbackListItemJSON struct {
 	Created     string `json:"created"`
 }
 
-
-
 // FeedbackNew creates a local feedback draft under EKA_HOME/feedback
 // (YAML frontmatter + markdown body). It mirrors `eka feedback new`
 // semantics exactly: same validation, same scaffold, same id generation,
@@ -273,5 +271,3 @@ func (c *Capability) FeedbackPublish(req mcp.FeedbackPublishRequest) ([]byte, er
 		IssueURL:    published.IssueURL,
 	})
 }
-
-
