@@ -844,8 +844,12 @@ type failingFeedbackCapability struct {
 	err error
 }
 
-func (f *failingFeedbackCapability) Get(form string) ([]byte, error)              { return nil, nil }
-func (f *failingFeedbackCapability) Domain(p, d string) ([]byte, error)           { return nil, nil }
+func (f *failingFeedbackCapability) Get(form string, noContent bool) ([]byte, error) {
+	return nil, nil
+}
+func (f *failingFeedbackCapability) Domain(p, d string, noContent bool) ([]byte, error) {
+	return nil, nil
+}
 func (f *failingFeedbackCapability) Status() ([]byte, error)                      { return []byte(`{}`), nil }
 func (f *failingFeedbackCapability) Context(s, p, d string) ([]byte, error)       { return nil, nil }
 func (f *failingFeedbackCapability) Validate(root string) ([]byte, error)         { return nil, nil }
@@ -884,8 +888,12 @@ type failingAssignmentCapability struct {
 	err error
 }
 
-func (f *failingAssignmentCapability) Get(form string) ([]byte, error)              { return nil, nil }
-func (f *failingAssignmentCapability) Domain(p, d string) ([]byte, error)           { return nil, nil }
+func (f *failingAssignmentCapability) Get(form string, noContent bool) ([]byte, error) {
+	return nil, nil
+}
+func (f *failingAssignmentCapability) Domain(p, d string, noContent bool) ([]byte, error) {
+	return nil, nil
+}
 func (f *failingAssignmentCapability) Status() ([]byte, error)                      { return []byte(`{}`), nil }
 func (f *failingAssignmentCapability) Context(s, p, d string) ([]byte, error)       { return nil, nil }
 func (f *failingAssignmentCapability) Validate(root string) ([]byte, error)         { return nil, nil }
@@ -925,8 +933,12 @@ type failingSyncPushCapability struct {
 	err error
 }
 
-func (f *failingSyncPushCapability) Get(form string) ([]byte, error)              { return nil, nil }
-func (f *failingSyncPushCapability) Domain(p, d string) ([]byte, error)           { return nil, nil }
+func (f *failingSyncPushCapability) Get(form string, noContent bool) ([]byte, error) {
+	return nil, nil
+}
+func (f *failingSyncPushCapability) Domain(p, d string, noContent bool) ([]byte, error) {
+	return nil, nil
+}
 func (f *failingSyncPushCapability) Status() ([]byte, error)                      { return []byte(`{}`), nil }
 func (f *failingSyncPushCapability) Context(s, p, d string) ([]byte, error)       { return nil, nil }
 func (f *failingSyncPushCapability) Validate(root string) ([]byte, error)         { return nil, nil }

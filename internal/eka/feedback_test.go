@@ -359,13 +359,13 @@ func TestFeedbackNeverBecomesCKO(t *testing.T) {
 		t.Fatal("feedback must have id")
 	}
 	// Try to Get as CKO — must not resolve
-	_, err := cap.Get("feedback:" + f.ID + ":1")
+	_, err := cap.Get("feedback:"+f.ID+":1", false)
 	if err == nil || !strings.Contains(err.Error(), "no object") {
 		// We expect no object, not panic
 		// But Get will try resolver, should fail
 	}
 	// Domain query should not return feedback
-	domainData, _ := cap.Domain("any", "Architecture")
+	domainData, _ := cap.Domain("any", "Architecture", false)
 	var col map[string]any
 	_ = json.Unmarshal(domainData, &col)
 	// count should be 0 or at least not contain feedback type

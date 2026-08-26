@@ -276,11 +276,17 @@ const (
 // nothing about eka-core — the interface keeps the layering explicit
 // and the server stdlib-only.
 type Capability interface {
-	// Get resolves one identity form to its machine document.
-	Get(form string) ([]byte, error)
+	// Get resolves one identity form to its machine document. When
+	// noContent is true the content payload is stripped via
+	// machine.Document.StripContent at parity with CLI --no-content
+	// (content absent, identity/stateVector/relationships intact).
+	Get(form string, noContent bool) ([]byte, error)
 	// Domain returns one Engineering Domain's units of a project as a
-	// machine collection.
-	Domain(projectID, domain string) ([]byte, error)
+	// machine collection. When noContent is true each unit's content
+	// payload is stripped via StripContent at parity with CLI
+	// --no-content (content absent per unit, identity/stateVector/
+	// relationships intact).
+	Domain(projectID, domain string, noContent bool) ([]byte, error)
 	// Status returns the workspace status as JSON.
 	Status() ([]byte, error)
 	// Context builds the Context Object around one subject at a depth
@@ -655,7 +661,10 @@ func (s *Server) handleToolsList(req request) []byte {
 			"name": "get",
 			"description": "Fetch one Canonical Knowledge Object (CKO) by identity form: " +
 				"canonical \"<ns>/<type>:<id>:<v>\" or qualified line form \"<ns>/<type>:<id>\" " +
-				"(the latest instance of the line). Returns the machine document (schema eka-cko-v2).",
+				"(the latest instance of the line). Returns the machine document (schema eka-cko-v2). " +
+				"Supports noContent:true to strip the content payload via machine.Document.StripContent at parity " +
+				"with CLI --no-content (content absent, identity/stateVector/relationships intact) for payload economy. " +
+				"Default false (full payloads).",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -663,13 +672,20 @@ func (s *Server) handleToolsList(req request) []byte {
 						"type":        "string",
 						"description": "Identity form to resolve, e.g. \"feather/adr:001-serialization:1\".",
 					},
+					"noContent": map[string]any{
+						"type":        "boolean",
+						"description": "When true, strips the content payload via machine.Document.StripContent (identity/stateVector/relationships intact, content absent) — parity with CLI --no-content. Default false (full payloads).",
+					},
 				},
 			},
 		},
 		map[string]any{
 			"name": "domain",
 			"description": "Return every unit of one Engineering Domain of a project as a machine " +
-				"collection (schema eka-cko-v2, sorted by canonical form).",
+				"collection (schema eka-cko-v2, sorted by canonical form). " +
+				"Supports noContent:true to strip each unit's content payload via machine.Document.StripContent at parity " +
+				"with CLI --no-content (content absent per unit, identity/stateVector/relationships intact) for payload economy. " +
+				"Default false (full payloads).",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -680,6 +696,10 @@ func (s *Server) handleToolsList(req request) []byte {
 					"domain": map[string]any{
 						"type":        "string",
 						"description": "The canonical Engineering Domain name, e.g. \"Architecture\".",
+					},
+					"noContent": map[string]any{
+						"type":        "boolean",
+						"description": "When true, strips each unit's content payload via machine.Document.StripContent (identity/stateVector/relationships intact, content absent per unit) — parity with CLI --no-content. Default false (full payloads).",
 					},
 				},
 			},
@@ -1272,12 +1292,13 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		return string(data), nil
 	case "get":
 		var p struct {
-			Form string `json:"form"`
+			Form      string `json:"form"`
+			NoContent bool   `json:"noContent"`
 		}
 		if err := s.decodeToolArgs("get", args, &p); err != nil {
 			return "", err
 		}
-		data, err := s.cap.Get(p.Form)
+		data, err := s.cap.Get(p.Form, p.NoContent)
 		if err != nil {
 			return "", err
 		}
@@ -1286,11 +1307,12 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		var p struct {
 			ProjectID string `json:"projectId"`
 			Domain    string `json:"domain"`
+			NoContent bool   `json:"noContent"`
 		}
 		if err := s.decodeToolArgs("domain", args, &p); err != nil {
 			return "", err
 		}
-		data, err := s.cap.Domain(p.ProjectID, p.Domain)
+		data, err := s.cap.Domain(p.ProjectID, p.Domain, p.NoContent)
 		if err != nil {
 			return "", err
 		}

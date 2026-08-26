@@ -34,7 +34,7 @@ func TestOpenDetached(t *testing.T) {
 		t.Error("Exists must be false without a workspace")
 	}
 
-	_, err = cap.Get("feather/adr:001-serialization:1")
+	_, err = cap.Get("feather/adr:001-serialization:1", false)
 	if err == nil {
 		t.Fatal("Get without a workspace must error")
 	}
@@ -125,7 +125,7 @@ func TestGetResolvesObject(t *testing.T) {
 	}
 	defer cap.Close()
 
-	data, err := cap.Get("feather/adr:001-serialization:1")
+	data, err := cap.Get("feather/adr:001-serialization:1", false)
 	if err != nil {
 		t.Fatalf("Get on a seeded object failed: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestGetLineForm(t *testing.T) {
 	}
 	defer cap.Close()
 
-	data, err := cap.Get("feather/adr:001-serialization")
+	data, err := cap.Get("feather/adr:001-serialization", false)
 	if err != nil {
 		t.Fatalf("Get on the line form failed: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestGetUnresolved(t *testing.T) {
 	}
 	defer cap.Close()
 
-	_, err = cap.Get("feather/adr:999-nope:1")
+	_, err = cap.Get("feather/adr:999-nope:1", false)
 	if err == nil {
 		t.Fatal("Get of an unknown identity must error")
 	}
@@ -206,7 +206,7 @@ func TestDomainCollection(t *testing.T) {
 	}
 	defer cap.Close()
 
-	data, err := cap.Domain("feather", "Architecture")
+	data, err := cap.Domain("feather", "Architecture", false)
 	if err != nil {
 		t.Fatalf("Domain failed: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestDomainEmpty(t *testing.T) {
 	}
 	defer cap.Close()
 
-	data, err := cap.Domain("feather", "Operations")
+	data, err := cap.Domain("feather", "Operations", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,6 +260,126 @@ func TestDomainEmpty(t *testing.T) {
 	if units := col["units"].([]any); len(units) != 0 {
 		t.Errorf("units = %v, want empty", units)
 	}
+}
+
+// TestGetNoContentStripsContent: noContent:true strips the content payload
+// via machine.Document.StripContent at parity with CLI --no-content —
+// content absent, identity/stateVector/relationships intact. Payload
+// measurement: stripped is substantially smaller than full.
+func TestGetNoContentStripsContent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("EKA_HOME", home)
+	// Seed with a relationship so we can assert relationships intact.
+	u := testUnit()
+	u.Relationships = []exchange.Relationship{{Type: "depends-on", Target: "feather/adr:002"}}
+	u.StateVector.ContentState = "draft"
+	seedUnit(t, u)
+
+	cap, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cap.Close()
+
+	full, err := cap.Get("feather/adr:001-serialization:1", false)
+	if err != nil {
+		t.Fatalf("Get full failed: %v", err)
+	}
+	stripped, err := cap.Get("feather/adr:001-serialization:1", true)
+	if err != nil {
+		t.Fatalf("Get noContent failed: %v", err)
+	}
+	var fullDoc, stripDoc map[string]any
+	if err := json.Unmarshal(full, &fullDoc); err != nil {
+		t.Fatalf("full Get must be JSON: %v", err)
+	}
+	if err := json.Unmarshal(stripped, &stripDoc); err != nil {
+		t.Fatalf("stripped Get must be JSON: %v", err)
+	}
+	if _, has := fullDoc["content"]; !has {
+		t.Error("full Get must carry content")
+	}
+	if _, has := stripDoc["content"]; has {
+		t.Error("stripped Get must NOT carry content (StripContent)")
+	}
+	// Identity/stateVector/relationships intact.
+	for _, key := range []string{"identity", "stateVector", "relationships", "canonicalForm"} {
+		if _, has := stripDoc[key]; !has {
+			t.Errorf("stripped Get must retain %q, got keys %v", key, stripDoc)
+		}
+	}
+	if stripDoc["canonicalForm"] != "feather/adr:001-serialization:1" {
+		t.Errorf("canonicalForm = %v", stripDoc["canonicalForm"])
+	}
+	// Default unchanged: omitted noContent (false) is full payloads — already verified.
+	// Payload measurement: stripped is smaller (content carries the large body).
+	if len(stripped) >= len(full) {
+		t.Errorf("stripped payload len %d must be < full len %d (payload economy)", len(stripped), len(full))
+	}
+	t.Logf("get payload: full %d bytes, stripped %d bytes (saved %d bytes, %.1f%%)", len(full), len(stripped), len(full)-len(stripped), 100*float64(len(full)-len(stripped))/float64(len(full)))
+}
+
+// TestDomainNoContentStripsContent: domain noContent:true strips each unit's
+// content payload via StripContent at parity with CLI --no-content —
+// content absent per unit, identity/stateVector/relationships intact.
+// Measures collection payload economy.
+func TestDomainNoContentStripsContent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("EKA_HOME", home)
+	u := testUnit()
+	u.StateVector.ContentState = "draft"
+	u.Relationships = []exchange.Relationship{{Type: "depends-on", Target: "feather/adr:002"}}
+	seedUnit(t, u)
+
+	cap, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cap.Close()
+
+	full, err := cap.Domain("feather", "Architecture", false)
+	if err != nil {
+		t.Fatalf("Domain full failed: %v", err)
+	}
+	stripped, err := cap.Domain("feather", "Architecture", true)
+	if err != nil {
+		t.Fatalf("Domain noContent failed: %v", err)
+	}
+	var fullCol, stripCol map[string]any
+	if err := json.Unmarshal(full, &fullCol); err != nil {
+		t.Fatalf("full Domain must be JSON: %v", err)
+	}
+	if err := json.Unmarshal(stripped, &stripCol); err != nil {
+		t.Fatalf("stripped Domain must be JSON: %v", err)
+	}
+	if fullCol["count"] != float64(1) || stripCol["count"] != float64(1) {
+		t.Errorf("count full %v stripped %v, want 1", fullCol["count"], stripCol["count"])
+	}
+	fUnits := fullCol["units"].([]any)
+	sUnits := stripCol["units"].([]any)
+	if len(fUnits) != 1 || len(sUnits) != 1 {
+		t.Fatalf("units len full %d stripped %d, want 1", len(fUnits), len(sUnits))
+	}
+	fU := fUnits[0].(map[string]any)
+	sU := sUnits[0].(map[string]any)
+	if _, has := fU["content"]; !has {
+		t.Error("full domain unit must carry content")
+	}
+	if _, has := sU["content"]; has {
+		t.Error("stripped domain unit must NOT carry content (StripContent per unit)")
+	}
+	for _, key := range []string{"identity", "stateVector", "relationships", "canonicalForm"} {
+		if _, has := sU[key]; !has {
+			t.Errorf("stripped domain unit must retain %q", key)
+		}
+	}
+	if sU["canonicalForm"] != "feather/adr:001-serialization:1" {
+		t.Errorf("stripped canonicalForm = %v", sU["canonicalForm"])
+	}
+	if len(stripped) >= len(full) {
+		t.Errorf("stripped domain len %d must be < full len %d", len(stripped), len(full))
+	}
+	t.Logf("domain payload: full %d bytes, stripped %d bytes (saved %d bytes, %.1f%%)", len(full), len(stripped), len(full)-len(stripped), 100*float64(len(full)-len(stripped))/float64(len(full)))
 }
 
 // TestStatusJSON: Status returns the eka-core workspace status

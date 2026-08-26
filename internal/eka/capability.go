@@ -101,10 +101,16 @@ func (c *Capability) RepoCount() (int, error) {
 // line). Resolution and parsing are entirely eka-core's
 // (Resolver.Resolve + conformance.ParseReference).
 //
+// When noContent is true the content payload is stripped via
+// machine.Document.StripContent at parity with CLI --no-content
+// (identity, stateVector, relationships, changeLog etc. intact;
+// "content" absent) for payload economy. Default false preserves the
+// full payloads.
+//
 // When the workspace is not initialized, it returns a deterministic
 // uninitialized error without leaking store paths — the MCP boundary
 // sanitizes any residual path, but the capability already avoids it.
-func (c *Capability) Get(form string) ([]byte, error) {
+func (c *Capability) Get(form string, noContent bool) ([]byte, error) {
 	if !c.Exists() {
 		return nil, fmt.Errorf("eka: workspace not initialized")
 	}
@@ -119,14 +125,21 @@ func (c *Capability) Get(form string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if noContent {
+		doc.StripContent()
+	}
 	return doc.MarshalCompact()
 }
 
 // Domain returns every unit of one Engineering Domain of a project as a
 // machine collection (schema eka-cko-v2, sorted by canonical form,
 // compact form). The search itself is eka-core's (Knowledge.Search);
-// NewCollection provides the deterministic domain projection.
-func (c *Capability) Domain(projectID, domain string) ([]byte, error) {
+// NewCollection provides the deterministic domain projection. When
+// noContent is true each unit's content payload is stripped via
+// machine.Document.StripContent at parity with CLI --no-content
+// (identity, stateVector, relationships etc. intact; "content" absent
+// per unit) for payload economy. Default false preserves full payloads.
+func (c *Capability) Domain(projectID, domain string, noContent bool) ([]byte, error) {
 	if !c.Exists() {
 		return nil, fmt.Errorf("eka: workspace not initialized")
 	}
@@ -137,6 +150,11 @@ func (c *Capability) Domain(projectID, domain string) ([]byte, error) {
 	col, err := machine.NewCollection(domain, units)
 	if err != nil {
 		return nil, err
+	}
+	if noContent {
+		for _, d := range col.Units {
+			d.StripContent()
+		}
 	}
 	return col.MarshalCompact()
 }
