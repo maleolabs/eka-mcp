@@ -18,7 +18,11 @@ package mcp
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"os"
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -57,6 +61,203 @@ func ResourceCount() (int, error) {
 		return 0, err
 	}
 	return 1 + len(skills) + len(types), nil
+}
+
+// toolRequiredFields is THE single declaration of the required string
+// arguments per tool — the required-field contract of the MCP surface.
+// BOTH consumers are derived from this one map, so they cannot drift:
+//
+//  1. the advertised inputSchema: handleToolsList copies each tool's
+//     slice into its schema "required" array verbatim;
+//  2. the runtime validation: decodeToolArgs enforces exactly these
+//     fields (present, a string, non-empty) for every tools/call.
+//
+// Drift between what is advertised and what is enforced is how the
+// eka_new false-refusal incident happened (bug:mcp-new-false-refusal):
+// a reviewed source branch advertised/enforced only {type,id} while the
+// deployed build enforced {project,namespace,type,id}, so callers that
+// trusted the reviewed schema were refused by the runtime. Do NOT
+// hardcode a "required" array anywhere else; add the fields here.
+//
+// The slice order is the deterministic report order: when several
+// fields are absent, the FIRST declared offender is named.
+var toolRequiredFields = map[string][]string{
+	"context":          {"subject"},
+	"get":              {"form"},
+	"domain":           {"projectId", "domain"},
+	"validate":         {"root"},
+	"new":              {"project", "namespace", "type", "id"},
+	"publish":          {"target"},
+	"transition":       {"target"},
+	"note":             {"target", "role"},
+	"draft_read":       {"target"},
+	"view":             {"target"},
+	"discard":          {"target"},
+	"assign":           {"target", "to"},
+	"reassign":         {"target", "to"},
+	"unassign":         {"target"},
+	"feedback_new":     {"type", "title"},
+	"feedback_publish": {"id"},
+}
+
+// Parameter-refusal diagnostic causes (bug:mcp-new-false-refusal): the
+// old single schema-shaped refusal conflated three distinct causes,
+// which made the intermittent eka_new refusals undiagnosable. Every
+// argument-shaped refusal now names exactly one cause.
+const (
+	causeInvalidJSON  = "invalid_json"  // arguments are not valid JSON (truncated/malformed)
+	causeMissingField = "missing_field" // a required field is absent
+	causeEmptyField   = "empty_field"   // a required field is present but empty/whitespace
+	causeWrongType    = "wrong_type"    // a required field is present but not a string
+	causeInvalidArg   = "invalid_arg"   // an optional field has a wrong JSON type
+)
+
+// logParamRefusal writes one diagnostics line for an argument-shaped
+// refusal to s.diag (stderr in production). Format (single line, fixed
+// field order, no argument VALUES — only shapes and lengths, so no
+// workspace content ever leaks into logs):
+//
+//	eka-mcp param-refusal tool=new args_bytes=4132 cause=missing_field field=project
+//
+// The args_bytes length is the discriminator between client-side
+// truncation (small/unusual byte counts on large intended payloads)
+// and plain parameter omission. Diagnostics are best-effort: write
+// errors are ignored and never fail the protocol.
+func (s *Server) logParamRefusal(tool string, argsLen int, cause, field string) {
+	if s.diag == nil {
+		return
+	}
+	var b strings.Builder
+	b.WriteString("eka-mcp param-refusal tool=")
+	b.WriteString(tool)
+	fmt.Fprintf(&b, " args_bytes=%d cause=%s", argsLen, cause)
+	if field != "" {
+		b.WriteString(" field=")
+		b.WriteString(field)
+	}
+	b.WriteByte('\n')
+	_, _ = io.WriteString(s.diag, b.String())
+}
+
+// decodeToolArgs validates and decodes the arguments of one tool call.
+// It discriminates the three refusal causes that the old conflated
+// "<tool> requires {...}" message hid (bug:mcp-new-false-refusal):
+//
+//  1. malformed/truncated JSON → surfaces the sanitized decoder error;
+//  2. missing required field → names WHICH field is absent;
+//  3. present-but-empty or wrong-typed field → names the field.
+//
+// The required-field set comes from toolRequiredFields (the single
+// source shared with the advertised inputSchema). Absent ("null" or
+// empty) arguments mean "no fields at all": optional-only tools
+// proceed with zero values, tools with required fields are refused
+// naming the first absent field. dst (the per-tool argument struct) is
+// decoded last so optional-field type mismatches are also refused
+// deterministically. Every refusal is logged via logParamRefusal.
+func (s *Server) decodeToolArgs(tool string, args json.RawMessage, dst any) error {
+	trimmed := bytes.TrimSpace(args)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		// Absent arguments: every required field is absent.
+		for _, name := range toolRequiredFields[tool] {
+			s.logParamRefusal(tool, len(args), causeMissingField, name)
+			return fmt.Errorf("%s requires %q: missing required field", tool, name)
+		}
+		return nil
+	}
+	// Cause 1a: the arguments are not valid JSON at all (a corrupted
+	// payload). Note a TRUNCATED request line never reaches this layer:
+	// it is refused upstream by HandleMessage's fixed parse refusal.
+	var probe any
+	if err := json.Unmarshal(trimmed, &probe); err != nil {
+		s.logParamRefusal(tool, len(args), causeInvalidJSON, "")
+		return fmt.Errorf("%s requires valid JSON arguments: %s", tool, SanitizeError(err))
+	}
+	// Cause 1b: valid JSON but not an object (e.g. a double-encoded
+	// JSON string — the classic large-payload serialization mistake).
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &fields); err != nil {
+		s.logParamRefusal(tool, len(args), causeInvalidJSON, "")
+		return fmt.Errorf("%s requires a JSON object argument (got %s)", tool, jsonKind(trimmed))
+	}
+	for _, name := range toolRequiredFields[tool] {
+		raw, ok := fields[name]
+		if !ok {
+			s.logParamRefusal(tool, len(args), causeMissingField, name)
+			return fmt.Errorf("%s requires %q: missing required field", tool, name)
+		}
+		var sv string
+		if err := json.Unmarshal(raw, &sv); err != nil {
+			s.logParamRefusal(tool, len(args), causeWrongType, name)
+			return fmt.Errorf("%s requires %q to be a non-empty string (got %s)", tool, name, jsonKind(raw))
+		}
+		if strings.TrimSpace(sv) == "" {
+			s.logParamRefusal(tool, len(args), causeEmptyField, name)
+			return fmt.Errorf("%s requires %q to be a non-empty string", tool, name)
+		}
+	}
+	// Optional fields: decode the caller's struct; a wrong JSON type on
+	// an optional field is refused naming the field.
+	if dst != nil {
+		if err := json.Unmarshal(trimmed, dst); err != nil {
+			s.logParamRefusal(tool, len(args), causeInvalidArg, typeErrorField(err))
+			return fmt.Errorf("%s has an invalid argument: %s", tool, typeErrorDetail(err))
+		}
+	}
+	return nil
+}
+
+// jsonKind reports the JSON kind of a raw value (for wrong-type
+// refusals): string, number, boolean, object, array or null.
+func jsonKind(raw json.RawMessage) string {
+	t := bytes.TrimSpace(raw)
+	switch {
+	case len(t) == 0:
+		return "empty"
+	case t[0] == '"':
+		return "string"
+	case t[0] == '{':
+		return "object"
+	case t[0] == '[':
+		return "array"
+	case bytes.Equal(t, []byte("null")):
+		return "null"
+	case t[0] == 't' || t[0] == 'f':
+		return "boolean"
+	default:
+		return "number"
+	}
+}
+
+// typeErrorField extracts the offending field name from a struct
+// decode error ("" when the error carries none).
+func typeErrorField(err error) string {
+	var ute *json.UnmarshalTypeError
+	if errors.As(err, &ute) {
+		return ute.Field
+	}
+	return ""
+}
+
+// typeErrorDetail renders a deterministic, client-safe detail for a
+// struct decode error: the expected JSON kind of the offending field
+// (never Go type names or paths).
+func typeErrorDetail(err error) string {
+	var ute *json.UnmarshalTypeError
+	if errors.As(err, &ute) {
+		switch ute.Type.String() {
+		case "bool":
+			return fmt.Sprintf("field %q must be a boolean", ute.Field)
+		case "int", "int64":
+			return fmt.Sprintf("field %q must be an integer", ute.Field)
+		case "string":
+			return fmt.Sprintf("field %q must be a string", ute.Field)
+		default:
+			if ute.Type.Kind() == reflect.Slice {
+				return fmt.Sprintf("field %q must be an array", ute.Field)
+			}
+		}
+	}
+	return "arguments do not match the tool's input schema"
 }
 
 // JSON-RPC 2.0 error codes (spec §5.1) plus the MCP extensions.
@@ -241,11 +442,24 @@ type Server struct {
 	// maxLineSize caps one stdio message line (defaultMaxLineSize).
 	// Tests shrink it to exercise the boundary cheaply.
 	maxLineSize int
+	// diag receives one-line operational diagnostics (parameter-refusal
+	// records). It is NEVER the protocol stream: stdout carries JSON-RPC
+	// traffic only, diagnostics go to stderr (or the injected writer).
+	// A nil diag discards.
+	diag io.Writer
 }
 
-// NewServer wires the server around one capability.
+// NewServer wires the server around one capability. Diagnostics are
+// written to os.Stderr (never stdout — stdout is the protocol stream).
 func NewServer(cap Capability) *Server {
-	return &Server{cap: cap, maxLineSize: defaultMaxLineSize}
+	return NewServerWithDiagnostics(cap, os.Stderr)
+}
+
+// NewServerWithDiagnostics wires the server around one capability and
+// routes operational diagnostics to diag. A nil diag discards. Tests
+// inject a buffer to assert the diagnostic records.
+func NewServerWithDiagnostics(cap Capability, diag io.Writer) *Server {
+	return &Server{cap: cap, maxLineSize: defaultMaxLineSize, diag: diag}
 }
 
 // request is a JSON-RPC 2.0 request object. ID is kept raw so string,
@@ -295,7 +509,9 @@ func validID(id json.RawMessage) bool {
 // HandleMessage processes one JSON-RPC message and returns the response
 // bytes to write, or nil when the message needs no response (a
 // notification). It is the pure dispatch unit: parse, route, respond —
-// it never touches I/O, so it is directly testable.
+// it never touches the protocol streams (the only I/O is best-effort
+// operational diagnostics on s.diag, never stdout), so it is directly
+// testable.
 //
 // The message must be exactly one JSON-RPC request object. A JSON-RPC
 // batch (an array of requests) is rejected deterministically — the
@@ -405,7 +621,11 @@ func (s *Server) handleInitialize(req request) []byte {
 // handleToolsList returns the tool set of the server: the EKA
 // knowledge-retrieval, context and authoring surfaces as MCP tools,
 // with JSON Schema input definitions. The order is fixed and
-// deterministic (the acceptance contract of the milestone).
+// deterministic (the acceptance contract of the milestone). Each
+// tool's advertised "required" array is DERIVED from
+// toolRequiredFields — the single-source required-field contract
+// shared with the runtime validation (bug:mcp-new-false-refusal), so
+// advertisement and enforcement cannot drift apart.
 func (s *Server) handleToolsList(req request) []byte {
 	tools := []any{
 		map[string]any{
@@ -429,7 +649,6 @@ func (s *Server) handleToolsList(req request) []byte {
 						"description": "Context depth: \"local\" (default), \"dependency\" or \"engineering\".",
 					},
 				},
-				"required": []string{"subject"},
 			},
 		},
 		map[string]any{
@@ -445,7 +664,6 @@ func (s *Server) handleToolsList(req request) []byte {
 						"description": "Identity form to resolve, e.g. \"feather/adr:001-serialization:1\".",
 					},
 				},
-				"required": []string{"form"},
 			},
 		},
 		map[string]any{
@@ -464,7 +682,6 @@ func (s *Server) handleToolsList(req request) []byte {
 						"description": "The canonical Engineering Domain name, e.g. \"Architecture\".",
 					},
 				},
-				"required": []string{"projectId", "domain"},
 			},
 		},
 		map[string]any{
@@ -489,7 +706,6 @@ func (s *Server) handleToolsList(req request) []byte {
 						"description": "The repository root to validate (its docs/ tree is scanned).",
 					},
 				},
-				"required": []string{"root"},
 			},
 		},
 		map[string]any{
@@ -552,7 +768,6 @@ func (s *Server) handleToolsList(req request) []byte {
 						"description": "Optional JSON object merged over the type's required content keys.",
 					},
 				},
-				"required": []string{"project", "namespace", "type", "id"},
 			},
 		},
 		map[string]any{
@@ -576,7 +791,6 @@ func (s *Server) handleToolsList(req request) []byte {
 						"description": "Optional explicit instance version (must exceed the line's highest).",
 					},
 				},
-				"required": []string{"target"},
 			},
 		},
 		map[string]any{
@@ -621,7 +835,6 @@ func (s *Server) handleToolsList(req request) []byte {
 						"description": "Pre-authorize the active-container confirmation gate.",
 					},
 				},
-				"required": []string{"target"},
 			},
 		},
 		map[string]any{
@@ -661,7 +874,6 @@ func (s *Server) handleToolsList(req request) []byte {
 						"description": "Optional JSON object merged over the per-role note template.",
 					},
 				},
-				"required": []string{"target", "role"},
 			},
 		},
 		map[string]any{
@@ -680,7 +892,6 @@ func (s *Server) handleToolsList(req request) []byte {
 						"description": "Optional project scope (default: the cwd repository's project).",
 					},
 				},
-				"required": []string{"target"},
 			},
 		},
 		// TODO(td:mcp-view-naming-fix): remove deprecated `view` alias in next minor version after 1.1.3.
@@ -701,7 +912,6 @@ func (s *Server) handleToolsList(req request) []byte {
 						"description": "Optional project scope (default: the cwd repository's project).",
 					},
 				},
-				"required": []string{"target"},
 			},
 		},
 		map[string]any{
@@ -744,7 +954,6 @@ func (s *Server) handleToolsList(req request) []byte {
 						"description": "Optional project scope (default: the cwd repository's project).",
 					},
 				},
-				"required": []string{"target"},
 			},
 		},
 		map[string]any{
@@ -798,7 +1007,6 @@ func (s *Server) handleToolsList(req request) []byte {
 						"description": "Optional authority kind: user | agent | worker (default agent).",
 					},
 				},
-				"required": []string{"target", "to"},
 			},
 		},
 		map[string]any{
@@ -828,7 +1036,6 @@ func (s *Server) handleToolsList(req request) []byte {
 						"description": "Optional authority kind: user | agent | worker (default agent).",
 					},
 				},
-				"required": []string{"target", "to"},
 			},
 		},
 		map[string]any{
@@ -854,7 +1061,6 @@ func (s *Server) handleToolsList(req request) []byte {
 						"description": "Optional authority kind: user | agent | worker (default agent).",
 					},
 				},
-				"required": []string{"target"},
 			},
 		},
 		map[string]any{
@@ -888,7 +1094,6 @@ func (s *Server) handleToolsList(req request) []byte {
 						"description": "Markdown feedback body (mirrors --content-file contents inline); when omitted the per-type scaffold is used (bug: Steps/Expected/Actual, others: Description).",
 					},
 				},
-				"required": []string{"type", "title"},
 			},
 		},
 		map[string]any{
@@ -910,9 +1115,17 @@ func (s *Server) handleToolsList(req request) []byte {
 						"description": "Feedback id to publish: fbk-YYYYMMDD-slug (with or without .md suffix, mirrors `eka feedback publish <id>`).",
 					},
 				},
-				"required": []string{"id"},
 			},
 		},
+	}
+	// Derivation (bug:mcp-new-false-refusal): every tool's advertised
+	// "required" array is copied from the single-source declaration —
+	// there is deliberately no hardcoded required list anywhere else.
+	for _, t := range tools {
+		tm := t.(map[string]any)
+		if reqFields := toolRequiredFields[tm["name"].(string)]; len(reqFields) > 0 {
+			tm["inputSchema"].(map[string]any)["required"] = reqFields
+		}
 	}
 	return s.resultResponse(req.ID, map[string]any{"tools": tools})
 }
@@ -961,8 +1174,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			ProjectID string `json:"projectId"`
 			Depth     string `json:"depth"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil || p.Subject == "" {
-			return "", fmt.Errorf("context requires {\"subject\": string}")
+		if err := s.decodeToolArgs("context", args, &p); err != nil {
+			return "", err
 		}
 		if p.Depth == "" {
 			p.Depth = "local"
@@ -976,8 +1189,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		var p struct {
 			Form string `json:"form"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil || p.Form == "" {
-			return "", fmt.Errorf("get requires {\"form\": string}")
+		if err := s.decodeToolArgs("get", args, &p); err != nil {
+			return "", err
 		}
 		data, err := s.cap.Get(p.Form)
 		if err != nil {
@@ -989,8 +1202,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			ProjectID string `json:"projectId"`
 			Domain    string `json:"domain"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil || p.ProjectID == "" || p.Domain == "" {
-			return "", fmt.Errorf("domain requires {\"projectId\": string, \"domain\": string}")
+		if err := s.decodeToolArgs("domain", args, &p); err != nil {
+			return "", err
 		}
 		data, err := s.cap.Domain(p.ProjectID, p.Domain)
 		if err != nil {
@@ -1007,8 +1220,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		var p struct {
 			Root string `json:"root"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil || p.Root == "" {
-			return "", fmt.Errorf("validate requires {\"root\": string}")
+		if err := s.decodeToolArgs("validate", args, &p); err != nil {
+			return "", err
 		}
 		data, err := s.cap.Validate(p.Root)
 		if err != nil {
@@ -1029,8 +1242,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			Relationships []Relationship  `json:"relationships"`
 			Content       json.RawMessage `json:"content"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil || p.Project == "" || p.Namespace == "" || p.Type == "" || p.ID == "" {
-			return "", fmt.Errorf("new requires {\"project\": string, \"namespace\": string, \"type\": string, \"id\": string}")
+		if err := s.decodeToolArgs("new", args, &p); err != nil {
+			return "", err
 		}
 		by, err := resolveAuthor(p.By, p.ByKind)
 		if err != nil {
@@ -1062,8 +1275,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			Project         string `json:"project"`
 			InstanceVersion int    `json:"instanceVersion"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" {
-			return "", fmt.Errorf("publish requires {\"target\": string}")
+		if err := s.decodeToolArgs("publish", args, &p); err != nil {
+			return "", err
 		}
 		data, err := s.cap.Publish(PublishRequest{
 			Target:          p.Target,
@@ -1085,8 +1298,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			ByKind    string `json:"byKind"`
 			Confirmed bool   `json:"confirmed"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" {
-			return "", fmt.Errorf("transition requires {\"target\": string}")
+		if err := s.decodeToolArgs("transition", args, &p); err != nil {
+			return "", err
 		}
 		by, err := resolveAuthor(p.By, p.ByKind)
 		if err != nil {
@@ -1115,8 +1328,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			ByKind   string          `json:"byKind"`
 			Content  json.RawMessage `json:"content"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" || p.Role == "" {
-			return "", fmt.Errorf("note requires {\"target\": string, \"role\": string}")
+		if err := s.decodeToolArgs("note", args, &p); err != nil {
+			return "", err
 		}
 		by, err := resolveAuthor(p.By, p.ByKind)
 		if err != nil {
@@ -1143,8 +1356,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			Target  string `json:"target"`
 			Project string `json:"project"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" {
-			return "", fmt.Errorf("draft_read requires {\"target\": string}")
+		if err := s.decodeToolArgs("draft_read", args, &p); err != nil {
+			return "", err
 		}
 		data, err := s.cap.DraftRead(p.Target, p.Project)
 		if err != nil {
@@ -1158,8 +1371,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			Target  string `json:"target"`
 			Project string `json:"project"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" {
-			return "", fmt.Errorf("view requires {\"target\": string}")
+		if err := s.decodeToolArgs("view", args, &p); err != nil {
+			return "", err
 		}
 		data, err := s.cap.View(p.Target, p.Project)
 		if err != nil {
@@ -1170,7 +1383,9 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		var p struct {
 			Project string `json:"project"`
 		}
-		_ = json.Unmarshal(args, &p)
+		if err := s.decodeToolArgs("draft_list", args, &p); err != nil {
+			return "", err
+		}
 		data, err := s.cap.DraftList(p.Project)
 		if err != nil {
 			return "", err
@@ -1187,8 +1402,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			Target  string `json:"target"`
 			Project string `json:"project"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" {
-			return "", fmt.Errorf("discard requires {\"target\": string}")
+		if err := s.decodeToolArgs("discard", args, &p); err != nil {
+			return "", err
 		}
 		data, err := s.cap.Discard(p.Target, p.Project)
 		if err != nil {
@@ -1222,10 +1437,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			Adopt    bool   `json:"adopt"`
 			Override bool   `json:"override"`
 		}
-		if len(args) != 0 && string(args) != "null" {
-			if err := json.Unmarshal(args, &p); err != nil {
-				return "", fmt.Errorf("sync_push requires {\"repoPath\": string, \"adopt\": boolean, \"override\": boolean} (all optional)")
-			}
+		if err := s.decodeToolArgs("sync_push", args, &p); err != nil {
+			return "", err
 		}
 		data, err := s.cap.SyncPush(p.RepoPath, p.Adopt, p.Override)
 		if err != nil {
@@ -1240,8 +1453,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			By       string `json:"by"`
 			ByKind   string `json:"byKind"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" || p.To == "" {
-			return "", fmt.Errorf("assign requires {\"target\": string, \"to\": string}")
+		if err := s.decodeToolArgs("assign", args, &p); err != nil {
+			return "", err
 		}
 		by, err := resolveAuthor(p.By, p.ByKind)
 		if err != nil {
@@ -1265,8 +1478,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			By       string `json:"by"`
 			ByKind   string `json:"byKind"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" || p.To == "" {
-			return "", fmt.Errorf("reassign requires {\"target\": string, \"to\": string}")
+		if err := s.decodeToolArgs("reassign", args, &p); err != nil {
+			return "", err
 		}
 		by, err := resolveAuthor(p.By, p.ByKind)
 		if err != nil {
@@ -1289,8 +1502,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			By       string `json:"by"`
 			ByKind   string `json:"byKind"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil || p.Target == "" {
-			return "", fmt.Errorf("unassign requires {\"target\": string}")
+		if err := s.decodeToolArgs("unassign", args, &p); err != nil {
+			return "", err
 		}
 		by, err := resolveAuthor(p.By, p.ByKind)
 		if err != nil {
@@ -1314,8 +1527,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			Command  string `json:"command"`
 			Content  string `json:"content"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil || strings.TrimSpace(p.Type) == "" || strings.TrimSpace(p.Title) == "" {
-			return "", fmt.Errorf("feedback_new requires {\"type\": string, \"title\": string}")
+		if err := s.decodeToolArgs("feedback_new", args, &p); err != nil {
+			return "", err
 		}
 		data, err := s.cap.FeedbackNew(FeedbackNewRequest{
 			Type:     p.Type,
@@ -1330,14 +1543,14 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		}
 		return string(data), nil
 	case "feedback_list":
-		// No required args — empty object or absent args both list.
-		if len(args) != 0 && string(args) != "null" && strings.TrimSpace(string(args)) != "{}" {
-			// Allow any object but validate it's an object to fuzz deterministically.
-			var raw map[string]json.RawMessage
-			if err := json.Unmarshal(args, &raw); err != nil {
-				return "", fmt.Errorf("feedback_list requires {}")
-			}
-			// Unknown fields are ignored (deterministic), but non-object already refused.
+		// No required fields (no toolRequiredFields entry) — empty
+		// object, absent or null arguments all list. Routed through
+		// decodeToolArgs so malformed (non-object) arguments refuse
+		// through the same discriminating, diagnostics-logged path as
+		// every other tool — the former inline refusal bypassed the
+		// param-refusal log line.
+		if err := s.decodeToolArgs("feedback_list", args, nil); err != nil {
+			return "", err
 		}
 		data, err := s.cap.FeedbackList()
 		if err != nil {
@@ -1348,8 +1561,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		var p struct {
 			ID string `json:"id"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil || strings.TrimSpace(p.ID) == "" {
-			return "", fmt.Errorf("feedback_publish requires {\"id\": string}")
+		if err := s.decodeToolArgs("feedback_publish", args, &p); err != nil {
+			return "", err
 		}
 		data, err := s.cap.FeedbackPublish(FeedbackPublishRequest{ID: p.ID})
 		if err != nil {
