@@ -501,6 +501,318 @@ func TestDraftReadAndViewAliasDeterministic(t *testing.T) {
 	}
 }
 
+// --- LegalTransitions pinned tests (sto:mcp-transition-transparency) ---
+
+// TestNewDraftLegalTransitions_SCP: draftResult.legalTransitions["content-state"]
+// must be the exact living variant [draft review approved amended] derived
+// from conformance.DomainValues — no duplicated tables. Pinned to the
+// actual DomainValues order in eka-core/conformance/state.go.
+func TestNewDraftLegalTransitions_SCP(t *testing.T) {
+	authoringRuntime(t)
+	cap, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cap.Close()
+
+	data, err := cap.NewDraft(mcp.NewDraftRequest{
+		Project:   "feather",
+		Namespace: "feather",
+		Type:      "scp",
+		ID:        "001-legal-scp",
+		By:        mcp.AuthorIdentity{Kind: "agent", Name: "mcp-agent"},
+	})
+	if err != nil {
+		t.Fatalf("NewDraft scp failed: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("NewDraft must return JSON: %v\n%s", err, data)
+	}
+	lt, ok := doc["legalTransitions"].(map[string]any)
+	if !ok {
+		t.Fatalf("legalTransitions = %v, want map", doc["legalTransitions"])
+	}
+	// scp owns content-state (living) + existence-state
+	wantContent := []string{"draft", "review", "approved", "amended"}
+	if !equalStringSlices(toStringSlice(lt["content-state"]), wantContent) {
+		t.Errorf("scp legalTransitions[content-state] = %v, want %v", lt["content-state"], wantContent)
+	}
+	wantExistence := []string{"active", "archived", "retired"}
+	if !equalStringSlices(toStringSlice(lt["existence-state"]), wantExistence) {
+		t.Errorf("scp legalTransitions[existence-state] = %v, want %v", lt["existence-state"], wantExistence)
+	}
+	// Must be identical to helper (single source of truth, no drift)
+	wantHelper := legalTransitions("scp")
+	assertLegalTransitionsMap(t, lt, wantHelper)
+	if got, want := len(lt), len(wantHelper); got != want {
+		t.Errorf("scp legalTransitions domains = %d, want %d", got, want)
+	}
+	// Verify against DomainValues directly
+	if !equalStringSlices(conformance.DomainValues("content-state", "scp"), wantContent) {
+		t.Errorf("conformance.DomainValues content-state scp drift: got %v want %v", conformance.DomainValues("content-state", "scp"), wantContent)
+	}
+}
+
+// TestPublishLegalTransitions_Plan: publishResult for plan type has
+// planning-state [draft approved immutable] — pinned to actual DomainValues.
+func TestPublishLegalTransitions_Plan(t *testing.T) {
+	authoringRuntime(t)
+	cap, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cap.Close()
+
+	if _, err := cap.NewDraft(mcp.NewDraftRequest{
+		Project:   "feather",
+		Namespace: "feather",
+		Type:      "plan",
+		ID:        "roadmap-v1",
+		Dimension: "planning",
+		By:        mcp.AuthorIdentity{Kind: "agent", Name: "mcp-agent"},
+		Content:   map[string]any{"objective": "obj", "scope": "scope", "outOfScope": "none"},
+	}); err != nil {
+		t.Fatalf("NewDraft plan failed: %v", err)
+	}
+	data, err := cap.Publish(mcp.PublishRequest{Target: "feather/plan:roadmap-v1", Project: "feather"})
+	if err != nil {
+		t.Fatalf("Publish plan failed: %v", err)
+	}
+	var res map[string]any
+	if err := json.Unmarshal(data, &res); err != nil {
+		t.Fatalf("Publish must return JSON: %v\n%s", err, data)
+	}
+	lt, ok := res["legalTransitions"].(map[string]any)
+	if !ok {
+		t.Fatalf("publish legalTransitions = %v, want map", res["legalTransitions"])
+	}
+	wantPlanning := []string{"draft", "approved", "immutable"}
+	if !equalStringSlices(toStringSlice(lt["planning-state"]), wantPlanning) {
+		t.Errorf("plan legalTransitions[planning-state] = %v, want %v", lt["planning-state"], wantPlanning)
+	}
+	wantContent := []string{"draft", "review", "approved", "amended"}
+	if !equalStringSlices(toStringSlice(lt["content-state"]), wantContent) {
+		t.Errorf("plan legalTransitions[content-state] = %v, want %v", lt["content-state"], wantContent)
+	}
+	wantExistence := []string{"active", "archived", "retired"}
+	if !equalStringSlices(toStringSlice(lt["existence-state"]), wantExistence) {
+		t.Errorf("plan legalTransitions[existence-state] = %v, want %v", lt["existence-state"], wantExistence)
+	}
+	wantHelper := legalTransitions("plan")
+	assertLegalTransitionsMap(t, lt, wantHelper)
+	if !equalStringSlices(conformance.DomainValues("planning-state", "plan"), wantPlanning) {
+		t.Errorf("conformance.DomainValues planning-state drift: got %v want %v", conformance.DomainValues("planning-state", "plan"), wantPlanning)
+	}
+}
+
+// TestDraftReadInjectsLegalTransitions: draft_read JSON contains
+// legalTransitions identical to helper and preserves original fields.
+func TestDraftReadInjectsLegalTransitions(t *testing.T) {
+	authoringRuntime(t)
+	cap, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cap.Close()
+
+	if _, err := cap.NewDraft(mcp.NewDraftRequest{
+		Project:   "feather",
+		Namespace: "feather",
+		Type:      "adr",
+		ID:        "010-draft-read-lt",
+		By:        mcp.AuthorIdentity{Kind: "agent", Name: "mcp-agent"},
+		Content:   map[string]any{"context": "hello"},
+	}); err != nil {
+		t.Fatalf("NewDraft failed: %v", err)
+	}
+	data, err := cap.DraftRead("feather/adr:010-draft-read-lt", "feather")
+	if err != nil {
+		t.Fatalf("DraftRead failed: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("DraftRead must return JSON: %v\n%s", err, data)
+	}
+	// preserves original fields
+	if doc["type"] != "adr" || doc["id"] != "010-draft-read-lt" || doc["namespace"] != "feather" {
+		t.Errorf("draft_read must preserve original fields, got %v", doc)
+	}
+	if doc["content"] == nil {
+		t.Error("draft_read must preserve content")
+	}
+	content := doc["content"].(map[string]any)
+	if content["context"] != "hello" {
+		t.Errorf("draft_read content merge = %v, want hello", content["context"])
+	}
+	lt, ok := doc["legalTransitions"].(map[string]any)
+	if !ok {
+		t.Fatalf("draft_read legalTransitions = %v, want map", doc["legalTransitions"])
+	}
+	wantHelper := legalTransitions("adr")
+	assertLegalTransitionsMap(t, lt, wantHelper)
+	// adr content-state variant is proposed/accepted/superseded
+	if !equalStringSlices(toStringSlice(lt["content-state"]), []string{"proposed", "accepted", "superseded"}) {
+		t.Errorf("adr content-state = %v, want [proposed accepted superseded]", lt["content-state"])
+	}
+}
+
+// TestViewAliasIdentical: view alias returns identical JSON to draft_read
+// with same legalTransitions and preserves fields.
+func TestViewAliasIdentical(t *testing.T) {
+	authoringRuntime(t)
+	cap, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cap.Close()
+
+	if _, err := cap.NewDraft(mcp.NewDraftRequest{
+		Project:   "feather",
+		Namespace: "feather",
+		Type:      "scp",
+		ID:        "011-view-alias",
+		By:        mcp.AuthorIdentity{Kind: "agent", Name: "mcp-agent"},
+	}); err != nil {
+		t.Fatalf("NewDraft failed: %v", err)
+	}
+	a, err := cap.DraftRead("feather/scp:011-view-alias", "feather")
+	if err != nil {
+		t.Fatalf("DraftRead failed: %v", err)
+	}
+	b, err := cap.View("feather/scp:011-view-alias", "feather")
+	if err != nil {
+		t.Fatalf("View failed: %v", err)
+	}
+	if string(a) != string(b) {
+		t.Errorf("DraftRead and View alias must return identical JSON, got %q vs %q", a, b)
+	}
+	var da, db map[string]any
+	if err := json.Unmarshal(a, &da); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &db); err != nil {
+		t.Fatal(err)
+	}
+	// both contain legalTransitions identical to helper
+	la, ok := da["legalTransitions"].(map[string]any)
+	if !ok {
+		t.Fatalf("DraftRead legalTransitions missing: %v", da)
+	}
+	lb, ok := db["legalTransitions"].(map[string]any)
+	if !ok {
+		t.Fatalf("View legalTransitions missing: %v", db)
+	}
+	wantHelper := legalTransitions("scp")
+	assertLegalTransitionsMap(t, la, wantHelper)
+	assertLegalTransitionsMap(t, lb, wantHelper)
+	if da["type"] != "scp" || da["id"] != "011-view-alias" {
+		t.Errorf("view alias must preserve original fields, got %v", da)
+	}
+}
+
+// TestLegalTransitionsUnknownTypeReturnsEmpty: unknown type -> {} (empty map, not nil).
+func TestLegalTransitionsUnknownTypeReturnsEmpty(t *testing.T) {
+	lt := legalTransitions("unknown-type-xyz")
+	if lt == nil {
+		t.Fatal("legalTransitions unknown type must return non-nil empty map, got nil")
+	}
+	if len(lt) != 0 {
+		t.Errorf("legalTransitions unknown type = %v, want {}", lt)
+	}
+	b, _ := json.Marshal(lt)
+	if string(b) != "{}" {
+		t.Errorf("unknown type JSON = %s, want {}", b)
+	}
+	// also via inject: draft with unknown type gets {}
+	data := []byte(`{"type":"unknown-type-xyz","id":"001"}`)
+	out, err := injectLegalTransitions(data)
+	if err != nil {
+		t.Fatalf("injectLegalTransitions failed: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if um, ok := doc["legalTransitions"].(map[string]any); !ok || len(um) != 0 {
+		t.Errorf("unknown type inject legalTransitions = %v, want {}", doc["legalTransitions"])
+	}
+}
+
+// TestInjectLegalTransitionsInvalidJSONPassthrough: invalid JSON is returned unchanged.
+func TestInjectLegalTransitionsInvalidJSONPassthrough(t *testing.T) {
+	invalid := []byte(`{not json`)
+	out, err := injectLegalTransitions(invalid)
+	if err != nil {
+		t.Fatalf("injectLegalTransitions invalid JSON must not error: %v", err)
+	}
+	if string(out) != string(invalid) {
+		t.Errorf("invalid JSON passthrough = %q, want %q", out, invalid)
+	}
+	// missing type field also passthrough (no legalTransitions injected? original preserved)
+	noType := []byte(`{"id":"001","namespace":"feather"}`)
+	out2, err := injectLegalTransitions(noType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(out2, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := doc["legalTransitions"]; has {
+		t.Error("missing type must not inject legalTransitions (passthrough)")
+	}
+	if string(out2) != string(noType) {
+		// json.Marshal reorders but content equal via map comparison — allow re-encoded equality
+		var a, b map[string]any
+		_ = json.Unmarshal(noType, &a)
+		_ = json.Unmarshal(out2, &b)
+		if len(a) != len(b) {
+			t.Errorf("missing type passthrough mismatch: got %s want %s", out2, noType)
+		}
+	}
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func toStringSlice(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, len(arr))
+	for i, e := range arr {
+		out[i], _ = e.(string)
+	}
+	return out
+}
+
+func assertLegalTransitionsMap(t *testing.T, got map[string]any, want map[string][]string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("legalTransitions len = %d, want %d: got %v want %v", len(got), len(want), got, want)
+	}
+	for k, wv := range want {
+		gv, ok := got[k]
+		if !ok {
+			t.Fatalf("legalTransitions missing domain %q", k)
+		}
+		if !equalStringSlices(toStringSlice(gv), wv) {
+			t.Errorf("legalTransitions[%q] = %v, want %v", k, gv, wv)
+		}
+	}
+}
+
 // TestDraftList: DraftList returns the draft backlog (schema
 // eka-draft-list-v1) with the scaffolded draft.
 func TestDraftList(t *testing.T) {
