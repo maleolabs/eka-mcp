@@ -1147,15 +1147,95 @@ func (s *Server) handleToolsCall(req request) []byte {
 		if _, ok := err.(*toolNotFoundError); ok {
 			return s.errorResponse(req.ID, codeToolNotFound, "tool not found: "+p.Name)
 		}
-		return s.resultResponse(req.ID, map[string]any{
-			"content": []any{map[string]any{"type": "text", "text": SanitizeError(err)}},
-			"isError": true,
-		})
+		return s.resultResponse(req.ID, s.toolFailureResult(err))
 	}
 	return s.resultResponse(req.ID, map[string]any{
 		"content": []any{map[string]any{"type": "text", "text": text}},
 		"isError": false,
 	})
+}
+
+// refusalFidelity is implemented by structured tool-refusal errors that
+// carry client-safe fidelity beyond the sanitized headline. The
+// capability layer (internal/eka) wraps the structured refusals of
+// eka-core — *runtime.PublishError and *runtime.RelateValidationError
+// carry a full conformance.Report; *runtime.TransitionRefusal carries
+// the active-container warning and its confirmation affordance — into
+// an error satisfying this contract, so the boundary can deliver what
+// it used to silently drop (sto:mcp-error-fidelity).
+//
+// The interface keeps the layering intact: the server still knows
+// nothing about eka-core (stdlib-only dispatch), while errors.As walks
+// the wrap chain to whichever carrier is present.
+type refusalFidelity interface {
+	error
+	// RefusalReport returns the serialized validation report in the
+	// established eka-conformance-report-v1 shape ("" when the refusal
+	// carries none). Every finding already passed the boundary's path
+	// redaction at serialization time.
+	RefusalReport() string
+	// RefusalWarning returns the deterministic active-container banner
+	// of a transition refusal ("" when not membership-related).
+	RefusalWarning() string
+	// RefusalConfirmation reports that the refusal is the
+	// active-container confirmation gate: the caller may retry with
+	// confirmed:true. The refused operation wrote nothing.
+	RefusalConfirmation() bool
+}
+
+// confirmationAffordance is the exact retry instruction surfaced on a
+// confirming transition refusal (sto:mcp-error-fidelity AC #3): the
+// capability layer supports Confirmed=true, so an agent must be told
+// the refusal is retryable instead of being left with a dead end.
+const confirmationAffordance = "retry with confirmed:true to proceed anyway (asserts the work item may leave the current active container)"
+
+// toolFailureResult builds the isError:true tool result for one
+// execution failure. Content block 0 is ALWAYS the sanitized headline —
+// byte-stable by construction (exactly SanitizeError(err), first line +
+// path redaction), so existing clients matching refusal classes keep
+// working untouched. Structured refusals that carry extra fidelity
+// contribute additional text content blocks after the headline (both
+// multi-block content and multi-line text are valid on the negotiated
+// 2024-11-05 baseline; structuredContent is deliberately NOT used):
+//
+//	block 1: the full conformance report (eka-conformance-report-v1)
+//	         for publish/relate-class validation refusals;
+//	block 2: the transition active-container warning plus the
+//	         "retry with confirmed:true" affordance.
+//
+// The report is embedded verbatim from the carried error — the
+// validation is NEVER re-run (double cost, TOCTOU drift). The boundary
+// re-applies its own path redaction to the report text as the final
+// guard of the no-leakage invariant (sto:mcp-error-fidelity AC #2):
+// fidelity must not depend on the producer remembering the policy.
+// The redaction patterns exclude quotes and colons, so a match can
+// never cross a JSON string boundary — the embedded report stays
+// valid JSON. RedactPaths is idempotent, so the producer's own
+// field-level redaction is preserved byte-for-byte.
+func (s *Server) toolFailureResult(err error) map[string]any {
+	content := []any{map[string]any{"type": "text", "text": SanitizeError(err)}}
+	var fidelity refusalFidelity
+	if errors.As(err, &fidelity) {
+		if report := fidelity.RefusalReport(); report != "" {
+			content = append(content, map[string]any{"type": "text", "text": RedactPaths(report)})
+		}
+		warning := fidelity.RefusalWarning()
+		if warning != "" || fidelity.RefusalConfirmation() {
+			var b strings.Builder
+			if warning != "" {
+				b.WriteString("warning: ")
+				b.WriteString(warning)
+			}
+			if fidelity.RefusalConfirmation() {
+				if b.Len() > 0 {
+					b.WriteByte('\n')
+				}
+				b.WriteString(confirmationAffordance)
+			}
+			content = append(content, map[string]any{"type": "text", "text": b.String()})
+		}
+	}
+	return map[string]any{"content": content, "isError": true}
 }
 
 // toolNotFoundError marks an unknown tool name (JSON-RPC -32003, not a
@@ -1777,6 +1857,20 @@ var pathRe = regexp.MustCompile(`(?:[A-Za-z]:[\\/]|~[\\/]|\.{1,2}[\\/]|[\\/])[^\
 // "feather/adr:…" identity forms) survive.
 var relPathRe = regexp.MustCompile(`[^\r\n"':/\\ ]*[\\/][^\r\n"':/\\]*\.[^\r\n"':/\\]*`)
 
+// RedactPaths applies the boundary's path-redaction policy to one run
+// of error text: absolute paths (/home/…, C:\…), tilde paths (~/…),
+// relative paths (./…, ../…) and file-like slash runs become "<path>".
+// Identity forms ("feather/adr:001") survive by design — the anchors
+// require a second slash or a file-like last segment. It is the shared
+// redaction policy of the sanitized headline AND of every finding the
+// embedded conformance reports carry (sto:mcp-error-fidelity): no
+// finding may leak a store path the headline itself could not.
+func RedactPaths(msg string) string {
+	msg = pathRe.ReplaceAllString(msg, "<path>")
+	msg = relPathRe.ReplaceAllString(msg, "<path>")
+	return msg
+}
+
 // SanitizeError reduces an error to a deterministic, client-safe
 // refusal-class message: first line only (stack traces and wrapped
 // context live below), no file paths, no store details. The result is
@@ -1788,8 +1882,7 @@ func SanitizeError(err error) string {
 	if i := strings.IndexByte(msg, '\n'); i >= 0 {
 		msg = msg[:i]
 	}
-	msg = pathRe.ReplaceAllString(msg, "<path>")
-	msg = relPathRe.ReplaceAllString(msg, "<path>")
+	msg = RedactPaths(msg)
 	msg = strings.TrimSpace(msg)
 	if msg == "" {
 		return "tool execution failed"

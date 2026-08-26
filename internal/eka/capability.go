@@ -268,7 +268,10 @@ func (c *Capability) Publish(req mcp.PublishRequest) ([]byte, error) {
 		InstanceVersion: req.InstanceVersion,
 	})
 	if err != nil {
-		return nil, err
+		// A *runtime.PublishError carries the full CKO validation
+		// report — wrap it so the MCP boundary embeds the report
+		// instead of dropping it (sto:mcp-error-fidelity).
+		return nil, wrapToolRefusal(err)
 	}
 	return json.Marshal(publishResult{
 		Schema:          "eka-publish-result-v1",
@@ -295,7 +298,11 @@ func (c *Capability) Transition(req mcp.TransitionRequest) ([]byte, error) {
 		Confirmed: req.Confirmed,
 	})
 	if err != nil {
-		return nil, err
+		// A *runtime.TransitionRefusal carries the active-container
+		// warning and the confirmation affordance — wrap it so the
+		// MCP boundary surfaces the retry-with-confirmed path
+		// (sto:mcp-error-fidelity).
+		return nil, wrapToolRefusal(err)
 	}
 	return json.Marshal(transitionResult{
 		Schema:         "eka-transition-result-v1",

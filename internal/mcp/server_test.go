@@ -16,12 +16,14 @@ import (
 // layer, so the server tests are pure protocol tests — no eka-core
 // involved. It records calls so tests can assert the dispatch.
 type fakeCapability struct {
-	statusJSON string
-	getErr     error
-	domainErr  error
-	gotForms   []string
-	gotNew     []NewDraftRequest
-	gotNote    []NoteRequest
+	statusJSON    string
+	getErr        error
+	domainErr     error
+	publishErr    error
+	transitionErr error
+	gotForms      []string
+	gotNew        []NewDraftRequest
+	gotNote       []NoteRequest
 }
 
 func (f *fakeCapability) Get(form string) ([]byte, error) {
@@ -57,10 +59,16 @@ func (f *fakeCapability) NewDraft(req NewDraftRequest) ([]byte, error) {
 }
 
 func (f *fakeCapability) Publish(req PublishRequest) ([]byte, error) {
+	if f.publishErr != nil {
+		return nil, f.publishErr
+	}
 	return []byte(`{"schema":"eka-publish-result-v1","form":` + mustQuote(req.Target+":1") + `,"instanceVersion":1,"objectHash":"abc","note":""}`), nil
 }
 
 func (f *fakeCapability) Transition(req TransitionRequest) ([]byte, error) {
+	if f.transitionErr != nil {
+		return nil, f.transitionErr
+	}
 	return []byte(`{"schema":"eka-transition-result-v1","target":` + mustQuote(req.Target) + `,"from":"planned","to":"todo","by":{"kind":"agent","name":"mcp-agent"},"objectHash":"abc","lockedPlan":"","lockedPlanHash":"","warning":""}`), nil
 }
 
