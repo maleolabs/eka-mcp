@@ -350,7 +350,7 @@ func TestPublishDraft(t *testing.T) {
 		t.Errorf("the draft file must be removed after publish, stat err = %v", err)
 	}
 	// The published object resolves.
-	got, err := cap.Get("feather/adr:003-publish:1")
+	got, err := cap.Get("feather/adr:003-publish:1", false)
 	if err != nil {
 		t.Fatalf("published object must resolve: %v", err)
 	}
@@ -697,7 +697,7 @@ func TestTransitionForward(t *testing.T) {
 		t.Error("transition result must carry the object hash")
 	}
 	// The line now resolves to the new state.
-	got, err := cap.Get("test-ns/sto:x:1")
+	got, err := cap.Get("test-ns/sto:x:1", false)
 	if err != nil {
 		t.Fatalf("transitioned object must resolve: %v", err)
 	}
@@ -731,7 +731,7 @@ func TestTransitionRefusalNoPartialWrite(t *testing.T) {
 		t.Fatal("an illegal transition must be refused")
 	}
 	// The line is unchanged: still planned.
-	got, err := cap.Get("test-ns/sto:x:1")
+	got, err := cap.Get("test-ns/sto:x:1", false)
 	if err != nil {
 		t.Fatalf("object must still resolve: %v", err)
 	}

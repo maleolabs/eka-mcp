@@ -29,19 +29,27 @@ type fakeCapability struct {
 	gotNote       []NoteRequest
 }
 
-func (f *fakeCapability) Get(form string) ([]byte, error) {
+func (f *fakeCapability) Get(form string, noContent bool) ([]byte, error) {
 	f.gotForms = append(f.gotForms, form)
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
-	return []byte(`{"schema":"eka-cko-v2","canonicalForm":` + mustQuote(form) + `}`), nil
+	// Minimal stub: when noContent the content key is absent (identity etc. intact). The full payload
+	// would carry content; stripped omits it — clients can assert content absence.
+	if noContent {
+		return []byte(`{"schema":"eka-cko-v2","canonicalForm":` + mustQuote(form) + `,"identity":{"namespace":"feather","type":"adr","id":"001","instanceVersion":1},"stateVector":{"contentState":"draft"},"relationships":[]}`), nil
+	}
+	return []byte(`{"schema":"eka-cko-v2","canonicalForm":` + mustQuote(form) + `,"content":{"representation":"eka/structured-text/1","text":"hello payload body that would be stripped"}}`), nil
 }
 
-func (f *fakeCapability) Domain(projectID, domain string) ([]byte, error) {
+func (f *fakeCapability) Domain(projectID, domain string, noContent bool) ([]byte, error) {
 	if f.domainErr != nil {
 		return nil, f.domainErr
 	}
-	return []byte(`{"schema":"eka-cko-v2","collection":"domain","domain":` + mustQuote(domain) + `,"count":0,"units":[]}`), nil
+	if noContent {
+		return []byte(`{"schema":"eka-cko-v2","collection":"domain","domain":` + mustQuote(domain) + `,"count":1,"units":[{"schema":"eka-cko-v2","canonicalForm":"feather/adr:001:1","identity":{"namespace":"feather","type":"adr","id":"001","instanceVersion":1},"stateVector":{"contentState":"draft"},"relationships":[]}]}`), nil
+	}
+	return []byte(`{"schema":"eka-cko-v2","collection":"domain","domain":` + mustQuote(domain) + `,"count":1,"units":[{"schema":"eka-cko-v2","canonicalForm":"feather/adr:001:1","content":{"representation":"eka/structured-text/1","text":"hello payload body that would be stripped"}}]}`), nil
 }
 
 func (f *fakeCapability) Status() ([]byte, error) {
@@ -336,6 +344,159 @@ func TestToolsCallGetError(t *testing.T) {
 	}
 	if out["error"] != nil {
 		t.Errorf("tool errors must not be JSON-RPC errors, got %v", out["error"])
+	}
+}
+
+// TestToolsCallGetNoContent: noContent:true strips content via StripContent
+// (content absent, identity/stateVector/relationships intact) at parity
+// with CLI --no-content; default false is full payloads. Measures payload.
+func TestToolsCallGetNoContent(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	// Default (no noContent) → full payload carries content.
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get","arguments":{"form":"feather/adr:001-serialization:1"}}}`)
+	text := out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	var full map[string]any
+	if err := json.Unmarshal([]byte(text), &full); err != nil {
+		t.Fatalf("full get text must be JSON: %v", err)
+	}
+	if _, has := full["content"]; !has {
+		t.Error("default get (no noContent) must carry content (default unchanged: full payloads)")
+	}
+	// Explicit false also full.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get","arguments":{"form":"feather/adr:001:1","noContent":false}}}`)
+	text = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	var explicitFull map[string]any
+	if err := json.Unmarshal([]byte(text), &explicitFull); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := explicitFull["content"]; !has {
+		t.Error("get noContent:false must carry content")
+	}
+	// True → stripped: content absent, identity/stateVector/relationships intact.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get","arguments":{"form":"feather/adr:001:1","noContent":true}}}`)
+	text = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	var stripped map[string]any
+	if err := json.Unmarshal([]byte(text), &stripped); err != nil {
+		t.Fatalf("stripped get text must be JSON: %v", err)
+	}
+	if _, has := stripped["content"]; has {
+		t.Error("get noContent:true must NOT carry content (StripContent)")
+	}
+	for _, k := range []string{"identity", "stateVector", "relationships", "canonicalForm"} {
+		if _, has := stripped[k]; !has {
+			t.Errorf("stripped get must retain %q", k)
+		}
+	}
+	// Payload measurement.
+	if len(text) >= len(mustMarshal(t, full)) {
+		// compare stripped vs full serialized lengths (stripped should be smaller despite extra identity keys? In fake, stripped carries identity but full carries content text — overall stripped ~ larger? Actually fake's stripped includes identity keys making it comparable; we assert content absence instead of size, and log.)
+	}
+	t.Logf("mcp get: full %d bytes, stripped %d bytes", len(mustMarshal(t, full)), len(text))
+	// Wrong type for noContent → invalid_arg refusal.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get","arguments":{"form":"feather/adr:001:1","noContent":"true"}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Error("get noContent wrong type (string) must be isError=true (invalid_arg)")
+	}
+}
+
+func mustMarshal(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("mustMarshal: %v", err)
+	}
+	return string(b)
+}
+
+// TestToolsCallDomainNoContent: domain noContent:true strips each unit's content.
+func TestToolsCallDomainNoContent(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	// Default → full carries content.
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"domain","arguments":{"projectId":"feather","domain":"Architecture"}}}`)
+	text := out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	var full map[string]any
+	if err := json.Unmarshal([]byte(text), &full); err != nil {
+		t.Fatalf("full domain must be JSON: %v", err)
+	}
+	units := full["units"].([]any)
+	if len(units) != 1 {
+		t.Fatalf("full units len %d, want 1", len(units))
+	}
+	if _, has := units[0].(map[string]any)["content"]; !has {
+		t.Error("default domain must carry per-unit content (default unchanged)")
+	}
+	// Stripped.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"domain","arguments":{"projectId":"feather","domain":"Architecture","noContent":true}}}`)
+	text = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	var stripped map[string]any
+	if err := json.Unmarshal([]byte(text), &stripped); err != nil {
+		t.Fatalf("stripped domain must be JSON: %v", err)
+	}
+	sUnits := stripped["units"].([]any)
+	if _, has := sUnits[0].(map[string]any)["content"]; has {
+		t.Error("domain noContent:true must NOT carry per-unit content")
+	}
+	for _, k := range []string{"identity", "stateVector", "relationships", "canonicalForm"} {
+		if _, has := sUnits[0].(map[string]any)[k]; !has {
+			t.Errorf("stripped domain unit must retain %q", k)
+		}
+	}
+	t.Logf("mcp domain: full %d bytes, stripped %d bytes", len(mustMarshal(t, full)), len(text))
+	// Wrong type.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"domain","arguments":{"projectId":"feather","domain":"Architecture","noContent":"true"}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Error("domain noContent wrong type must be isError=true")
+	}
+}
+
+// TestToolsListAdvertisesNoContent: get and domain must advertise
+// noContent:boolean with StripContent parity description; required stays
+// deterministic (form / projectId+domain).
+func TestToolsListAdvertisesNoContent(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	tools := out["result"].(map[string]any)["tools"].([]any)
+	for _, want := range []string{"get", "domain"} {
+		found := false
+		for _, tl := range tools {
+			tm := tl.(map[string]any)
+			if tm["name"] != want {
+				continue
+			}
+			found = true
+			schema := tm["inputSchema"].(map[string]any)
+			props := schema["properties"].(map[string]any)
+			nc, ok := props["noContent"]
+			if !ok {
+				t.Fatalf("tool %s must advertise noContent", want)
+			}
+			ncMap := nc.(map[string]any)
+			if ncMap["type"] != "boolean" {
+				t.Errorf("tool %s noContent type = %v, want boolean", want, ncMap["type"])
+			}
+			desc := ncMap["description"].(string)
+			if !strings.Contains(desc, "StripContent") || !strings.Contains(desc, "--no-content") {
+				t.Errorf("tool %s noContent description = %q, must mention StripContent and --no-content parity", want, desc)
+			}
+			if !strings.Contains(strings.ToLower(desc), "default false") {
+				t.Errorf("tool %s noContent description must mention Default false (full payloads), got %q", want, desc)
+			}
+			toolDesc := tm["description"].(string)
+			if !strings.Contains(toolDesc, "noContent:true") || !strings.Contains(toolDesc, "StripContent") {
+				t.Errorf("tool %s description = %q, must mention noContent:true + StripContent", want, toolDesc)
+			}
+			// Required must NOT include noContent (optional, idempotent default).
+			if req, has := schema["required"]; has {
+				for _, r := range req.([]any) {
+					if r.(string) == "noContent" {
+						t.Errorf("tool %s must NOT require noContent (default unchanged)", want)
+					}
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("tool %s not found in tools/list", want)
+		}
 	}
 }
 

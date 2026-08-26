@@ -191,11 +191,11 @@ func TestResourceReadErrorSanitized(t *testing.T) {
 // failingStatusCapability fails Status with a path-carrying error.
 type failingStatusCapability struct{}
 
-func (f *failingStatusCapability) Get(form string) ([]byte, error) {
+func (f *failingStatusCapability) Get(form string, noContent bool) ([]byte, error) {
 	return nil, errors.New("unreachable")
 }
 
-func (f *failingStatusCapability) Domain(projectID, domain string) ([]byte, error) {
+func (f *failingStatusCapability) Domain(projectID, domain string, noContent bool) ([]byte, error) {
 	return nil, errors.New("unreachable")
 }
 
