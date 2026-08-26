@@ -1543,14 +1543,14 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		}
 		return string(data), nil
 	case "feedback_list":
-		// No required args — empty object or absent args both list.
-		if len(args) != 0 && string(args) != "null" && strings.TrimSpace(string(args)) != "{}" {
-			// Allow any object but validate it's an object to fuzz deterministically.
-			var raw map[string]json.RawMessage
-			if err := json.Unmarshal(args, &raw); err != nil {
-				return "", fmt.Errorf("feedback_list requires {}")
-			}
-			// Unknown fields are ignored (deterministic), but non-object already refused.
+		// No required fields (no toolRequiredFields entry) — empty
+		// object, absent or null arguments all list. Routed through
+		// decodeToolArgs so malformed (non-object) arguments refuse
+		// through the same discriminating, diagnostics-logged path as
+		// every other tool — the former inline refusal bypassed the
+		// param-refusal log line.
+		if err := s.decodeToolArgs("feedback_list", args, nil); err != nil {
+			return "", err
 		}
 		data, err := s.cap.FeedbackList()
 		if err != nil {

@@ -28,6 +28,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -35,9 +36,10 @@ import (
 )
 
 // conformanceServer returns a server wired to a deterministic fake
-// capability for the whole suite.
+// capability for the whole suite. Diagnostics are discarded — the
+// conformance suite exercises many refusals and asserts none of them.
 func conformanceServer() *Server {
-	return NewServer(&fakeCapability{statusJSON: `{"initialized":true,"schemaVersion":4}`})
+	return NewServerWithDiagnostics(&fakeCapability{statusJSON: `{"initialized":true,"schemaVersion":4}`}, io.Discard)
 }
 
 // mustError extracts the error object of a response, failing the test
@@ -208,7 +210,7 @@ func TestConformanceToolsCallUnknownTool(t *testing.T) {
 // error), carrying a deterministic message.
 func TestConformanceToolsCallExecutionError(t *testing.T) {
 	cap := &fakeCapability{statusJSON: `{}`, getErr: errors.New("eka: workspace not initialized")}
-	s := NewServer(cap)
+	s := newTestServer(cap)
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get","arguments":{"form":"x/adr:y:1"}}}`)
 	res := mustResult(t, out)
 	if res["isError"] != true {
@@ -531,7 +533,7 @@ func TestConformanceSyncPushTool(t *testing.T) {
 	// Unknown repo via capability error surfaces as isError (sanitized).
 	cap := &fakeCapability{statusJSON: `{}`, getErr: errors.New("sync refused: <repo> is not an EKA repository (no eka.yaml); run 'eka init' first")}
 	_ = cap
-	s2 := NewServer(&failingSyncPushCapability{err: errors.New("sync refused: /tmp/not-a-repo is not an EKA repository")})
+	s2 := newTestServer(&failingSyncPushCapability{err: errors.New("sync refused: /tmp/not-a-repo is not an EKA repository")})
 	out = mustHandle(t, s2, `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"sync_push","arguments":{"repoPath":"/tmp/not-a-repo"}}}`)
 	res2 := mustResult(t, out)
 	if res2["isError"] != true {
@@ -661,7 +663,7 @@ func TestConformanceAssignmentTools(t *testing.T) {
 
 	// Capability-level refusal (member does not resolve, non-work-item) surfaces as isError with sanitized text
 	cap := &failingAssignmentCapability{err: errors.New("assign refused: member acme/mbr:alice does not resolve; available members of the repository: ")}
-	s2 := NewServer(cap)
+	s2 := newTestServer(cap)
 	out = mustHandle(t, s2, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1","to":"mbr:alice"}}}`)
 	res2 := mustResult(t, out)
 	if res2["isError"] != true {
@@ -796,7 +798,7 @@ func TestConformanceFeedbackTools(t *testing.T) {
 	}
 	// refusal cases: unauthenticated publish (token gate) and invalid draft id
 	cap := &failingFeedbackCapability{err: errors.New("issue token not bundled — use a release binary")}
-	s2 := NewServer(cap)
+	s2 := newTestServer(cap)
 	out = mustHandle(t, s2, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_publish","arguments":{"id":"fbk-20260812-test"}}}`)
 	res2 := mustResult(t, out)
 	if res2["isError"] != true {
@@ -810,7 +812,7 @@ func TestConformanceFeedbackTools(t *testing.T) {
 		t.Errorf("unauthenticated publish must not leak token material, got %q", text)
 	}
 	cap2 := &failingFeedbackCapability{err: errors.New(`unknown feedback "fbk-20260812-nope"`)}
-	s3 := NewServer(cap2)
+	s3 := newTestServer(cap2)
 	out = mustHandle(t, s3, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_publish","arguments":{"id":"fbk-20260812-nope"}}}`)
 	res3 := mustResult(t, out)
 	if res3["isError"] != true {
@@ -825,7 +827,7 @@ func TestConformanceFeedbackTools(t *testing.T) {
 	}
 	// Already published refusal
 	cap3 := &failingFeedbackCapability{err: errors.New("already published as #42 https://github.com/maleolabs/eka-cli/issues/42")}
-	s4 := NewServer(cap3)
+	s4 := newTestServer(cap3)
 	out = mustHandle(t, s4, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_publish","arguments":{"id":"fbk-20260812-test"}}}`)
 	res4 := mustResult(t, out)
 	if res4["isError"] != true {

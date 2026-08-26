@@ -235,6 +235,15 @@ func TestRequiredFieldContractSchemaMatchesEnforcement(t *testing.T) {
 			t.Errorf("tool %v advertised required = %v, want %v (the single-source order)", name, got, want)
 		}
 	}
+	// Reverse direction (review fix): every ADVERTISED required array
+	// must come from a toolRequiredFields entry — a hardcoded required
+	// array on a tool missing from the declaration must fail loudly,
+	// otherwise drift can reintroduce itself silently.
+	for name, req := range advertised {
+		if _, declared := toolRequiredFields[name]; !declared {
+			t.Errorf("tool %v advertises required %v but has no toolRequiredFields entry — a hardcoded required array broke the single-source contract", name, req)
+		}
+	}
 
 	// Enforcement side: {} refuses naming the first declared field.
 	for name, fields := range toolRequiredFields {
@@ -373,6 +382,30 @@ func TestTruncatedLineRefusedUpstream(t *testing.T) {
 	}
 	if errObj["message"] != "parse error: invalid JSON" {
 		t.Errorf("message = %v, want the fixed parse refusal", errObj["message"])
+	}
+}
+
+// TestOptionalFieldTypeMismatchLogged (review fix): a wrong-typed
+// OPTIONAL field is refused with the invalid_arg cause — message names
+// the field and the expected kind, and the diagnostics line carries
+// the same cause token and field name.
+func TestOptionalFieldTypeMismatchLogged(t *testing.T) {
+	buf := &bytes.Buffer{}
+	s := NewServerWithDiagnostics(&fakeCapability{statusJSON: `{}`}, buf)
+	args := `{"target":"acme/sto:1","forward":"yes"}`
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"transition","arguments":`+args+`}}`)
+	res := out["result"].(map[string]any)
+	if res["isError"] != true {
+		t.Fatalf("wrong-typed optional field must be refused, got %v", res)
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, `"forward"`) || !strings.Contains(text, "boolean") {
+		t.Errorf("refusal %q must name the field \"forward\" and the boolean kind", text)
+	}
+	want := "eka-mcp param-refusal tool=transition args_bytes=" + strconv.Itoa(len(args)) +
+		" cause=invalid_arg field=forward\n"
+	if buf.String() != want {
+		t.Errorf("diagnostic =\n%q\nwant\n%q", buf.String(), want)
 	}
 }
 

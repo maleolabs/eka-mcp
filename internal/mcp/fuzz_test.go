@@ -39,7 +39,7 @@ func FuzzHandleMessage(f *testing.F) {
 		f.Add([]byte(s))
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		s := NewServer(&fakeCapability{statusJSON: `{}`})
+		s := newTestServer(&fakeCapability{statusJSON: `{}`})
 		resp := s.HandleMessage(data)
 		if len(resp) == 0 {
 			return
@@ -66,7 +66,7 @@ func FuzzServe(f *testing.F) {
 		f.Add([]byte(s))
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		s := NewServer(&fakeCapability{statusJSON: `{}`})
+		s := newTestServer(&fakeCapability{statusJSON: `{}`})
 		var out bytes.Buffer
 		_ = s.Serve(bytes.NewReader(data), &out)
 	})
@@ -78,7 +78,7 @@ func FuzzServe(f *testing.F) {
 // test is reproducible in CI.
 func TestFuzzCorpus(t *testing.T) {
 	msgs := generateCorpus(10000)
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 
 	// Dispatch unit: no panic, valid JSON responses.
 	for i, m := range msgs {

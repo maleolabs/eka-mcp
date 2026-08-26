@@ -17,7 +17,7 @@ import (
 // requests in one message) is refused with a fixed invalid-request
 // error — the server never processes batches.
 func TestBatchRejectedDeterministically(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	cases := []string{
 		`[{"jsonrpc":"2.0","id":1,"method":"ping"}]`,
 		`[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","id":2,"method":"tools/list"}]`,
@@ -44,7 +44,7 @@ func TestBatchRejectedDeterministically(t *testing.T) {
 // layer — no tool executes, no resource reads.
 func TestBatchNeverDispatched(t *testing.T) {
 	cap := &fakeCapability{statusJSON: `{}`}
-	s := NewServer(cap)
+	s := newTestServer(cap)
 	msg := `[{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get","arguments":{"form":"x/adr:y:1"}}}]`
 	out := mustHandle(t, s, msg)
 	mustError(t, out)
@@ -56,7 +56,7 @@ func TestBatchNeverDispatched(t *testing.T) {
 // TestNonObjectRejected: a valid JSON message that is not a request
 // object (scalar, string, null, boolean) is refused deterministically.
 func TestNonObjectRejected(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	for _, msg := range []string{`null`, `true`, `false`, `0`, `-1`, `1.5`, `"ping"`} {
 		out := mustHandle(t, s, msg)
 		errObj := mustError(t, out)
@@ -69,7 +69,7 @@ func TestNonObjectRejected(t *testing.T) {
 // TestParseErrorFixedMessage: a parse error carries the fixed message —
 // never the Go JSON parser's internals.
 func TestParseErrorFixedMessage(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	for _, msg := range []string{`{not json`, `{"jsonrpc":"2.0"`, `[`, `{"a":}`, "\x00\x01\x02"} {
 		out := mustHandle(t, s, msg)
 		errObj := mustError(t, out)
@@ -85,7 +85,7 @@ func TestParseErrorFixedMessage(t *testing.T) {
 // TestMalformedRequestObject: a valid JSON object with malformed fields
 // (e.g. a non-string method) is an invalid request, not a parse error.
 func TestMalformedRequestObject(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	for _, msg := range []string{
 		`{"jsonrpc":"2.0","id":1,"method":123}`,
 		`{"jsonrpc":1,"id":1,"method":"ping"}`,
@@ -104,7 +104,7 @@ func TestMalformedRequestObject(t *testing.T) {
 // carry "id": null in the error response — JSON-RPC 2.0 §4.3: the id
 // MUST be Null when the detection of the id failed.
 func TestErrorResponseMissingIDIsNull(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	for _, msg := range []string{
 		`{"jsonrpc":"1.0","method":"ping"}`,
 		`{"jsonrpc":"2.0"}`,
@@ -156,7 +156,7 @@ func TestToolErrorNoInternalLeakage(t *testing.T) {
 		statusJSON: `{}`,
 		getErr:     errors.New("unable to open database file: /home/user/.eka/workspace.db\ngoroutine 1 [running]:\nmain.main()\n\t/home/user/go/src/main.go:42"),
 	}
-	s := NewServer(cap)
+	s := newTestServer(cap)
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get","arguments":{"form":"x/adr:y:1"}}}`)
 	res := mustResult(t, out)
 	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
@@ -176,7 +176,7 @@ func TestToolErrorNoInternalLeakage(t *testing.T) {
 func TestResourceReadErrorSanitized(t *testing.T) {
 	// The fake capability never fails Status; a failing wrapper
 	// exercises the resource-read error path.
-	s := NewServer(&failingStatusCapability{})
+	s := newTestServer(&failingStatusCapability{})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"eka://status"}}`)
 	errObj := mustError(t, out)
 	if errObj["code"] != float64(codeInternalError) {
@@ -278,7 +278,7 @@ func (f *failingStatusCapability) FeedbackPublish(req FeedbackPublishRequest) ([
 // TestServeLineTooLong: a line exceeding the 64 MiB cap is refused
 // deterministically and the session continues at the next line.
 func TestServeLineTooLong(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	oversized := strings.Repeat("a", defaultMaxLineSize+1)
 	input := oversized + "\n" + `{"jsonrpc":"2.0","id":1,"method":"ping"}` + "\n"
 
@@ -316,7 +316,7 @@ func TestServeLineTooLong(t *testing.T) {
 // inclusive) — it parses as JSON and answers. Runs at a small cap; the
 // real 64 MiB cap is exercised by TestServeLineTooLong.
 func TestServeLineAtCap(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	s.maxLineSize = 1024
 	// A valid request padded with whitespace to exactly the cap.
 	base := `{"jsonrpc":"2.0","id":1,"method":"ping"}`
@@ -337,7 +337,7 @@ func TestServeLineAtCap(t *testing.T) {
 // TestServeOversizedLineAtEOF: an oversized final line (no trailing
 // newline) is still refused deterministically and Serve terminates.
 func TestServeOversizedLineAtEOF(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	s.maxLineSize = 1024
 	input := strings.Repeat("a", s.maxLineSize+1)
 	var out bytes.Buffer
@@ -353,7 +353,7 @@ func TestServeOversizedLineAtEOF(t *testing.T) {
 // is resynchronized at the next newline — a following valid message is
 // processed.
 func TestServeResyncAfterOversizedLine(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	s.maxLineSize = 1024
 	// Oversized line + newline + valid message: the drain consumes up to
 	// the newline, so the following message is processed normally.

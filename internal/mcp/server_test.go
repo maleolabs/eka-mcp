@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -135,6 +136,14 @@ func mustQuote(s string) string {
 	return string(b)
 }
 
+// newTestServer returns a server with diagnostics discarded. Tests
+// that do NOT assert diagnostics must use this instead of NewServer —
+// otherwise every param-refusal exercised by the suite writes a line
+// to os.Stderr and floods `go test` output.
+func newTestServer(cap Capability) *Server {
+	return NewServerWithDiagnostics(cap, io.Discard)
+}
+
 // mustHandle runs one message through the server and unmarshals the
 // response envelope.
 func mustHandle(t *testing.T, s *Server, msg string) map[string]any {
@@ -151,7 +160,7 @@ func mustHandle(t *testing.T, s *Server, msg string) map[string]any {
 }
 
 func TestInitialize(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}`)
 
 	if out["jsonrpc"] != "2.0" {
@@ -182,7 +191,7 @@ func TestInitialize(t *testing.T) {
 // TestInitializeWithoutProtocolVersion: the handshake must succeed even
 // when the client omits the protocol version (baseline fallback).
 func TestInitializeWithoutProtocolVersion(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":"a","method":"initialize"}`)
 	res := out["result"].(map[string]any)
 	if res["protocolVersion"] != ProtocolVersion {
@@ -191,7 +200,7 @@ func TestInitializeWithoutProtocolVersion(t *testing.T) {
 }
 
 func TestPing(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":7,"method":"ping"}`)
 	if out["id"] != float64(7) {
 		t.Errorf("id = %v, want 7", out["id"])
@@ -202,7 +211,7 @@ func TestPing(t *testing.T) {
 }
 
 func TestToolsList(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	res := out["result"].(map[string]any)
 	tools := res["tools"].([]any)
@@ -238,7 +247,7 @@ func TestToolsList(t *testing.T) {
 
 func TestToolsCallDraftReadAndViewAlias(t *testing.T) {
 	cap := &fakeCapability{statusJSON: `{}`}
-	s := NewServer(cap)
+	s := newTestServer(cap)
 	for _, name := range []string{"draft_read", "view"} {
 		out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"`+name+`","arguments":{"target":"feather/adr:001","project":"feather"}}}`)
 		res, ok := out["result"].(map[string]any)
@@ -270,7 +279,7 @@ func TestToolsCallDraftReadAndViewAlias(t *testing.T) {
 
 func TestToolsCallGet(t *testing.T) {
 	cap := &fakeCapability{statusJSON: `{}`}
-	s := NewServer(cap)
+	s := newTestServer(cap)
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get","arguments":{"form":"feather/adr:001-serialization:1"}}}`)
 
 	res := out["result"].(map[string]any)
@@ -295,7 +304,7 @@ func TestToolsCallGet(t *testing.T) {
 // tool result with isError=true (the message reaches the client).
 func TestToolsCallGetError(t *testing.T) {
 	cap := &fakeCapability{getErr: errors.New("eka: workspace not initialized")}
-	s := NewServer(cap)
+	s := newTestServer(cap)
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get","arguments":{"form":"x/adr:y:1"}}}`)
 	res := out["result"].(map[string]any)
 	if res["isError"] != true {
@@ -311,7 +320,7 @@ func TestToolsCallGetError(t *testing.T) {
 }
 
 func TestToolsCallUnknownTool(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"bogus"}}`)
 	if out["result"] != nil {
 		t.Errorf("unknown tool must not produce a result, got %v", out["result"])
@@ -323,7 +332,7 @@ func TestToolsCallUnknownTool(t *testing.T) {
 }
 
 func TestToolsCallMissingArguments(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get"}}`)
 	res := out["result"].(map[string]any)
 	if res["isError"] != true {
@@ -332,7 +341,7 @@ func TestToolsCallMissingArguments(t *testing.T) {
 }
 
 func TestToolsCallSyncPush(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	// No args (defaults to ".")
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sync_push","arguments":{}}}`)
 	res := out["result"].(map[string]any)
@@ -366,7 +375,7 @@ func TestToolsCallSyncPush(t *testing.T) {
 }
 
 func TestToolsCallSyncPushPullRefused(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	for _, arg := range []string{
 		`{"fromDocs":true}`, `{"from_docs":true}`, `{"from-docs":true}`, `{"pull":true}`,
 	} {
@@ -383,7 +392,7 @@ func TestToolsCallSyncPushPullRefused(t *testing.T) {
 }
 
 func TestToolsCallSyncPushUnknownTool(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sync_pull","arguments":{}}}`)
 	if out["error"] == nil {
 		t.Fatalf("sync_pull unknown tool must error, got %v", out)
@@ -395,7 +404,7 @@ func TestToolsCallSyncPushUnknownTool(t *testing.T) {
 }
 
 func TestToolsCallAssign(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1","to":"mbr:alice"}}}`)
 	res := out["result"].(map[string]any)
 	if res["isError"] != false {
@@ -453,7 +462,7 @@ func TestToolsCallAssign(t *testing.T) {
 }
 
 func TestToolsCallReassign(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"reassign","arguments":{"target":"acme/sto:1","to":"mbr:bob"}}}`)
 	res := out["result"].(map[string]any)
 	if res["isError"] != false {
@@ -475,7 +484,7 @@ func TestToolsCallReassign(t *testing.T) {
 }
 
 func TestToolsCallUnassign(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unassign","arguments":{"target":"acme/sto:1"}}}`)
 	res := out["result"].(map[string]any)
 	if res["isError"] != false {
@@ -500,7 +509,7 @@ func TestToolsCallUnassign(t *testing.T) {
 }
 
 func TestToolsCallAssignmentMalformedArgsFuzz(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	cases := []struct {
 		name string
 		arg  string
@@ -535,7 +544,7 @@ func TestToolsCallAssignmentMalformedArgsFuzz(t *testing.T) {
 }
 
 func TestToolsCallFeedback(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	// feedback_new success
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_new","arguments":{"type":"bug","title":"my bug"}}}`)
 	res := out["result"].(map[string]any)
@@ -581,7 +590,7 @@ func TestToolsCallFeedback(t *testing.T) {
 }
 
 func TestToolsCallFeedbackMalformedArgsFuzz(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	cases := []struct {
 		name string
 		arg  string
@@ -619,7 +628,7 @@ func TestToolsCallFeedbackMalformedArgsFuzz(t *testing.T) {
 }
 
 func TestResourcesList(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":8,"method":"resources/list"}`)
 	res := out["result"].(map[string]any)
 	resources := res["resources"].([]any)
@@ -662,7 +671,7 @@ func mustTemplateTypes(t *testing.T) []string {
 
 func TestResourcesReadStatus(t *testing.T) {
 	cap := &fakeCapability{statusJSON: `{"path":"/tmp/eka","initialized":true}`}
-	s := NewServer(cap)
+	s := newTestServer(cap)
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":9,"method":"resources/read","params":{"uri":"eka://status"}}`)
 	res := out["result"].(map[string]any)
 	contents := res["contents"].([]any)[0].(map[string]any)
@@ -679,7 +688,7 @@ func TestResourcesReadStatus(t *testing.T) {
 }
 
 func TestResourcesReadUnknown(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":10,"method":"resources/read","params":{"uri":"eka://bogus"}}`)
 	if out["result"] != nil {
 		t.Errorf("unknown resource must not produce a result, got %v", out["result"])
@@ -690,7 +699,7 @@ func TestResourcesReadUnknown(t *testing.T) {
 }
 
 func TestMethodNotFound(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":11,"method":"nope"}`)
 	errObj := out["error"].(map[string]any)
 	if errObj["code"] != float64(codeMethodNotFound) {
@@ -699,7 +708,7 @@ func TestMethodNotFound(t *testing.T) {
 }
 
 func TestParseError(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{not json`)
 	errObj := out["error"].(map[string]any)
 	if errObj["code"] != float64(codeParseError) {
@@ -708,7 +717,7 @@ func TestParseError(t *testing.T) {
 }
 
 func TestInvalidJSONRPCVersion(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"1.0","id":1,"method":"ping"}`)
 	if out["error"] == nil {
 		t.Error("non-2.0 jsonrpc must error")
@@ -718,7 +727,7 @@ func TestInvalidJSONRPCVersion(t *testing.T) {
 // TestNotificationNoResponse: notifications (e.g.
 // notifications/initialized) must not produce a response.
 func TestNotificationNoResponse(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	resp := s.HandleMessage([]byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`))
 	if len(resp) != 0 {
 		t.Errorf("a notification must not produce a response, got %s", resp)
@@ -729,7 +738,7 @@ func TestNotificationNoResponse(t *testing.T) {
 // session over a byte stream, asserting the wire responses and the
 // clean EOF termination.
 func TestServeEndToEnd(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{"initialized":false}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{"initialized":false}`})
 	input := strings.Join([]string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize"}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
@@ -769,7 +778,7 @@ func TestServeEndToEnd(t *testing.T) {
 // TestServeFinalLineWithoutNewline: a stream that ends without a
 // trailing newline still processes its last message.
 func TestServeFinalLineWithoutNewline(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	input := `{"jsonrpc":"2.0","id":1,"method":"ping"}`
 	var out bytes.Buffer
 	if err := s.Serve(strings.NewReader(input), &out); err != nil {
