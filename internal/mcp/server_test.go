@@ -9,7 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-mcp"
+	"github.com/maleolabs/eka-core/conformance"
+	pack "github.com/maleolabs/eka-mcp"
 )
 
 // fakeCapability is a deterministic stand-in for the EKA capability
@@ -66,14 +67,22 @@ func (f *fakeCapability) Validate(root string) ([]byte, error) {
 
 func (f *fakeCapability) NewDraft(req NewDraftRequest) ([]byte, error) {
 	f.gotNew = append(f.gotNew, req)
-	return []byte(`{"schema":"eka-draft-v1","project":` + mustQuote(req.Project) + `,"namespace":` + mustQuote(req.Namespace) + `,"type":` + mustQuote(req.Type) + `,"id":` + mustQuote(req.ID) + `,"path":"/tmp/drafts/` + req.Type + `-` + req.ID + `.json","updated":"2026-08-21T00:00:00Z"}`), nil
+	lt := fakeLegalTransitions(req.Type)
+	ltJSON, _ := json.Marshal(lt)
+	return []byte(`{"schema":"eka-draft-v1","project":` + mustQuote(req.Project) + `,"namespace":` + mustQuote(req.Namespace) + `,"type":` + mustQuote(req.Type) + `,"id":` + mustQuote(req.ID) + `,"path":"/tmp/drafts/` + req.Type + `-` + req.ID + `.json","updated":"2026-08-21T00:00:00Z","legalTransitions":` + string(ltJSON) + `}`), nil
 }
 
 func (f *fakeCapability) Publish(req PublishRequest) ([]byte, error) {
 	if f.publishErr != nil {
 		return nil, f.publishErr
 	}
-	return []byte(`{"schema":"eka-publish-result-v1","form":` + mustQuote(req.Target+":1") + `,"instanceVersion":1,"objectHash":"abc","note":""}`), nil
+	typeToken := ""
+	if ref, err := conformance.ParseReference(req.Target, "", ""); err == nil {
+		typeToken = ref.Type
+	}
+	lt := fakeLegalTransitions(typeToken)
+	ltJSON, _ := json.Marshal(lt)
+	return []byte(`{"schema":"eka-publish-result-v1","form":` + mustQuote(req.Target+":1") + `,"instanceVersion":1,"objectHash":"abc","note":"","legalTransitions":` + string(ltJSON) + `}`), nil
 }
 
 func (f *fakeCapability) Transition(req TransitionRequest) ([]byte, error) {
@@ -89,7 +98,11 @@ func (f *fakeCapability) Note(req NoteRequest) ([]byte, error) {
 }
 
 func (f *fakeCapability) DraftRead(target, project string) ([]byte, error) {
-	return []byte(`{"namespace":"feather","type":"adr","id":"001","revision":1,"content":{}}`), nil
+	// Returns verbatim draft JSON enriched with legalTransitions via same helper
+	// as capability.injectLegalTransitions — preserves original fields.
+	lt := fakeLegalTransitions("adr")
+	ltJSON, _ := json.Marshal(lt)
+	return []byte(`{"namespace":"feather","type":"adr","id":"001","revision":1,"content":{},"legalTransitions":` + string(ltJSON) + `}`), nil
 }
 
 func (f *fakeCapability) View(target, project string) ([]byte, error) {
@@ -162,6 +175,27 @@ func (f *fakeCapability) FeedbackPublish(req FeedbackPublishRequest) ([]byte, er
 func mustQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// fakeLegalTransitions mirrors capability.legalTransitions — derived exclusively
+// from conformance.OwnedDomains / DomainValues, no duplicated tables.
+func fakeLegalTransitions(typeToken string) map[string][]string {
+	domains := conformance.OwnedDomains(typeToken)
+	if len(domains) == 0 {
+		return map[string][]string{}
+	}
+	out := make(map[string][]string, len(domains))
+	for _, d := range domains {
+		vals := conformance.DomainValues(d, typeToken)
+		if vals == nil {
+			out[d] = []string{}
+			continue
+		}
+		cp := make([]string, len(vals))
+		copy(cp, vals)
+		out[d] = cp
+	}
+	return out
 }
 
 // newTestServer returns a server with diagnostics discarded. Tests
@@ -303,6 +337,136 @@ func TestToolsCallDraftReadAndViewAlias(t *testing.T) {
 	if aText != bText {
 		t.Errorf("draft_read and view alias must return identical verbatim content, got %q vs %q", aText, bText)
 	}
+}
+
+// TestToolsCallNewReturnsLegalTransitions: new/publish/draft_read must surface
+// legalTransitions derived from conformance.DomainValues/OwnedDomains (sto:mcp-transition-transparency).
+func TestToolsCallNewReturnsLegalTransitions(t *testing.T) {
+	cap := &fakeCapability{statusJSON: `{}`}
+	s := newTestServer(cap)
+	// new scp -> content-state [draft review approved amended] + existence-state
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"new","arguments":{"project":"feather","namespace":"feather","type":"scp","id":"001-scope"}}}`)
+	res := out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Fatalf("new isError = %v, want false", res["isError"])
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatalf("new text must be JSON: %v", err)
+	}
+	lt, ok := doc["legalTransitions"].(map[string]any)
+	if !ok {
+		t.Fatalf("new legalTransitions = %v, want map", doc["legalTransitions"])
+	}
+	wantSCP := fakeLegalTransitions("scp")
+	assertLegalTransitions(t, lt, wantSCP)
+	// also assert deterministic via helper identity
+	if !equalStringSlices(toStringSlice(lt["content-state"]), wantSCP["content-state"]) {
+		t.Errorf("new scp content-state = %v, want %v", lt["content-state"], wantSCP["content-state"])
+	}
+
+	// publish plan -> planning-state [draft approved immutable]
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"publish","arguments":{"target":"feather/plan:roadmap-v1"}}}`)
+	res = out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Fatalf("publish isError = %v, want false", res["isError"])
+	}
+	text = res["content"].([]any)[0].(map[string]any)["text"].(string)
+	var pub map[string]any
+	if err := json.Unmarshal([]byte(text), &pub); err != nil {
+		t.Fatalf("publish text must be JSON: %v", err)
+	}
+	plt, ok := pub["legalTransitions"].(map[string]any)
+	if !ok {
+		t.Fatalf("publish legalTransitions = %v, want map", pub["legalTransitions"])
+	}
+	wantPlan := fakeLegalTransitions("plan")
+	assertLegalTransitions(t, plt, wantPlan)
+	if !equalStringSlices(toStringSlice(plt["planning-state"]), []string{"draft", "approved", "immutable"}) {
+		t.Errorf("publish plan planning-state = %v, want [draft approved immutable]", plt["planning-state"])
+	}
+}
+
+func TestToolsCallDraftReadReturnsLegalTransitions(t *testing.T) {
+	cap := &fakeCapability{statusJSON: `{}`}
+	s := newTestServer(cap)
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"draft_read","arguments":{"target":"feather/adr:001","project":"feather"}}}`)
+	res := out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Fatalf("draft_read isError = %v, want false", res["isError"])
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatalf("draft_read text must be JSON: %v", err)
+	}
+	// preserves original fields
+	if doc["namespace"] != "feather" || doc["type"] != "adr" || doc["id"] != "001" {
+		t.Errorf("draft_read must preserve original fields, got %v", doc)
+	}
+	lt, ok := doc["legalTransitions"].(map[string]any)
+	if !ok {
+		t.Fatalf("draft_read legalTransitions = %v, want map", doc["legalTransitions"])
+	}
+	wantADR := fakeLegalTransitions("adr")
+	assertLegalTransitions(t, lt, wantADR)
+	// view alias identical already covered, but also carries same legalTransitions
+	out2 := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"view","arguments":{"target":"feather/adr:001","project":"feather"}}}`)
+	text2 := out2["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if text != text2 {
+		t.Errorf("draft_read and view alias payloads must be identical, got %q vs %q", text, text2)
+	}
+	// unknown type -> {} via new with unknown type
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"new","arguments":{"project":"feather","namespace":"feather","type":"unknown","id":"001"}}}`)
+	text = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	var unk map[string]any
+	if err := json.Unmarshal([]byte(text), &unk); err != nil {
+		t.Fatalf("unknown type new must be JSON: %v", err)
+	}
+	if um, ok := unk["legalTransitions"].(map[string]any); !ok || len(um) != 0 {
+		t.Errorf("unknown type legalTransitions = %v, want {}", unk["legalTransitions"])
+	}
+}
+
+func assertLegalTransitions(t *testing.T, got map[string]any, want map[string][]string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("legalTransitions len = %d, want %d: got %v want %v", len(got), len(want), got, want)
+	}
+	for k, wv := range want {
+		gv, ok := got[k]
+		if !ok {
+			t.Fatalf("legalTransitions missing domain %q", k)
+		}
+		if !equalStringSlices(toStringSlice(gv), wv) {
+			t.Errorf("legalTransitions[%q] = %v, want %v", k, gv, wv)
+		}
+	}
+}
+
+func toStringSlice(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, len(arr))
+	for i, e := range arr {
+		out[i], _ = e.(string)
+	}
+	return out
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestToolsCallGet(t *testing.T) {

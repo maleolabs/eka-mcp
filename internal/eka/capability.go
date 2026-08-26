@@ -546,6 +546,9 @@ type conformanceResult struct {
 	Message  string `json:"message"`
 }
 
+// TODO(sto:mcp-transition-transparency): CLI parity follow-up — surface
+// legalTransitions in `eka publish --json` and `eka new --json` so the CLI
+// and MCP wire shapes stay aligned (tracked separately; MCP is not blocked).
 type draftResult struct {
 	Schema           string              `json:"schema,omitempty"`
 	Project          string              `json:"project"`
