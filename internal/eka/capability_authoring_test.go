@@ -1189,12 +1189,12 @@ func TestPublishBatchTopologicalOrder(t *testing.T) {
 	// Scaffold the planning unit via single drafts, dependent first to prove
 	// order is topological not declaration. scp has no deps, plan derives-from scp.
 	if _, err := cap.NewDraft(mcp.NewDraftRequest{
-		Project:   "feather",
-		Namespace: "feather",
-		Type:      "plan",
-		ID:        "roadmap-v2",
-		Dimension: "planning",
-		By:        mcp.AuthorIdentity{Kind: "agent", Name: "mcp-agent"},
+		Project:       "feather",
+		Namespace:     "feather",
+		Type:          "plan",
+		ID:            "roadmap-v2",
+		Dimension:     "planning",
+		By:            mcp.AuthorIdentity{Kind: "agent", Name: "mcp-agent"},
 		Relationships: []mcp.Relationship{{Type: "derives-from", Target: "feather/scp:product-v1"}},
 	}); err != nil {
 		t.Fatalf("NewDraft plan failed: %v", err)

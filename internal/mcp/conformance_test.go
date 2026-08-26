@@ -857,7 +857,7 @@ func (f *failingFeedbackCapability) NewDraft(req NewDraftRequest) ([]byte, error
 func (f *failingFeedbackCapability) DraftUpdate(req DraftUpdateRequest) ([]byte, error) {
 	return nil, nil
 }
-func (f *failingFeedbackCapability) Publish(req PublishRequest) ([]byte, error)   { return nil, nil }
+func (f *failingFeedbackCapability) Publish(req PublishRequest) ([]byte, error) { return nil, nil }
 func (f *failingFeedbackCapability) PublishBatch(req PublishBatchRequest) ([]byte, error) {
 	return nil, nil
 }
@@ -907,7 +907,7 @@ func (f *failingAssignmentCapability) NewDraft(req NewDraftRequest) ([]byte, err
 func (f *failingAssignmentCapability) DraftUpdate(req DraftUpdateRequest) ([]byte, error) {
 	return nil, nil
 }
-func (f *failingAssignmentCapability) Publish(req PublishRequest) ([]byte, error)   { return nil, nil }
+func (f *failingAssignmentCapability) Publish(req PublishRequest) ([]byte, error) { return nil, nil }
 func (f *failingAssignmentCapability) PublishBatch(req PublishBatchRequest) ([]byte, error) {
 	return nil, nil
 }
@@ -958,7 +958,7 @@ func (f *failingSyncPushCapability) NewDraft(req NewDraftRequest) ([]byte, error
 func (f *failingSyncPushCapability) DraftUpdate(req DraftUpdateRequest) ([]byte, error) {
 	return nil, nil
 }
-func (f *failingSyncPushCapability) Publish(req PublishRequest) ([]byte, error)   { return nil, nil }
+func (f *failingSyncPushCapability) Publish(req PublishRequest) ([]byte, error) { return nil, nil }
 func (f *failingSyncPushCapability) PublishBatch(req PublishBatchRequest) ([]byte, error) {
 	return nil, nil
 }
