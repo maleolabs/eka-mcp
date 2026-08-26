@@ -314,10 +314,43 @@ Then run `./eka-mcp serve` as your MCP client's stdio server, or use
 
 ## Versioning
 
-- **Semantic versioning**, tag-driven. The single version constant
-  (`pack.Version`, currently `1.0.0`) is reported in the plugin manifest, the
+- **Semantic versioning**, tag-driven. The single version variable
+  (`pack.Version`, currently `1.2.0`) is reported in the plugin manifest, the
   `install` result, and the MCP `serverInfo` — one version across all three
   roles, so they never drift.
+- **Release builds stamp the tag.** The release pipeline injects the git tag
+  into `pack.Version` via `-ldflags "-X github.com/maleolabs/eka-mcp.Version=<tag>"`
+  (see `.anvil/pipelines/build.yaml`; `scripts/bump.sh` keeps `anvil.yaml` and
+  `pack.go` in sync before tagging). A running build is therefore identifiable:
+  read `.version` from `eka mcp manifest --json`, or `serverInfo.version` from
+  the MCP `initialize` handshake.
+- **Source builds report the source literal.** A plain
+  `go build ./cmd/eka-mcp` reports the `pack.Version` value in the working
+  tree (never a placeholder like "dev") — compare it against the latest `v*`
+  tag (`git describe --tags`) to tell a dev checkout from a released build.
+
+## Server diagnostics (stderr)
+
+The server writes one-line operational diagnostics to **stderr** — stdout is
+the JSON-RPC protocol stream and never carries diagnostics. Today there is
+one record class, emitted on every argument-shaped tool refusal
+(bug:mcp-new-false-refusal):
+
+```
+eka-mcp param-refusal tool=new args_bytes=4132 cause=missing_field field=project
+```
+
+- `tool` — the MCP tool name.
+- `args_bytes` — the exact byte length of the received `arguments` payload:
+  the discriminator between client-side truncation of a large intended
+  payload and plain parameter omission.
+- `cause` — one of `invalid_json` (arguments are not valid JSON / not an
+  object, e.g. double-encoded), `missing_field`, `empty_field`,
+  `wrong_type`, `invalid_arg`.
+- `field` — the offending required field, when one is named.
+
+Records carry no argument values, only shapes and lengths, so no workspace
+content leaks into logs.
 
 ## Contributing
 
