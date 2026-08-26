@@ -134,7 +134,7 @@ Discipline:
 - `instanceVersion` is deliberately absent — assigned at publish.
 - **Author identity (`by`)** — the scaffold defaults to `by: Engineering`; **replace it with the real author** before publishing. The `by` value must be the human/agent identity in effect — `git config user.name`, or an explicit agent identity — never a generic placeholder, never an invented person. (`eka transition` has the same discipline via `--by` with `--by-kind user|agent|worker`; `eka note` takes the author from `git config user.name`.)
 
-Use `eka edit <target>` only interactively (TTY); for agent workflows edit the draft file directly (it is a mutable workspace-local file) or use `--content-file`.
+Use `eka edit <target>` only interactively (TTY); for CLI agent workflows edit the draft file directly (it is a mutable workspace-local file) or use `--content-file`; for MCP workflows use `draft_update` (partial content merge, read-modify-write via `draft_read`, publish still validates) instead of hand-editing workspace draft files.
 
 ### 3. Validate
 
@@ -201,7 +201,7 @@ eka note <subject-line> --role implementation|review|fix [--domain <domain>] [--
 # 1. scaffold a work item draft, content from a prepared JSON object
 eka new feather/sto:export-csv --content-file /tmp/export-csv-content.json
 
-# 2. (agent) edit the draft file directly, then publish
+# 2. (agent) use `draft_update` (MCP, partial content merge via `draft_read`) or edit the draft file directly (CLI), then publish
 eka publish feather/sto:export-csv
 
 # 3. verify the immutable object

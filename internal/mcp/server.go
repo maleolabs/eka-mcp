@@ -37,7 +37,7 @@ const ProtocolVersion = "2024-11-05"
 // toolNames is the fixed deterministic tool order the server advertises
 // in tools/list and dispatches in tools/call. The order is the contract.
 var toolNames = []string{
-	"context", "get", "domain", "status", "validate", "new", "publish",
+	"context", "get", "domain", "status", "validate", "new", "draft_update", "publish",
 	"transition", "note", "draft_read", "view", "draft_list", "integrity_check",
 	"discard", "sync_push", "assign", "reassign", "unassign",
 	"feedback_new", "feedback_list", "feedback_publish",
@@ -87,6 +87,7 @@ var toolRequiredFields = map[string][]string{
 	"domain":           {"projectId", "domain"},
 	"validate":         {"root"},
 	"new":              {"project", "namespace", "type", "id"},
+	"draft_update":     {"target"},
 	"publish":          {"target"},
 	"transition":       {"target"},
 	"note":             {"target", "role"},
@@ -298,8 +299,17 @@ type Capability interface {
 	Validate(root string) ([]byte, error)
 	// NewDraft scaffolds one draft (schema eka-draft-v1).
 	NewDraft(req NewDraftRequest) ([]byte, error)
+	// DraftUpdate applies a partial content merge to one pending draft
+	// (schema eka-draft-update-v1) — read-modify-write through
+	// draft_read; publish still validates.
+	DraftUpdate(req DraftUpdateRequest) ([]byte, error)
 	// Publish publishes one draft (schema eka-publish-result-v1).
 	Publish(req PublishRequest) ([]byte, error)
+	// PublishBatch publishes every pending draft in topological order
+	// (schema eka-publish-batch-v1) — same engine as `eka publish --all`
+	// / `--pending` (Kahn's algorithm, cycle and dangling-reference
+	// pre-flight refusals, per-draft atomic validation).
+	PublishBatch(req PublishBatchRequest) ([]byte, error)
 	// Transition performs one transition (schema
 	// eka-transition-result-v1); gate refusals surface as errors and
 	// nothing is published.
@@ -383,11 +393,25 @@ type NewDraftRequest struct {
 	Content       map[string]any
 }
 
+// DraftUpdateRequest describes one draft partial-content merge.
+type DraftUpdateRequest struct {
+	Target  string
+	Project string
+	Content map[string]any
+}
+
 // PublishRequest describes one publish run.
 type PublishRequest struct {
 	Target          string
 	Project         string
 	InstanceVersion int
+}
+
+// PublishBatchRequest describes one batch publish run.
+type PublishBatchRequest struct {
+	Project string
+	All     bool
+	Pending bool
 }
 
 // TransitionRequest describes one requested transition.
@@ -791,10 +815,9 @@ func (s *Server) handleToolsList(req request) []byte {
 			},
 		},
 		map[string]any{
-			"name": "publish",
-			"description": "Publish one draft as an immutable Canonical Knowledge Object (schema " +
-				"eka-publish-result-v1). All-or-nothing: a failed validation or insert leaves the draft " +
-				"untouched; the draft file is the single-use ticket.",
+			"name": "draft_update",
+			"description": "Apply a partial content merge to one pending draft — read-modify-write through draft_read (schema eka-draft-update-v1). " +
+				"Supplied content keys overwrite/add; keys not mentioned are preserved. Publish still validates — no validation happens here.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -806,9 +829,43 @@ func (s *Server) handleToolsList(req request) []byte {
 						"type":        "string",
 						"description": "Optional project scope (default: the cwd repository's project).",
 					},
+					"content": map[string]any{
+						"type":        "object",
+						"description": "Partial content object to merge into the draft's content — keys overwrite/add, absent keys are preserved.",
+					},
+				},
+			},
+		},
+		map[string]any{
+			"name": "publish",
+			"description": "Publish one draft as an immutable Canonical Knowledge Object (schema " +
+				"eka-publish-result-v1). All-or-nothing: a failed validation or insert leaves the draft " +
+				"untouched; the draft file is the single-use ticket. Batch mode: --all / --pending synonyms publish every pending " +
+				"draft of the project's pending set in topological order (referenced drafts first) via the same engine `eka publish --all` uses " +
+				"(schema eka-publish-batch-v1, Kahn's algorithm, cycle and dangling-reference pre-flight refusals, per-draft atomic validation); " +
+				"empty backlog is a valid no-op. DECLINED: scaffold+publish single-call merge (collapses lifecycle steps, weakens draft gate).",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"target": map[string]any{
+						"type":        "string",
+						"description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\" — required for single publish, absent for batch (--all/--pending).",
+					},
+					"project": map[string]any{
+						"type":        "string",
+						"description": "Optional project scope (default: the cwd repository's project).",
+					},
 					"instanceVersion": map[string]any{
 						"type":        "integer",
-						"description": "Optional explicit instance version (must exceed the line's highest).",
+						"description": "Optional explicit instance version (must exceed the line's highest) — single-target only, not available with --all/--pending.",
+					},
+					"all": map[string]any{
+						"type":        "boolean",
+						"description": "Batch mode: publish every pending draft of the project in topological order (referenced drafts first) — synonym of pending, parity with `eka publish --all` (schema eka-publish-batch-v1). Target must be absent when true.",
+					},
+					"pending": map[string]any{
+						"type":        "boolean",
+						"description": "Batch mode: synonym of all — publish every pending draft in topological order (schema eka-publish-batch-v1).",
 					},
 				},
 			},
@@ -1376,19 +1433,104 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			return "", err
 		}
 		return string(data), nil
-	case "publish":
+	case "draft_update":
+		// draft_update has its own required check (target) plus content object.
 		var p struct {
+			Target  string          `json:"target"`
+			Project string          `json:"project"`
+			Content json.RawMessage `json:"content"`
+		}
+		if err := s.decodeToolArgs("draft_update", args, &p); err != nil {
+			return "", err
+		}
+		// Explicit content required and must be an object (not null/array/string).
+		if len(bytes.TrimSpace(p.Content)) == 0 || string(bytes.TrimSpace(p.Content)) == "null" {
+			s.logParamRefusal("draft_update", len(args), causeMissingField, "content")
+			return "", fmt.Errorf("draft_update requires \"content\": missing required field")
+		}
+		content, err := parseContent(p.Content)
+		if err != nil {
+			s.logParamRefusal("draft_update", len(args), causeInvalidArg, "content")
+			return "", fmt.Errorf("draft_update has an invalid argument: %w", err)
+		}
+		if content == nil {
+			s.logParamRefusal("draft_update", len(args), causeMissingField, "content")
+			return "", fmt.Errorf("draft_update requires \"content\": missing required field")
+		}
+		if len(content) == 0 {
+			return "", fmt.Errorf("draft_update requires content to be a non-empty JSON object")
+		}
+		data, err := s.cap.DraftUpdate(DraftUpdateRequest{
+			Target:  p.Target,
+			Project: p.Project,
+			Content: content,
+		})
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "publish":
+		// Batch detection: all:true or pending:true => batch publish path, no target required.
+		// We inspect the raw arguments before the strict target-required decode.
+		var rawProbe map[string]json.RawMessage
+		isBatch := false
+		if len(bytes.TrimSpace(args)) != 0 && string(bytes.TrimSpace(args)) != "null" {
+			if err := json.Unmarshal(args, &rawProbe); err == nil {
+				for _, k := range []string{"all", "pending"} {
+					if v, ok := rawProbe[k]; ok {
+						var b bool
+						if err := json.Unmarshal(v, &b); err != nil {
+							s.logParamRefusal("publish", len(args), causeInvalidArg, k)
+							return "", fmt.Errorf("publish has an invalid argument: field %q must be a boolean", k)
+						}
+						if b {
+							isBatch = true
+						}
+					}
+				}
+				// Type check for target/project/instanceVersion when batch vs single?
+			}
+		}
+		if isBatch {
+			var p struct {
+				Target          string `json:"target"`
+				Project         string `json:"project"`
+				InstanceVersion int    `json:"instanceVersion"`
+				All             bool   `json:"all"`
+				Pending         bool   `json:"pending"`
+			}
+			if err := json.Unmarshal(args, &p); err != nil {
+				s.logParamRefusal("publish", len(args), causeInvalidArg, typeErrorField(err))
+				return "", fmt.Errorf("publish has an invalid argument: %s", typeErrorDetail(err))
+			}
+			if strings.TrimSpace(p.Target) != "" {
+				return "", fmt.Errorf("publish: target is not available with --all/--pending; versions are auto-assigned per draft")
+			}
+			if p.InstanceVersion != 0 {
+				return "", fmt.Errorf("publish: --instance-version is a single-target flag and is not available with --all/--pending; versions are auto-assigned per draft")
+			}
+			data, err := s.cap.PublishBatch(PublishBatchRequest{
+				Project: p.Project,
+				All:     p.All,
+				Pending: p.Pending,
+			})
+			if err != nil {
+				return "", err
+			}
+			return string(data), nil
+		}
+		var p2 struct {
 			Target          string `json:"target"`
 			Project         string `json:"project"`
 			InstanceVersion int    `json:"instanceVersion"`
 		}
-		if err := s.decodeToolArgs("publish", args, &p); err != nil {
+		if err := s.decodeToolArgs("publish", args, &p2); err != nil {
 			return "", err
 		}
 		data, err := s.cap.Publish(PublishRequest{
-			Target:          p.Target,
-			Project:         p.Project,
-			InstanceVersion: p.InstanceVersion,
+			Target:          p2.Target,
+			Project:         p2.Project,
+			InstanceVersion: p2.InstanceVersion,
 		})
 		if err != nil {
 			return "", err

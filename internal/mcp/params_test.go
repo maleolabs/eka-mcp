@@ -262,6 +262,19 @@ func TestRequiredFieldContractSchemaMatchesEnforcement(t *testing.T) {
 	// Enforcement side: all declared fields present passes the
 	// parameter layer (the fake capability succeeds for every tool).
 	for name, fields := range toolRequiredFields {
+		// draft_update additionally requires an object "content" beyond the
+		// string-field contract (toolRequiredFields is string-only), so the
+		// generic string map would miss it; provide a minimal content object.
+		if name == "draft_update" {
+			raw := []byte(`{"target":"x","content":{"k":"v"}}`)
+			out := mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"`+name+`","arguments":`+string(raw)+`}}`)
+			res := out["result"].(map[string]any)
+			if res["isError"] != false {
+				text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+				t.Errorf("%s with all required fields must pass the parameter layer, refused with: %s", name, text)
+			}
+			continue
+		}
 		args := map[string]string{}
 		for _, f := range fields {
 			if f == "type" { // feedback_new's fake validates the closed type set

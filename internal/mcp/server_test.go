@@ -72,6 +72,15 @@ func (f *fakeCapability) NewDraft(req NewDraftRequest) ([]byte, error) {
 	return []byte(`{"schema":"eka-draft-v1","project":` + mustQuote(req.Project) + `,"namespace":` + mustQuote(req.Namespace) + `,"type":` + mustQuote(req.Type) + `,"id":` + mustQuote(req.ID) + `,"path":"/tmp/drafts/` + req.Type + `-` + req.ID + `.json","updated":"2026-08-21T00:00:00Z","legalTransitions":` + string(ltJSON) + `}`), nil
 }
 
+func (f *fakeCapability) DraftUpdate(req DraftUpdateRequest) ([]byte, error) {
+	// Echo merged content for protocol test: inject dummy legalTransitions like DraftRead.
+	lt := fakeLegalTransitions("adr")
+	ltJSON, _ := json.Marshal(lt)
+	contentJSON, _ := json.Marshal(req.Content)
+	// Simulate merge: content provided is returned as content field.
+	return []byte(`{"namespace":"feather","type":"adr","id":"001","revision":1,"content":` + string(contentJSON) + `,"legalTransitions":` + string(ltJSON) + `}`), nil
+}
+
 func (f *fakeCapability) Publish(req PublishRequest) ([]byte, error) {
 	if f.publishErr != nil {
 		return nil, f.publishErr
@@ -83,6 +92,14 @@ func (f *fakeCapability) Publish(req PublishRequest) ([]byte, error) {
 	lt := fakeLegalTransitions(typeToken)
 	ltJSON, _ := json.Marshal(lt)
 	return []byte(`{"schema":"eka-publish-result-v1","form":` + mustQuote(req.Target+":1") + `,"instanceVersion":1,"objectHash":"abc","note":"","legalTransitions":` + string(ltJSON) + `}`), nil
+}
+
+func (f *fakeCapability) PublishBatch(req PublishBatchRequest) ([]byte, error) {
+	// Deterministic batch: echo 1 published entry per batch call for protocol test.
+	lt := fakeLegalTransitions("adr")
+	ltJSON, _ := json.Marshal(lt)
+	published := `{"form":"feather/adr:001:1","instanceVersion":1,"objectHash":"abc","note":"","legalTransitions":` + string(ltJSON) + `}`
+	return []byte(`{"schema":"eka-publish-batch-v1","project":` + mustQuote(req.Project) + `,"count":1,"published":[` + published + `]}`), nil
 }
 
 func (f *fakeCapability) Transition(req TransitionRequest) ([]byte, error) {
@@ -277,7 +294,7 @@ func TestToolsList(t *testing.T) {
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	res := out["result"].(map[string]any)
 	tools := res["tools"].([]any)
-	want := []string{"context", "get", "domain", "status", "validate", "new", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard", "sync_push", "assign", "reassign", "unassign", "feedback_new", "feedback_list", "feedback_publish"}
+	want := []string{"context", "get", "domain", "status", "validate", "new", "draft_update", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard", "sync_push", "assign", "reassign", "unassign", "feedback_new", "feedback_list", "feedback_publish"}
 	got := make([]string, 0, len(tools))
 	for _, tl := range tools {
 		tm := tl.(map[string]any)
@@ -1117,6 +1134,75 @@ func TestServeEndToEnd(t *testing.T) {
 	res := callResp["result"].(map[string]any)
 	if res["isError"] != false {
 		t.Errorf("final tool result isError = %v, want false", res["isError"])
+	}
+}
+
+// TestToolsCallDraftUpdate: draft_update merges partial content and surfaces deterministically.
+func TestToolsCallDraftUpdate(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	// Success: partial merge.
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"draft_update","arguments":{"target":"feather/sto:001","content":{"description":"new"}}}}`)
+	res := out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Fatalf("draft_update isError = %v, want false", res["isError"])
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatalf("draft_update text must be JSON: %v", err)
+	}
+	content := doc["content"].(map[string]any)
+	if content["description"] != "new" {
+		t.Errorf("draft_update content = %v, want new", content["description"])
+	}
+	// Missing target → isError (missing required field).
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"draft_update","arguments":{"content":{"description":"x"}}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Errorf("draft_update missing target must be isError=true")
+	}
+	// Missing content → isError.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"draft_update","arguments":{"target":"feather/sto:001"}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Errorf("draft_update missing content must be isError=true")
+	}
+	// Wrong-typed content → isError (invalid_arg).
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"draft_update","arguments":{"target":"feather/sto:001","content":"oops"}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Errorf("draft_update wrong-typed content must be isError=true")
+	}
+}
+
+// TestToolsCallPublishBatch: publish --all / --pending batch mode publishes in topological order.
+func TestToolsCallPublishBatch(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	// Batch via all:true.
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"publish","arguments":{"all":true}}}`)
+	res := out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Fatalf("publish batch all isError = %v, want false", res["isError"])
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatalf("publish batch text must be JSON: %v", err)
+	}
+	if doc["schema"] != "eka-publish-batch-v1" {
+		t.Errorf("schema = %v, want eka-publish-batch-v1", doc["schema"])
+	}
+	// Batch via pending:true synonym.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"publish","arguments":{"pending":true}}}`)
+	if out["result"].(map[string]any)["isError"] != false {
+		t.Errorf("publish batch pending must succeed")
+	}
+	// Target + all is usage error.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"publish","arguments":{"target":"feather/sto:001","all":true}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Errorf("publish target+all must be isError=true (usage)")
+	}
+	// Wrong-typed all → invalid_arg.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"publish","arguments":{"all":"true"}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Errorf("publish all wrong type must be isError=true")
 	}
 }
 

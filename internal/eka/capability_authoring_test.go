@@ -1052,6 +1052,212 @@ func TestTransitionRefusalNoPartialWrite(t *testing.T) {
 	}
 }
 
+// --- DraftUpdate -------------------------------------------------------
+
+// TestDraftUpdatePartialOverwrite: draft_update merges partial content —
+// supplied keys overwrite/add, absent keys are preserved, publish still
+// validates (no validation at update time).
+func TestDraftUpdatePartialOverwrite(t *testing.T) {
+	authoringRuntime(t)
+	cap, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cap.Close()
+
+	if _, err := cap.NewDraft(mcp.NewDraftRequest{
+		Project:   "feather",
+		Namespace: "feather",
+		Type:      "sto",
+		ID:        "007-update-partial",
+		By:        mcp.AuthorIdentity{Kind: "agent", Name: "mcp-agent"},
+		Content:   map[string]any{"description": "old desc", "acceptanceCriteria": "crit1"},
+	}); err != nil {
+		t.Fatalf("NewDraft failed: %v", err)
+	}
+	// Partial merge: only description updated.
+	data, err := cap.DraftUpdate(mcp.DraftUpdateRequest{
+		Target:  "feather/sto:007-update-partial",
+		Project: "feather",
+		Content: map[string]any{"description": "new desc"},
+	})
+	if err != nil {
+		t.Fatalf("DraftUpdate failed: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("DraftUpdate must return JSON: %v\n%s", err, data)
+	}
+	content := doc["content"].(map[string]any)
+	if content["description"] != "new desc" {
+		t.Errorf("description = %v, want new desc", content["description"])
+	}
+	if content["acceptanceCriteria"] != "crit1" {
+		t.Errorf("acceptanceCriteria = %v, want preserved crit1", content["acceptanceCriteria"])
+	}
+	// Verify persisted file also merged (draft_read).
+	raw, err := cap.DraftRead("feather/sto:007-update-partial", "feather")
+	if err != nil {
+		t.Fatalf("DraftRead after update failed: %v", err)
+	}
+	var persisted map[string]any
+	if err := json.Unmarshal(raw, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	pc := persisted["content"].(map[string]any)
+	if pc["description"] != "new desc" || pc["acceptanceCriteria"] != "crit1" {
+		t.Errorf("persisted content = %v, want merged", pc)
+	}
+	// Publish still validates — the updated draft publishes.
+	if _, err := cap.Publish(mcp.PublishRequest{Target: "feather/sto:007-update-partial", Project: "feather"}); err != nil {
+		t.Fatalf("Publish after DraftUpdate failed: %v", err)
+	}
+}
+
+// TestDraftUpdateUnknownTarget: unknown draft refuses deterministically.
+func TestDraftUpdateUnknownTarget(t *testing.T) {
+	authoringRuntime(t)
+	cap, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cap.Close()
+
+	_, err = cap.DraftUpdate(mcp.DraftUpdateRequest{
+		Target:  "feather/sto:does-not-exist",
+		Project: "feather",
+		Content: map[string]any{"description": "x"},
+	})
+	if err == nil {
+		t.Fatal("unknown draft must be refused")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("unknown draft error = %q, want not found", err.Error())
+	}
+}
+
+// TestDraftUpdatePostPublishRefusal: after publish the draft file is the
+// single-use ticket — draft_update on the same target refuses (already
+// published or discarded).
+func TestDraftUpdatePostPublishRefusal(t *testing.T) {
+	authoringRuntime(t)
+	cap, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cap.Close()
+
+	if _, err := cap.NewDraft(mcp.NewDraftRequest{
+		Project:   "feather",
+		Namespace: "feather",
+		Type:      "sto",
+		ID:        "008-update-post-publish",
+		By:        mcp.AuthorIdentity{Kind: "agent", Name: "mcp-agent"},
+	}); err != nil {
+		t.Fatalf("NewDraft failed: %v", err)
+	}
+	if _, err := cap.Publish(mcp.PublishRequest{Target: "feather/sto:008-update-post-publish", Project: "feather"}); err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+	_, err = cap.DraftUpdate(mcp.DraftUpdateRequest{
+		Target:  "feather/sto:008-update-post-publish",
+		Project: "feather",
+		Content: map[string]any{"description": "x"},
+	})
+	if err == nil {
+		t.Fatal("post-publish draft_update must be refused")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("post-publish error = %q, want not found", err.Error())
+	}
+}
+
+// --- PublishBatch ------------------------------------------------------
+
+// TestPublishBatchTopologicalOrder: --all publishes pending drafts in
+// topological order (referenced first) via the same Kahn engine as CLI.
+// Uses the canonical planning-unit shape (scp -> plan -> ctr -> sto -> tkt)
+// that validates clean.
+func TestPublishBatchTopologicalOrder(t *testing.T) {
+	authoringRuntime(t)
+	cap, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cap.Close()
+
+	// Scaffold the planning unit via single drafts, dependent first to prove
+	// order is topological not declaration. scp has no deps, plan derives-from scp.
+	if _, err := cap.NewDraft(mcp.NewDraftRequest{
+		Project:   "feather",
+		Namespace: "feather",
+		Type:      "plan",
+		ID:        "roadmap-v2",
+		Dimension: "planning",
+		By:        mcp.AuthorIdentity{Kind: "agent", Name: "mcp-agent"},
+		Relationships: []mcp.Relationship{{Type: "derives-from", Target: "feather/scp:product-v1"}},
+	}); err != nil {
+		t.Fatalf("NewDraft plan failed: %v", err)
+	}
+	if _, err := cap.NewDraft(mcp.NewDraftRequest{
+		Project:   "feather",
+		Namespace: "feather",
+		Type:      "scp",
+		ID:        "product-v1",
+		Dimension: "planning",
+		By:        mcp.AuthorIdentity{Kind: "agent", Name: "mcp-agent"},
+	}); err != nil {
+		t.Fatalf("NewDraft scp failed: %v", err)
+	}
+	data, err := cap.PublishBatch(mcp.PublishBatchRequest{Project: "feather"})
+	if err != nil {
+		t.Fatalf("PublishBatch failed: %v", err)
+	}
+	var res map[string]any
+	if err := json.Unmarshal(data, &res); err != nil {
+		t.Fatalf("PublishBatch must return JSON: %v\n%s", err, data)
+	}
+	if res["schema"] != "eka-publish-batch-v1" {
+		t.Errorf("schema = %v, want eka-publish-batch-v1", res["schema"])
+	}
+	if res["count"] != float64(2) {
+		t.Errorf("count = %v, want 2", res["count"])
+	}
+	published := res["published"].([]any)
+	if len(published) != 2 {
+		t.Fatalf("published = %v, want 2", published)
+	}
+	// Deterministic topological order: scp before plan (referenced first).
+	first := published[0].(map[string]any)
+	second := published[1].(map[string]any)
+	firstForm, _ := first["form"].(string)
+	secondForm, _ := second["form"].(string)
+	if !strings.Contains(firstForm, "scp:product-v1") {
+		t.Errorf("first published = %v, want scp:product-v1 (topological)", firstForm)
+	}
+	if !strings.Contains(secondForm, "plan:roadmap-v2") {
+		t.Errorf("second published = %v, want plan:roadmap-v2", secondForm)
+	}
+	// Verify objects resolve.
+	for _, f := range []string{"feather/scp:product-v1:1", "feather/plan:roadmap-v2:1"} {
+		if _, err := cap.Get(f, false); err != nil {
+			t.Errorf("published object %s must resolve: %v", f, err)
+		}
+	}
+	// Draft backlog empty after batch.
+	drafts, err := cap.DraftList("feather")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list map[string]any
+	if err := json.Unmarshal(drafts, &list); err != nil {
+		t.Fatal(err)
+	}
+	if list["count"] != float64(0) {
+		t.Errorf("draft list count = %v, want 0 after batch publish", list["count"])
+	}
+}
+
 // writeEKAFile writes an eka.yaml identity file into dir, creating the
 // directory if needed.
 func writeEKAFile(t *testing.T, dir, project, name, namespace string) {
