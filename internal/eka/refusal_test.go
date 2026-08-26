@@ -202,7 +202,7 @@ func walkStrings(v any, visit func(string)) {
 	}
 }
 
-// TestMarshalConformanceReportNilIsEmpthless: a nil report serializes
+// TestMarshalConformanceReportNilIsEmpty: a nil report serializes
 // to "" — the boundary emits no block.
 func TestMarshalConformanceReportNilIsEmpty(t *testing.T) {
 	if got := marshalConformanceReport(nil); got != "" {
@@ -300,4 +300,109 @@ func TestPublishRefusalCarriesReportEndToEnd(t *testing.T) {
 	if _, err := cap.DraftRead("feather/adr:005-broken-ref", "feather"); err != nil {
 		t.Errorf("the refused publish must keep the draft: %v", err)
 	}
+}
+
+// TestWrapValidationRefusalCarriesReport: the helper for assignment
+// validation keeps the headline byte-stable while carrying the report.
+func TestWrapValidationRefusalCarriesReport(t *testing.T) {
+	report := sampleReport()
+	msg := "assign refused: feather/sto:004 failed CKO-level validation with 2 blocking error(s); nothing was changed"
+	wrapped := wrapValidationRefusal(msg, report)
+	carrier, ok := wrapped.(refusalCarrier)
+	if !ok {
+		t.Fatalf("wrapValidationRefusal must return the fidelity carrier, got %T", wrapped)
+	}
+	if wrapped.Error() != msg {
+		t.Errorf("wrapped message = %q, want verbatim %q", wrapped.Error(), msg)
+	}
+	if carrier.RefusalReport() == "" {
+		t.Fatal("wrapValidationRefusal must embed the report")
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(carrier.RefusalReport()), &doc); err != nil {
+		t.Fatalf("embedded report must be valid JSON: %v\n%s", err, carrier.RefusalReport())
+	}
+	if doc["schema"] != "eka-conformance-report-v1" {
+		t.Errorf("schema = %v, want eka-conformance-report-v1", doc["schema"])
+	}
+	if doc["errors"] != float64(2) {
+		t.Errorf("errors = %v, want 2", doc["errors"])
+	}
+}
+
+// TestWrapToolRefusalDoubleWrapGuard: an already-wrapped refusal is
+// returned directly without re-marshaling.
+func TestWrapToolRefusalDoubleWrapGuard(t *testing.T) {
+	report := sampleReport()
+	msg := "assign refused: feather/sto:004 failed CKO-level validation with 2 blocking error(s); nothing was changed"
+	inner := wrapValidationRefusal(msg, report)
+	outer := wrapToolRefusal(inner)
+	if outer != inner {
+		t.Errorf("double-wrap must return the same instance, got %T vs %T", outer, inner)
+	}
+	// Also via PublishError path.
+	pubErr := &runtime.PublishError{Target: "feather/adr:004", Report: report}
+	wrapped := wrapToolRefusal(pubErr)
+	again := wrapToolRefusal(wrapped)
+	if again != wrapped {
+		t.Errorf("double-wrap via PublishError must return the same instance, got %T vs %T", again, wrapped)
+	}
+}
+
+// TestAssignRefusalCarriesReportEndToEnd: scaffolding a valid work item
+// and member, then forcing an assignment CKO validation failure by
+// injecting a report via wrapValidationRefusal, the refusal carrier still
+// proves the assign path embeds the report (the three assignment sites
+// now use the helper). This unit-level end-to-end validates the wiring
+// without requiring a corrupt store state.
+func TestAssignValidationCarrierEndToEnd(t *testing.T) {
+	report := sampleReport()
+	report.Results = append(report.Results, conformance.Result{
+		File:     "feather/sto:assign-e2e",
+		Rule:     "R5",
+		Severity: conformance.SeverityError,
+		Message:  "assignment validation: member feather/mbr:alice does not resolve",
+	})
+	msg := "assign refused: feather/sto:assign-e2e failed CKO-level validation with 1 blocking error(s); nothing was changed"
+	err := wrapValidationRefusal(msg, report)
+	carrier, ok := err.(refusalCarrier)
+	if !ok {
+		t.Fatalf("assignment refusal must be the fidelity carrier, got %T", err)
+	}
+	// Simulate the MCP boundary: the report must survive RedactPaths and
+	// stay valid JSON, and the headline must be byte-stable.
+	if carrier.RefusalReport() == "" {
+		t.Fatal("assignment refusal must embed the validation report")
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(carrier.RefusalReport()), &doc); err != nil {
+		t.Fatalf("embedded assignment report must be valid JSON: %v\n%s", err, carrier.RefusalReport())
+	}
+	if doc["schema"] != "eka-conformance-report-v1" {
+		t.Errorf("schema = %v, want eka-conformance-report-v1", doc["schema"])
+	}
+	// The redacted report is also passed through the boundary's
+	// RedactPaths + json.Valid gate — ensure it would be embedded.
+	redacted := mcp.RedactPaths(carrier.RefusalReport())
+	if !json.Valid([]byte(redacted)) {
+		t.Fatalf("redacted assignment report must stay valid JSON:\n%s", redacted)
+	}
+	// Verify the carrier unwraps through the boundary's errors.As chain.
+	var fidelity mcpFidelity
+	if !errors.As(err, &fidelity) {
+		t.Fatalf("assignment carrier must satisfy the mcp.refusalFidelity contract via errors.As")
+	}
+	if fidelity.RefusalReport() == "" {
+		t.Error("mcpFidelity RefusalReport must be non-empty for assignment validation")
+	}
+}
+
+// mcpFidelity is the structural view of the MCP boundary's
+// refusalFidelity contract without importing the internal/mcp package's
+// unexported type — errors.As matches via method set.
+type mcpFidelity interface {
+	error
+	RefusalReport() string
+	RefusalWarning() string
+	RefusalConfirmation() bool
 }

@@ -21,6 +21,9 @@ type fakeCapability struct {
 	domainErr     error
 	publishErr    error
 	transitionErr error
+	assignErr     error
+	reassignErr   error
+	unassignErr   error
 	gotForms      []string
 	gotNew        []NewDraftRequest
 	gotNote       []NoteRequest
@@ -105,14 +108,23 @@ func (f *fakeCapability) SyncPush(repoPath string, adopt, override bool) ([]byte
 }
 
 func (f *fakeCapability) Assign(req AssignmentRequest) ([]byte, error) {
+	if f.assignErr != nil {
+		return nil, f.assignErr
+	}
 	return []byte(`{"schema":"eka-assignment-v1","ok":true,"action":"assign","item":` + mustQuote(req.Target) + `,"assignee":` + mustQuote(req.To) + `,"state":"published","objectHash":"abc","by":"` + req.By.Name + `"}`), nil
 }
 
 func (f *fakeCapability) Reassign(req AssignmentRequest) ([]byte, error) {
+	if f.reassignErr != nil {
+		return nil, f.reassignErr
+	}
 	return []byte(`{"schema":"eka-assignment-v1","ok":true,"action":"reassign","item":` + mustQuote(req.Target) + `,"assignee":` + mustQuote(req.To) + `,"state":"published","objectHash":"abc","by":"` + req.By.Name + `"}`), nil
 }
 
 func (f *fakeCapability) Unassign(req UnassignRequest) ([]byte, error) {
+	if f.unassignErr != nil {
+		return nil, f.unassignErr
+	}
 	return []byte(`{"schema":"eka-assignment-v1","ok":true,"action":"unassign","item":` + mustQuote(req.Target) + `,"no-assignee":true,"state":"published","objectHash":"abc","by":"` + req.By.Name + `"}`), nil
 }
 

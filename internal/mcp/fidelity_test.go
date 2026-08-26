@@ -263,3 +263,127 @@ func TestFidelityUnwrappedThroughErrorChain(t *testing.T) {
 		t.Errorf("embedded report lost through the wrap chain: %q", texts[1])
 	}
 }
+
+// TestTransitionWarningWithoutConfirmation: warning != "" and
+// Confirmation == false → banner without affordance (covers the
+// warning-only branch).
+func TestTransitionWarningWithoutConfirmation(t *testing.T) {
+	cap := &fakeCapability{
+		statusJSON: `{}`,
+		transitionErr: &stubFidelity{
+			msg:     "transition refused: needs warning only",
+			warning: "test-ns/sto:x is not registered in the current active container (advisory)",
+			confirm: false,
+		},
+	}
+	s := newTestServer(cap)
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"transition","arguments":{"target":"test-ns/sto:x","forward":true}}}`)
+	texts := mustFailureContent(t, out)
+	if len(texts) != 2 {
+		t.Fatalf("content blocks = %d, want 2 (headline + warning)", len(texts))
+	}
+	if !strings.Contains(texts[1], "warning: test-ns/sto:x is not registered") {
+		t.Errorf("warning block must carry the warning, got %q", texts[1])
+	}
+	if strings.Contains(texts[1], "retry with confirmed:true") {
+		t.Errorf("warning-only refusal must not carry the affordance, got %q", texts[1])
+	}
+}
+
+// TestTransitionConfirmationWithoutWarning: Confirmation == true and
+// warning == "" → exercise the b.Len()==0 branch (affordance alone,
+// no leading newline).
+func TestTransitionConfirmationWithoutWarning(t *testing.T) {
+	cap := &fakeCapability{
+		statusJSON: `{}`,
+		transitionErr: &stubFidelity{
+			msg:     "transition refused: needs confirmation only",
+			warning: "",
+			confirm: true,
+		},
+	}
+	s := newTestServer(cap)
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"transition","arguments":{"target":"test-ns/sto:x","forward":true}}}`)
+	texts := mustFailureContent(t, out)
+	if len(texts) != 2 {
+		t.Fatalf("content blocks = %d, want 2 (headline + affordance)", len(texts))
+	}
+	if strings.Contains(texts[1], "warning:") {
+		t.Errorf("confirmation-only refusal must not carry a warning, got %q", texts[1])
+	}
+	if texts[1] != confirmationAffordance {
+		t.Errorf("affordance block = %q, want exactly %q (no leading newline, b.Len()==0 branch)", texts[1], confirmationAffordance)
+	}
+}
+
+// TestAssignValidationRefusalCarriesReport: an assign-class validation
+// refusal embeds the conformance report just like publish — the assign
+// path now uses wrapValidationRefusal so agents get the findings.
+func TestAssignValidationRefusalCarriesReport(t *testing.T) {
+	cap := &fakeCapability{
+		statusJSON: `{}`,
+		assignErr: &stubFidelity{
+			msg:    "assign refused: feather/sto:004 failed CKO-level validation with 1 blocking error(s); nothing was changed",
+			report: stubReportJSON,
+		},
+	}
+	s := newTestServer(cap)
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"target":"feather/sto:004","to":"feather/mbr:alice"}}}`)
+	texts := mustFailureContent(t, out)
+	if len(texts) != 2 {
+		t.Fatalf("content blocks = %d, want 2 (headline + report) for assign", len(texts))
+	}
+	if texts[0] != "assign refused: feather/sto:004 failed CKO-level validation with 1 blocking error(s); nothing was changed" {
+		t.Errorf("assign headline = %q, want byte-stable count-only message", texts[0])
+	}
+	var report map[string]any
+	if err := json.Unmarshal([]byte(texts[1]), &report); err != nil {
+		t.Fatalf("assign embedded report must be valid JSON: %v\n%s", err, texts[1])
+	}
+	if report["schema"] != "eka-conformance-report-v1" {
+		t.Errorf("assign report schema = %v, want eka-conformance-report-v1", report["schema"])
+	}
+}
+
+// TestBoundaryGuardDoesNotCorruptJSON: a finding message containing a
+// JSON-escaped path with an embedded quote (at /home/u/x.db" done)
+// must not corrupt the embedded report — the boundary either embeds
+// valid JSON or safely drops the report block (no corrupt payload).
+func TestBoundaryGuardDoesNotCorruptJSON(t *testing.T) {
+	// Report whose finding message contains a path followed by an
+	// escaped quote — the old comment claimed redaction "can never cross
+	// JSON string boundary" which is false because the class [^\r\n"':]*
+	// excludes " but not \, so the backslash of \" is consumed.
+	report := `{"schema":"eka-conformance-report-v1","root":"","filesScanned":0,"artifacts":1,"skipped":"","errors":1,"warnings":0,"pass":false,"results":[` +
+		`{"file":"feather/adr:004","rule":"R5","severity":"error","message":"saved \"/home/u/x.db\" done at /home/u/x.db"}` +
+		`]}`
+	refusal := &stubFidelity{
+		msg:    "publish refused: draft feather/adr:004 failed CKO-level validation with 1 blocking error(s); the draft was kept",
+		report: report,
+	}
+	out := callPublish(t, refusal)
+	texts := mustFailureContent(t, out)
+	// Either the report was redacted and stayed valid (2 blocks with
+	// valid JSON) or it was dropped as corrupt (1 block, headline only)
+	// — both are safe; a corrupt JSON block is never emitted.
+	if len(texts) == 2 {
+		if !json.Valid([]byte(texts[1])) {
+			t.Fatalf("redacted report must stay valid JSON when embedded, got invalid:\n%s", texts[1])
+		}
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(texts[1]), &parsed); err != nil {
+			t.Fatalf("redacted report must be parseable when embedded: %v\n%s", err, texts[1])
+		}
+		if parsed["schema"] != "eka-conformance-report-v1" {
+			t.Errorf("embedded report schema = %v, want eka-conformance-report-v1", parsed["schema"])
+		}
+	} else if len(texts) != 1 {
+		t.Fatalf("content blocks = %d, want 1 (dropped corrupt report) or 2 (valid redacted report)", len(texts))
+	}
+	// Overall response must always be valid JSON-RPC (mustHandle already
+	// proved parse, but assert no leak of raw path).
+	body := strings.Join(texts, "\n")
+	if strings.Contains(body, "/home/u/x.db") && !strings.Contains(body, "<path>") {
+		t.Errorf("response leaks raw path /home/u/x.db:\n%s", body)
+	}
+}

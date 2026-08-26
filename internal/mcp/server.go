@@ -1208,16 +1208,21 @@ const confirmationAffordance = "retry with confirmed:true to proceed anyway (ass
 // re-applies its own path redaction to the report text as the final
 // guard of the no-leakage invariant (sto:mcp-error-fidelity AC #2):
 // fidelity must not depend on the producer remembering the policy.
-// The redaction patterns exclude quotes and colons, so a match can
-// never cross a JSON string boundary — the embedded report stays
-// valid JSON. RedactPaths is idempotent, so the producer's own
-// field-level redaction is preserved byte-for-byte.
+// The redacted report is validated with json.Valid before embedding;
+// if redaction corrupts the JSON (e.g. a backslash-escaped quote inside
+// a finding message causes the path regex to consume the escaping
+// backslash), the report block is dropped — no leak and no corrupt
+// payload. RedactPaths is idempotent, so the producer's own field-level
+// redaction is preserved byte-for-byte when the JSON stays valid.
 func (s *Server) toolFailureResult(err error) map[string]any {
 	content := []any{map[string]any{"type": "text", "text": SanitizeError(err)}}
 	var fidelity refusalFidelity
 	if errors.As(err, &fidelity) {
 		if report := fidelity.RefusalReport(); report != "" {
-			content = append(content, map[string]any{"type": "text", "text": RedactPaths(report)})
+			redacted := RedactPaths(report)
+			if json.Valid([]byte(redacted)) {
+				content = append(content, map[string]any{"type": "text", "text": redacted})
+			}
 		}
 		warning := fidelity.RefusalWarning()
 		if warning != "" || fidelity.RefusalConfirmation() {

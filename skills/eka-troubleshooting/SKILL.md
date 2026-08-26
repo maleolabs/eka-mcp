@@ -17,7 +17,7 @@ EKA refuses **deterministically**: every refusal is a designed message with a de
 
 ## MCP tool refusals carry the full report
 
-When you consume EKA through eka-mcp, authoring refusals are self-contained — **no CLI fallback is needed for diagnosis**:
+When you consume EKA through eka-mcp, publish/assignment and transition refusals are self-contained — **no CLI fallback is needed for diagnosis**:
 
 - **Validation refusals** (`publish refused: draft <line> failed CKO-level validation with N blocking error(s); the draft was kept`) embed the FULL conformance report inline as a second text content block, in the established `eka-conformance-report-v1` shape: per-finding rule id, severity and message, warnings included. Read the findings straight from the refusal; do not re-run `eka validate` to reconstruct them.
 - **Transition membership-gate refusals** (`<line> is not registered in the current active container`) surface the deterministic warning plus an explicit retry affordance: `retry with confirmed:true to proceed anyway (asserts the work item may leave the current active container)`. The refusal is retryable — repeat the same `transition` call with `"confirmed": true`; nothing was written by the refused run.
