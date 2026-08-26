@@ -11,9 +11,11 @@
 package eka
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/maleolabs/eka-core/conformance"
 	"github.com/maleolabs/eka-core/contexts"
@@ -509,6 +511,129 @@ func (c *Capability) SyncPush(repoPath string, adopt, override bool) ([]byte, er
 	})
 }
 
+// DraftUpdate applies a partial content merge to one pending draft
+// (schema eka-draft-update-v1). It is read-modify-write through
+// draft_read: the draft file is read verbatim, the supplied content keys
+// overwrite/add (keys not mentioned are preserved), the updated document
+// is written atomically, and publish still validates — no validation
+// happens here. Unknown target and post-publish (draft already gone —
+// the single-use ticket) refuse deterministically via
+// *runtime.DraftNotFoundError.
+func (c *Capability) DraftUpdate(req mcp.DraftUpdateRequest) ([]byte, error) {
+	if req.Content == nil {
+		return nil, fmt.Errorf("draft_update requires content to be a JSON object")
+	}
+	ref, err := runtime.Authoring.ResolveDraft(c.rt, req.Target, req.Project)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(ref.Path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, &runtime.DraftNotFoundError{Target: req.Target, Project: ref.Project}
+		}
+		return nil, fmt.Errorf("draft_update: cannot read draft %s: %w", req.Target, err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("draft_update: draft %s is not valid JSON: %w", req.Target, err)
+	}
+	// Content is the merge target; preserve all other top-level keys.
+	contentRaw, hasContent := doc["content"]
+	var contentMap map[string]any
+	if hasContent {
+		if m, ok := contentRaw.(map[string]any); ok {
+			contentMap = m
+		} else {
+			contentMap = map[string]any{}
+		}
+	} else {
+		contentMap = map[string]any{}
+	}
+	for k, v := range req.Content {
+		contentMap[k] = v
+	}
+	doc["content"] = contentMap
+	// Stable JSON encoding (2-space indent, trailing newline) like
+	// draftJSON — deterministic, byte-stable.
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("draft_update: cannot encode draft %s: %w", req.Target, err)
+	}
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, out, "", "  "); err != nil {
+		return nil, fmt.Errorf("draft_update: cannot indent draft %s: %w", req.Target, err)
+	}
+	indented.WriteByte('\n')
+	dir := filepath.Dir(ref.Path)
+	tmp, err := os.CreateTemp(dir, ".draft-update-*.json.tmp")
+	if err != nil {
+		return nil, fmt.Errorf("draft_update: cannot stage draft %s: %w", req.Target, err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(indented.Bytes()); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return nil, fmt.Errorf("draft_update: cannot write draft %s: %w", req.Target, err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return nil, fmt.Errorf("draft_update: cannot write draft %s: %w", req.Target, err)
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		os.Remove(tmpPath)
+		return nil, fmt.Errorf("draft_update: cannot write draft %s: %w", req.Target, err)
+	}
+	if err := os.Rename(tmpPath, ref.Path); err != nil {
+		os.Remove(tmpPath)
+		return nil, fmt.Errorf("draft_update: cannot write draft %s: %w", req.Target, err)
+	}
+	updated, err := os.ReadFile(ref.Path)
+	if err != nil {
+		return nil, fmt.Errorf("draft_update: cannot read updated draft %s: %w", req.Target, err)
+	}
+	return injectLegalTransitions(updated)
+}
+
+// PublishBatch publishes every pending draft of a project in
+// topological order (schema eka-publish-batch-v1) — the same engine
+// `eka publish --all` / `--pending` uses (runtime.Authoring.PublishBatch,
+// Kahn's algorithm, pre-flight cycle and dangling-reference refusals,
+// per-draft atomic validation). Empty backlog is a valid no-op.
+func (c *Capability) PublishBatch(req mcp.PublishBatchRequest) ([]byte, error) {
+	result, err := runtime.Authoring.PublishBatch(c.rt, runtime.PublishBatchOptions{
+		Project: req.Project,
+	})
+	if err != nil {
+		// Surface validation findings with report fidelity (sto:mcp-error-fidelity)
+		// so the boundary can embed the full conformance report.
+		return nil, wrapToolRefusal(err)
+	}
+	published := make([]publishResult, 0, len(result.Published))
+	for _, r := range result.Published {
+		typeToken := ""
+		if ref, perr := conformance.ParseReference(r.Form, "", ""); perr == nil {
+			typeToken = ref.Type
+		}
+		published = append(published, publishResult{
+			Form:             r.Form,
+			InstanceVersion:  r.InstanceVersion,
+			ObjectHash:       r.ObjectHash,
+			Note:             r.Note,
+			LegalTransitions: legalTransitions(typeToken),
+		})
+	}
+	if published == nil {
+		published = []publishResult{}
+	}
+	return json.Marshal(publishBatchResult{
+		Schema:    "eka-publish-batch-v1",
+		Project:   req.Project,
+		Count:     len(published),
+		Published: published,
+	})
+}
+
 // Discard deletes one draft file without publishing (schema
 // eka-discard-result-v1). The deletion is eka-core's
 // (Authoring.DiscardDraft); the returned note names the project when
@@ -573,6 +698,13 @@ type publishResult struct {
 	ObjectHash       string              `json:"objectHash"`
 	Note             string              `json:"note"`
 	LegalTransitions map[string][]string `json:"legalTransitions"`
+}
+
+type publishBatchResult struct {
+	Schema    string          `json:"schema"`
+	Project   string          `json:"project"`
+	Count     int             `json:"count"`
+	Published []publishResult `json:"published"`
 }
 
 type transitionResult struct {

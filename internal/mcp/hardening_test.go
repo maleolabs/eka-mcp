@@ -215,7 +215,15 @@ func (f *failingStatusCapability) NewDraft(req NewDraftRequest) ([]byte, error) 
 	return nil, errors.New("unreachable")
 }
 
+func (f *failingStatusCapability) DraftUpdate(req DraftUpdateRequest) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
 func (f *failingStatusCapability) Publish(req PublishRequest) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (f *failingStatusCapability) PublishBatch(req PublishBatchRequest) ([]byte, error) {
 	return nil, errors.New("unreachable")
 }
 
