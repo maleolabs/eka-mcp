@@ -266,13 +266,14 @@ func (c *Capability) NewDraft(req mcp.NewDraftRequest) ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(draftResult{
-		Schema:    "eka-draft-v1",
-		Project:   draft.Project,
-		Namespace: draft.Namespace,
-		Type:      draft.Type,
-		ID:        draft.ID,
-		Path:      draft.Path,
-		Updated:   draft.Updated,
+		Schema:           "eka-draft-v1",
+		Project:          draft.Project,
+		Namespace:        draft.Namespace,
+		Type:             draft.Type,
+		ID:               draft.ID,
+		Path:             draft.Path,
+		Updated:          draft.Updated,
+		LegalTransitions: legalTransitions(draft.Type),
 	})
 }
 
@@ -291,12 +292,23 @@ func (c *Capability) Publish(req mcp.PublishRequest) ([]byte, error) {
 		// instead of dropping it (sto:mcp-error-fidelity).
 		return nil, wrapToolRefusal(err)
 	}
+	// legalTransitions derived exclusively from the single source of
+	// truth (conformance.DomainValues / OwnedDomains) — no duplicated
+	// tables. The type token is parsed from the target identity form;
+	// fallback is the form prefix of the publish result.
+	typeToken := ""
+	if ref, err := conformance.ParseReference(req.Target, "", ""); err == nil {
+		typeToken = ref.Type
+	} else if ref, err := conformance.ParseReference(res.Form, "", ""); err == nil {
+		typeToken = ref.Type
+	}
 	return json.Marshal(publishResult{
-		Schema:          "eka-publish-result-v1",
-		Form:            res.Form,
-		InstanceVersion: res.InstanceVersion,
-		ObjectHash:      res.ObjectHash,
-		Note:            res.Note,
+		Schema:           "eka-publish-result-v1",
+		Form:             res.Form,
+		InstanceVersion:  res.InstanceVersion,
+		ObjectHash:       res.ObjectHash,
+		Note:             res.Note,
+		LegalTransitions: legalTransitions(typeToken),
 	})
 }
 
@@ -367,10 +379,15 @@ func (c *Capability) Note(req mcp.NoteRequest) ([]byte, error) {
 	})
 }
 
-// DraftRead returns one draft file content verbatim (the v2.0 JSON
-// authoring document) — the editable draft behind a target. The
-// resolution is eka-core's (Authoring.ResolveDraft); the file bytes
-// are returned untouched. This is the renamed MCP tool (td:mcp-view-naming-fix).
+// DraftRead returns one draft file content enriched with
+// legalTransitions (the v2.0 JSON authoring document plus the
+// per-owned-domain ordered value sets). The file bytes are read
+// verbatim, then legalTransitions is injected (computed exclusively
+// from conformance.DomainValues / OwnedDomains) so agents discover the
+// legal state values without a wasted transition refusal. The original
+// draft fields are preserved byte-for-byte except for the added
+// legalTransitions key. This is the renamed MCP tool
+// (td:mcp-view-naming-fix).
 func (c *Capability) DraftRead(target, project string) ([]byte, error) {
 	ref, err := runtime.Authoring.ResolveDraft(c.rt, target, project)
 	if err != nil {
@@ -380,7 +397,7 @@ func (c *Capability) DraftRead(target, project string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("eka: cannot read draft %s: %w", target, err)
 	}
-	return data, nil
+	return injectLegalTransitions(data)
 }
 
 // View is the deprecated alias of DraftRead (td:mcp-view-naming-fix).
@@ -400,12 +417,13 @@ func (c *Capability) DraftList(project string) ([]byte, error) {
 	items := make([]draftResult, 0, len(drafts))
 	for _, d := range drafts {
 		items = append(items, draftResult{
-			Project:   d.Project,
-			Namespace: d.Namespace,
-			Type:      d.Type,
-			ID:        d.ID,
-			Path:      d.Path,
-			Updated:   d.Updated,
+			Project:          d.Project,
+			Namespace:        d.Namespace,
+			Type:             d.Type,
+			ID:               d.ID,
+			Path:             d.Path,
+			Updated:          d.Updated,
+			LegalTransitions: legalTransitions(d.Type),
 		})
 	}
 	return json.Marshal(draftListResult{
@@ -529,13 +547,14 @@ type conformanceResult struct {
 }
 
 type draftResult struct {
-	Schema    string `json:"schema,omitempty"`
-	Project   string `json:"project"`
-	Namespace string `json:"namespace"`
-	Type      string `json:"type"`
-	ID        string `json:"id"`
-	Path      string `json:"path"`
-	Updated   string `json:"updated"`
+	Schema           string              `json:"schema,omitempty"`
+	Project          string              `json:"project"`
+	Namespace        string              `json:"namespace"`
+	Type             string              `json:"type"`
+	ID               string              `json:"id"`
+	Path             string              `json:"path"`
+	Updated          string              `json:"updated"`
+	LegalTransitions map[string][]string `json:"legalTransitions"`
 }
 
 type draftListResult struct {
@@ -545,11 +564,12 @@ type draftListResult struct {
 }
 
 type publishResult struct {
-	Schema          string `json:"schema"`
-	Form            string `json:"form"`
-	InstanceVersion int    `json:"instanceVersion"`
-	ObjectHash      string `json:"objectHash"`
-	Note            string `json:"note"`
+	Schema           string              `json:"schema"`
+	Form             string              `json:"form"`
+	InstanceVersion  int                 `json:"instanceVersion"`
+	ObjectHash       string              `json:"objectHash"`
+	Note             string              `json:"note"`
+	LegalTransitions map[string][]string `json:"legalTransitions"`
 }
 
 type transitionResult struct {
@@ -649,4 +669,49 @@ func toRelationships(rels []mcp.Relationship) []exchange.Relationship {
 		out = append(out, exchange.Relationship{Type: r.Type, Target: r.Target})
 	}
 	return out
+}
+
+// legalTransitions returns the per-owned-domain ordered value sets for
+// an artifact type, derived exclusively from the single source of truth:
+// conformance.OwnedDomains and conformance.DomainValues. No duplicated
+// tables — every domain's values come from DomainValues.
+func legalTransitions(typeToken string) map[string][]string {
+	domains := conformance.OwnedDomains(typeToken)
+	if len(domains) == 0 {
+		return map[string][]string{}
+	}
+	out := make(map[string][]string, len(domains))
+	for _, d := range domains {
+		vals := conformance.DomainValues(d, typeToken)
+		if vals == nil {
+			out[d] = []string{}
+			continue
+		}
+		cp := make([]string, len(vals))
+		copy(cp, vals)
+		out[d] = cp
+	}
+	return out
+}
+
+// injectLegalTransitions enriches a verbatim draft JSON document with the
+// legalTransitions map derived from its type field. The original fields
+// are preserved; legalTransitions is injected at top level. If the draft
+// is not valid JSON or lacks a type, the original bytes are returned
+// unchanged (best-effort, never fails the draft read).
+func injectLegalTransitions(data []byte) ([]byte, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return data, nil
+	}
+	typeToken, _ := doc["type"].(string)
+	if typeToken == "" {
+		return data, nil
+	}
+	doc["legalTransitions"] = legalTransitions(typeToken)
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return data, nil
+	}
+	return out, nil
 }
