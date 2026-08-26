@@ -15,6 +15,14 @@ EKA refuses **deterministically**: every refusal is a designed message with a de
 4. **Inspect before assuming**: `eka help <command>` — if the local CLI differs from what you expect, the CLI's help wins.
 5. **Never bypass** a gate: `--force` never skips validation or transition gates; `--override` has one narrow purpose (namespace alignment); the store is never hand-editable.
 
+## MCP tool refusals carry the full report
+
+When you consume EKA through eka-mcp, publish/assignment and transition refusals are self-contained — **no CLI fallback is needed for diagnosis**:
+
+- **Validation refusals** (`publish refused: draft <line> failed CKO-level validation with N blocking error(s); the draft was kept`) embed the FULL conformance report inline as a second text content block, in the established `eka-conformance-report-v1` shape: per-finding rule id, severity and message, warnings included. Read the findings straight from the refusal; do not re-run `eka validate` to reconstruct them.
+- **Transition membership-gate refusals** (`<line> is not registered in the current active container`) surface the deterministic warning plus an explicit retry affordance: `retry with confirmed:true to proceed anyway (asserts the work item may leave the current active container)`. The refusal is retryable — repeat the same `transition` call with `"confirmed": true`; nothing was written by the refused run.
+- The first text content block remains the byte-stable sanitized headline (existing refusal-class matching keeps working), and every finding passes the same path-redaction policy as the headline — store paths appear as `<path>`, identity forms survive.
+
 ## Refusal classes and fixes
 
 ### A. Not an EKA repository
@@ -58,7 +66,7 @@ Verdict: FAIL
 eka: publish refused: draft feather/adr:<id> failed CKO-level validation with N blocking error(s); the draft was kept
 ```
 
-The report lists findings by rule (R0–R13). Common blockers:
+The report lists findings by rule (R0–R13). Over MCP the full report is embedded in the refusal itself (see "MCP tool refusals carry the full report"). Common blockers:
 
 - **R6 `missing dimension on knowledge artifact type "<t>"`** — knowledge types (`vis`/`str`/`req`/`fnd`/`arc`/`adr`/`dec`/`spec`/`std`/`gls`/`scp`/`epc`/`plan`/`trc`/`rvw`/`run`/`rel`) require `--dimension <token>` at scaffold. Work items and containers do not.
 - State values not in the type's owned set, or change-log entries missing/out of order.
@@ -73,7 +81,7 @@ Fix the draft (it was kept) and publish again. `eka validate` failures: the repo
 |---|---|---|
 | `transition <from> -> <to> is not in the D1 table; legal transitions from "<from>": <list>` | illegal state jump | follow the D1 table (`planned → todo → in-progress → in-review → done`; `canceled` re-activates to `todo`; `done` exits only to `canceled`) |
 | gate refusal (in-review needs a resolved implementation note; done needs every note resolved — R13) | missing note evidence | `eka note <line> --role implementation`, set `noteState: resolved`, publish |
-| `not registered in the current active container` | the work item has no ticket deriving from the active container | confirm in a terminal or pass `--force` (never bypasses gates); preferably fix the container registration |
+| `not registered in the current active container` | the work item has no ticket deriving from the active container | confirm in a terminal or pass `--force` (never bypasses gates); over MCP the refusal says it: retry with `confirmed: true`; preferably fix the container registration |
 | container activation/completion refusals | exactly-one-active rule, depends-on plan not approved, or items not done/canceled | complete the active container first; approve the plan; finish the items |
 | plan cannot go `immutable` | immutability is the container lock, not a direct transition | activate the container that locks the plan |
 

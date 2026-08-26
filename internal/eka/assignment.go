@@ -171,7 +171,7 @@ func (c *Capability) runAssignment(action assignmentAction, repoPath, target, to
 			}
 			var ve *runtime.RelateValidationError
 			if errors.As(err, &ve) {
-				return nil, fmt.Errorf("assign refused: %s failed CKO-level validation with %d blocking error(s); nothing was changed", ve.Target, ve.Report.ErrorCount())
+				return nil, wrapValidationRefusal(fmt.Sprintf("assign refused: %s failed CKO-level validation with %d blocking error(s); nothing was changed", ve.Target, ve.Report.ErrorCount()), ve.Report)
 			}
 			return nil, err
 		}
@@ -211,7 +211,7 @@ func (c *Capability) runAssignment(action assignmentAction, repoPath, target, to
 			}
 			var ve *assignmentValidationError
 			if errors.As(err, &ve) {
-				return nil, fmt.Errorf("reassign refused: %s failed CKO-level validation with %d blocking error(s); nothing was changed", ve.Target, ve.Report.ErrorCount())
+				return nil, wrapValidationRefusal(fmt.Sprintf("reassign refused: %s failed CKO-level validation with %d blocking error(s); nothing was changed", ve.Target, ve.Report.ErrorCount()), ve.Report)
 			}
 			return nil, err
 		}
@@ -248,7 +248,7 @@ func (c *Capability) runAssignment(action assignmentAction, repoPath, target, to
 			}
 			var ve *assignmentValidationError
 			if errors.As(err, &ve) {
-				return nil, fmt.Errorf("unassign refused: %s failed CKO-level validation with %d blocking error(s); nothing was changed", ve.Target, ve.Report.ErrorCount())
+				return nil, wrapValidationRefusal(fmt.Sprintf("unassign refused: %s failed CKO-level validation with %d blocking error(s); nothing was changed", ve.Target, ve.Report.ErrorCount()), ve.Report)
 			}
 			return nil, err
 		}
