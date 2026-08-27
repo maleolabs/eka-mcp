@@ -47,6 +47,7 @@ mode = "delegate"
 agent = "general-purpose"
 mode = "delegate"
 
+# skill-pack-tiered-routing-real: deterministic capability routing 11 keywords: adr->orientation, sto->execution, context->retrieval, validate->review, etc.
 [roles.qa]
 agent = "general-purpose"
 mode = "delegate"
