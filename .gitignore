@@ -7,5 +7,5 @@
 *.test
 *.out
 
-# Local EKA workspace registration identity (dev-time, machine-specific)
-/eka.yaml
+# EKA execution state
+/.eka/
