@@ -41,6 +41,7 @@ agent = "althea-product-specialist"
 mode = "delegate"
 note = "absorbs althea-ux-specialist and althea-review-specialist (R2)"
 
+# skill-pack-tiered-routing-real: deterministic capability routing 11 keywords: adr->orientation, sto->execution, context->retrieval, validate->review, etc.
 [roles.qa]
 agent = "alex-qa"
 mode = "delegate"

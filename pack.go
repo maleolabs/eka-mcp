@@ -51,6 +51,16 @@ const Source = "github.com/maleolabs/eka-mcp"
 // with eka-cli).
 var Capabilities = []string{"install", "mcp"}
 
+// ToolGroups is the deterministic MCP tool grouping for tiered routing (sto:skill-pack-tiered-routing-real — hollow gap fix)
+// read: get, context, domain, status, view
+// write: new, publish, transition, note, assign
+// ops: validate, integrity, feedback, sync
+var ToolGroups = map[string][]string{
+	"eka_read":  {"get", "context", "domain", "status", "view"},
+	"eka_write": {"new", "publish", "transition", "note", "assign", "reassign", "unassign"},
+	"eka_ops":   {"validate", "integrity", "feedback", "sync"},
+}
+
 // ManifestCommand is one B1 dispatch-protocol command declaration: the
 // additive "commands" array on the v1 manifest contract (ADR-031). The
 // contract version stays "v1" — the extension is backward compatible:
