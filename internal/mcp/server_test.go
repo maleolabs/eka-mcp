@@ -28,6 +28,37 @@ type fakeCapability struct {
 	gotForms      []string
 	gotNew        []NewDraftRequest
 	gotNote       []NoteRequest
+	gotCode       []CodeContextRequest
+}
+
+func (f *fakeCapability) CodeContext(req CodeContextRequest) ([]byte, error) {
+	f.gotCode = append(f.gotCode, req)
+	return []byte(`{"schema":"eka/code-context/1","query":{"focus":` + mustQuote(req.Focus) + `}}`), nil
+}
+
+func TestCodeContextToolDispatch(t *testing.T) {
+	f := &fakeCapability{}
+	s := newTestServer(f)
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"code_context","arguments":{"root":"/repo","focus":"Server","depth":"engineering","level":3,"noContent":true}}}`)
+	res := mustResult(t, out)
+	if res["isError"] != false {
+		t.Fatalf("result = %v", res)
+	}
+	if len(f.gotCode) != 1 || f.gotCode[0].Root != "/repo" || f.gotCode[0].Focus != "Server" || f.gotCode[0].Depth != "engineering" || f.gotCode[0].Level != 3 || !f.gotCode[0].NoContent {
+		t.Fatalf("request = %+v", f.gotCode)
+	}
+}
+
+func TestCodeContextToolRequiresRoot(t *testing.T) {
+	s := newTestServer(&fakeCapability{})
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"code_context","arguments":{}}}`)
+	res := mustResult(t, out)
+	if res["isError"] != true {
+		t.Fatalf("result = %v", res)
+	}
+	if !strings.Contains(res["content"].([]any)[0].(map[string]any)["text"].(string), `code_context requires "root"`) {
+		t.Fatalf("result = %v", res)
+	}
 }
 
 func (f *fakeCapability) Get(form string, noContent bool) ([]byte, error) {
@@ -294,7 +325,7 @@ func TestToolsList(t *testing.T) {
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	res := out["result"].(map[string]any)
 	tools := res["tools"].([]any)
-	want := []string{"context", "get", "domain", "status", "validate", "new", "draft_update", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard", "sync_push", "assign", "reassign", "unassign", "feedback_new", "feedback_list", "feedback_publish"}
+	want := []string{"context", "code_context", "get", "domain", "status", "validate", "new", "draft_update", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard", "sync_push", "assign", "reassign", "unassign", "feedback_new", "feedback_list", "feedback_publish"}
 	got := make([]string, 0, len(tools))
 	for _, tl := range tools {
 		tm := tl.(map[string]any)

@@ -37,7 +37,7 @@ const ProtocolVersion = "2024-11-05"
 // toolNames is the fixed deterministic tool order the server advertises
 // in tools/list and dispatches in tools/call. The order is the contract.
 var toolNames = []string{
-	"context", "get", "domain", "status", "validate", "new", "draft_update", "publish",
+	"context", "code_context", "get", "domain", "status", "validate", "new", "draft_update", "publish",
 	"transition", "note", "draft_read", "view", "draft_list", "integrity_check",
 	"discard", "sync_push", "assign", "reassign", "unassign",
 	"feedback_new", "feedback_list", "feedback_publish",
@@ -83,6 +83,7 @@ func ResourceCount() (int, error) {
 // fields are absent, the FIRST declared offender is named.
 var toolRequiredFields = map[string][]string{
 	"context":          {"subject"},
+	"code_context":     {"root"},
 	"get":              {"form"},
 	"domain":           {"projectId", "domain"},
 	"validate":         {"root"},
@@ -293,6 +294,8 @@ type Capability interface {
 	// Context builds the Context Object around one subject at a depth
 	// (schema eka-context-v1).
 	Context(subject, projectID, depth string) ([]byte, error)
+	// CodeContext builds bounded source context from the local code graph.
+	CodeContext(req CodeContextRequest) ([]byte, error)
 	// Validate runs the authoring conformance gate over a repository
 	// root and returns the machine report (schema
 	// eka-conformance-report-v1).
@@ -391,6 +394,15 @@ type NewDraftRequest struct {
 	By            AuthorIdentity
 	Relationships []Relationship
 	Content       map[string]any
+}
+
+// CodeContextRequest describes one bounded source-context query.
+type CodeContextRequest struct {
+	Root      string
+	Focus     string
+	Depth     string
+	Level     int
+	NoContent bool
 }
 
 // DraftUpdateRequest describes one draft partial-content merge.
@@ -679,6 +691,22 @@ func (s *Server) handleToolsList(req request) []byte {
 						"description": "Context depth: \"local\" (default), \"dependency\" or \"engineering\".",
 					},
 				},
+			},
+		},
+		map[string]any{
+			"name": "code_context",
+			"description": "Build bounded deterministic source context from the local code graph. " +
+				"Returns schema eka/code-context/1 with file inventory, symbols, imports and optional source content.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"root":      map[string]any{"type": "string", "description": "Repository root to index."},
+					"focus":     map[string]any{"type": "string", "description": "Optional file path or symbol focus."},
+					"depth":     map[string]any{"type": "string", "enum": []string{"local", "dependency", "engineering"}},
+					"level":     map[string]any{"type": "integer", "minimum": 0, "maximum": 3},
+					"noContent": map[string]any{"type": "boolean"},
+				},
+				"required": toolRequiredFields["code_context"],
 			},
 		},
 		map[string]any{
@@ -1343,6 +1371,22 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			p.Depth = "local"
 		}
 		data, err := s.cap.Context(p.Subject, p.ProjectID, p.Depth)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "code_context":
+		var p struct {
+			Root      string `json:"root"`
+			Focus     string `json:"focus"`
+			Depth     string `json:"depth"`
+			Level     int    `json:"level"`
+			NoContent bool   `json:"noContent"`
+		}
+		if err := s.decodeToolArgs("code_context", args, &p); err != nil {
+			return "", err
+		}
+		data, err := s.cap.CodeContext(CodeContextRequest{Root: p.Root, Focus: p.Focus, Depth: p.Depth, Level: p.Level, NoContent: p.NoContent})
 		if err != nil {
 			return "", err
 		}
