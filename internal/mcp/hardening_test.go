@@ -206,6 +206,9 @@ func (f *failingStatusCapability) Status() ([]byte, error) {
 func (f *failingStatusCapability) Context(subject, projectID, depth string) ([]byte, error) {
 	return nil, errors.New("unreachable")
 }
+func (f *failingStatusCapability) CodeContext(req CodeContextRequest) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
 
 func (f *failingStatusCapability) Validate(root string) ([]byte, error) {
 	return nil, errors.New("unreachable")

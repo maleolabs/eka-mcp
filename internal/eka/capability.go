@@ -12,11 +12,13 @@ package eka
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/maleolabs/eka-core/codegraph"
 	"github.com/maleolabs/eka-core/conformance"
 	"github.com/maleolabs/eka-core/contexts"
 	"github.com/maleolabs/eka-core/exchange"
@@ -205,6 +207,43 @@ func (c *Capability) Context(subject, projectID, depth string) ([]byte, error) {
 		return nil, err
 	}
 	return obj.MarshalCompact()
+}
+
+// CodeContext builds bounded source context from the repository code graph.
+// The graph is derived data; its cache lives outside the repository.
+func (c *Capability) CodeContext(req mcp.CodeContextRequest) ([]byte, error) {
+	if req.Root == "" {
+		return nil, fmt.Errorf("eka: code context root is required")
+	}
+	root, err := filepath.Abs(req.Root)
+	if err != nil {
+		return nil, err
+	}
+	if req.Depth == "" {
+		req.Depth = string(codegraph.DepthDependency)
+	}
+	level := req.Level
+	if level == 0 && req.Focus != "" {
+		level = 2
+	}
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		cacheDir = os.TempDir()
+	}
+	hash := sha256.Sum256([]byte(root))
+	cachePath := filepath.Join(cacheDir, "eka", "codegraph", fmt.Sprintf("%x.json", hash[:]))
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0700); err != nil {
+		return nil, fmt.Errorf("eka: cannot prepare code graph cache: %w", err)
+	}
+	idx, _, err := codegraph.LoadOrBuild(root, cachePath)
+	if err != nil {
+		return nil, err
+	}
+	res, err := codegraph.Serve(idx, codegraph.Request{Focus: req.Focus, Depth: codegraph.Depth(req.Depth), Level: level, NoContent: req.NoContent})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(res)
 }
 
 // Validate runs the authoring conformance gate over the repository
