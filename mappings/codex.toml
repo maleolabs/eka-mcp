@@ -40,6 +40,7 @@ mode = "solo"
 agent = "primary"
 mode = "solo"
 
+# skill-pack-tiered-routing-real: deterministic capability routing 11 keywords: adr->orientation, sto->execution, context->retrieval, validate->review, etc.
 [roles.qa]
 agent = "primary"
 mode = "solo"
