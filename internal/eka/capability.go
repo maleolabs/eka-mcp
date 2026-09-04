@@ -246,6 +246,75 @@ func (c *Capability) CodeContext(req mcp.CodeContextRequest) ([]byte, error) {
 	return json.Marshal(res)
 }
 
+// CodeDiscover builds deterministic candidates from natural query and scope.
+// Bounded, language-agnostic, no RAG canonical: source always local-index.
+func (c *Capability) CodeDiscover(req mcp.CodeDiscoverRequest) ([]byte, error) {
+	if req.Query == "" {
+		return nil, fmt.Errorf("eka: code discover query is required")
+	}
+	if req.Root == "" {
+		return nil, fmt.Errorf("eka: code discover root is required")
+	}
+	root, err := filepath.Abs(req.Root)
+	if err != nil {
+		return nil, err
+	}
+	limit := req.Limit
+	if limit == 0 {
+		limit = 16
+	}
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		cacheDir = os.TempDir()
+	}
+	hash := sha256.Sum256([]byte(root))
+	cachePath := filepath.Join(cacheDir, "eka", "codegraph", fmt.Sprintf("%x.json", hash[:]))
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0700); err != nil {
+		return nil, fmt.Errorf("eka: cannot prepare code graph cache: %w", err)
+	}
+	idx, _, err := codegraph.LoadOrBuild(root, cachePath)
+	if err != nil {
+		return nil, err
+	}
+	res, err := codegraph.Discover(idx, codegraph.DiscoverRequest{Query: req.Query, Scope: req.Scope, Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(res)
+}
+
+// CodeGet retrieves exact file content deterministically.
+func (c *Capability) CodeGet(req mcp.CodeGetRequest) ([]byte, error) {
+	if req.Root == "" {
+		return nil, fmt.Errorf("eka: code get root is required")
+	}
+	if req.Path == "" {
+		return nil, fmt.Errorf("eka: code get path is required")
+	}
+	root, err := filepath.Abs(req.Root)
+	if err != nil {
+		return nil, err
+	}
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		cacheDir = os.TempDir()
+	}
+	hash := sha256.Sum256([]byte(root))
+	cachePath := filepath.Join(cacheDir, "eka", "codegraph", fmt.Sprintf("%x.json", hash[:]))
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0700); err != nil {
+		return nil, fmt.Errorf("eka: cannot prepare code graph cache: %w", err)
+	}
+	idx, _, err := codegraph.LoadOrBuild(root, cachePath)
+	if err != nil {
+		return nil, err
+	}
+	res, err := codegraph.Get(idx, codegraph.GetRequest{Path: req.Path})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(res)
+}
+
 // Validate runs the authoring conformance gate over the repository
 // rooted at root and returns the machine report (schema
 // eka-conformance-report-v1). The scan is entirely eka-core's

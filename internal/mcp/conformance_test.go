@@ -131,7 +131,7 @@ func TestConformanceToolsListExact(t *testing.T) {
 	if !ok {
 		t.Fatalf("tools = %v, want an array", res["tools"])
 	}
-	want := []string{"context", "code_context", "get", "domain", "status", "validate", "new", "draft_update", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard", "sync_push", "assign", "reassign", "unassign", "feedback_new", "feedback_list", "feedback_publish"}
+	want := []string{"context", "code_context", "code_discover", "code_get", "get", "domain", "status", "validate", "new", "draft_update", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard", "sync_push", "assign", "reassign", "unassign", "feedback_new", "feedback_list", "feedback_publish"}
 	if len(tools) != len(want) {
 		t.Fatalf("tools = %v, want exactly %v", tools, want)
 	}
@@ -855,6 +855,8 @@ func (f *failingFeedbackCapability) Context(s, p, d string) ([]byte, error) { re
 func (f *failingFeedbackCapability) CodeContext(req CodeContextRequest) ([]byte, error) {
 	return nil, nil
 }
+func (f *failingFeedbackCapability) CodeDiscover(req CodeDiscoverRequest) ([]byte, error) { return nil, nil }
+func (f *failingFeedbackCapability) CodeGet(req CodeGetRequest) ([]byte, error) { return nil, nil }
 func (f *failingFeedbackCapability) Validate(root string) ([]byte, error)         { return nil, nil }
 func (f *failingFeedbackCapability) NewDraft(req NewDraftRequest) ([]byte, error) { return nil, nil }
 func (f *failingFeedbackCapability) DraftUpdate(req DraftUpdateRequest) ([]byte, error) {
@@ -908,6 +910,8 @@ func (f *failingAssignmentCapability) Context(s, p, d string) ([]byte, error) { 
 func (f *failingAssignmentCapability) CodeContext(req CodeContextRequest) ([]byte, error) {
 	return nil, nil
 }
+func (f *failingAssignmentCapability) CodeDiscover(req CodeDiscoverRequest) ([]byte, error) { return nil, nil }
+func (f *failingAssignmentCapability) CodeGet(req CodeGetRequest) ([]byte, error) { return nil, nil }
 func (f *failingAssignmentCapability) Validate(root string) ([]byte, error)         { return nil, nil }
 func (f *failingAssignmentCapability) NewDraft(req NewDraftRequest) ([]byte, error) { return nil, nil }
 func (f *failingAssignmentCapability) DraftUpdate(req DraftUpdateRequest) ([]byte, error) {
@@ -962,6 +966,8 @@ func (f *failingSyncPushCapability) Context(s, p, d string) ([]byte, error) { re
 func (f *failingSyncPushCapability) CodeContext(req CodeContextRequest) ([]byte, error) {
 	return nil, nil
 }
+func (f *failingSyncPushCapability) CodeDiscover(req CodeDiscoverRequest) ([]byte, error) { return nil, nil }
+func (f *failingSyncPushCapability) CodeGet(req CodeGetRequest) ([]byte, error) { return nil, nil }
 func (f *failingSyncPushCapability) Validate(root string) ([]byte, error)         { return nil, nil }
 func (f *failingSyncPushCapability) NewDraft(req NewDraftRequest) ([]byte, error) { return nil, nil }
 func (f *failingSyncPushCapability) DraftUpdate(req DraftUpdateRequest) ([]byte, error) {

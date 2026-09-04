@@ -37,7 +37,7 @@ const ProtocolVersion = "2024-11-05"
 // toolNames is the fixed deterministic tool order the server advertises
 // in tools/list and dispatches in tools/call. The order is the contract.
 var toolNames = []string{
-	"context", "code_context", "get", "domain", "status", "validate", "new", "draft_update", "publish",
+	"context", "code_context", "code_discover", "code_get", "get", "domain", "status", "validate", "new", "draft_update", "publish",
 	"transition", "note", "draft_read", "view", "draft_list", "integrity_check",
 	"discard", "sync_push", "assign", "reassign", "unassign",
 	"feedback_new", "feedback_list", "feedback_publish",
@@ -84,6 +84,8 @@ func ResourceCount() (int, error) {
 var toolRequiredFields = map[string][]string{
 	"context":          {"subject"},
 	"code_context":     {"root"},
+	"code_discover":    {"root", "query"},
+	"code_get":         {"root", "path"},
 	"get":              {"form"},
 	"domain":           {"projectId", "domain"},
 	"validate":         {"root"},
@@ -296,6 +298,10 @@ type Capability interface {
 	Context(subject, projectID, depth string) ([]byte, error)
 	// CodeContext builds bounded source context from the local code graph.
 	CodeContext(req CodeContextRequest) ([]byte, error)
+	// CodeDiscover builds deterministic candidates from natural query and scope.
+	CodeDiscover(req CodeDiscoverRequest) ([]byte, error)
+	// CodeGet retrieves exact file content deterministically.
+	CodeGet(req CodeGetRequest) ([]byte, error)
 	// Validate runs the authoring conformance gate over a repository
 	// root and returns the machine report (schema
 	// eka-conformance-report-v1).
@@ -403,6 +409,20 @@ type CodeContextRequest struct {
 	Depth     string
 	Level     int
 	NoContent bool
+}
+
+// CodeDiscoverRequest describes one deterministic discovery query.
+type CodeDiscoverRequest struct {
+	Root  string
+	Query string
+	Scope string
+	Limit int
+}
+
+// CodeGetRequest describes one exact retrieval.
+type CodeGetRequest struct {
+	Root string
+	Path string
 }
 
 // DraftUpdateRequest describes one draft partial-content merge.
@@ -707,6 +727,32 @@ func (s *Server) handleToolsList(req request) []byte {
 					"noContent": map[string]any{"type": "boolean"},
 				},
 				"required": toolRequiredFields["code_context"],
+			},
+		},
+		map[string]any{
+			"name":        "code_discover",
+			"description": "Discover code candidates deterministically from a natural-language query and optional scope filter. Returns schema eka/code-discover/1 with bounded candidates carrying reason and confidence (language-agnostic inventory; unsupported files remain inventory entries; fallback to bounded inventory when no match; no RAG canonical).",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"root":  map[string]any{"type": "string", "description": "Repository root to index."},
+					"query": map[string]any{"type": "string", "description": "Natural-language query (tokens matched deterministically against file paths, symbol names and imports)."},
+					"scope": map[string]any{"type": "string", "description": "Optional file path scope filter (substring, case-insensitive)."},
+					"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 64},
+				},
+				"required": toolRequiredFields["code_discover"],
+			},
+		},
+		map[string]any{
+			"name":        "code_get",
+			"description": "Retrieve exact file content deterministically by slash path. Returns schema eka/code-get/1 with file unit, symbols and imports (language-agnostic; deterministic exact path lookup).",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"root": map[string]any{"type": "string", "description": "Repository root to index."},
+					"path": map[string]any{"type": "string", "description": "Slash path of the file to retrieve (exact, relative to root)."},
+				},
+				"required": toolRequiredFields["code_get"],
 			},
 		},
 		map[string]any{
@@ -1387,6 +1433,34 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			return "", err
 		}
 		data, err := s.cap.CodeContext(CodeContextRequest{Root: p.Root, Focus: p.Focus, Depth: p.Depth, Level: p.Level, NoContent: p.NoContent})
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "code_discover":
+		var p struct {
+			Root  string `json:"root"`
+			Query string `json:"query"`
+			Scope string `json:"scope"`
+			Limit int    `json:"limit"`
+		}
+		if err := s.decodeToolArgs("code_discover", args, &p); err != nil {
+			return "", err
+		}
+		data, err := s.cap.CodeDiscover(CodeDiscoverRequest{Root: p.Root, Query: p.Query, Scope: p.Scope, Limit: p.Limit})
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "code_get":
+		var p struct {
+			Root string `json:"root"`
+			Path string `json:"path"`
+		}
+		if err := s.decodeToolArgs("code_get", args, &p); err != nil {
+			return "", err
+		}
+		data, err := s.cap.CodeGet(CodeGetRequest{Root: p.Root, Path: p.Path})
 		if err != nil {
 			return "", err
 		}

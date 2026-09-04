@@ -29,11 +29,21 @@ type fakeCapability struct {
 	gotNew        []NewDraftRequest
 	gotNote       []NoteRequest
 	gotCode       []CodeContextRequest
+	gotDiscover   []CodeDiscoverRequest
+	gotGet        []CodeGetRequest
 }
 
 func (f *fakeCapability) CodeContext(req CodeContextRequest) ([]byte, error) {
 	f.gotCode = append(f.gotCode, req)
 	return []byte(`{"schema":"eka/code-context/1","query":{"focus":` + mustQuote(req.Focus) + `}}`), nil
+}
+func (f *fakeCapability) CodeDiscover(req CodeDiscoverRequest) ([]byte, error) {
+	f.gotDiscover = append(f.gotDiscover, req)
+	return []byte(`{"schema":"eka/code-discover/1","query":{"query":` + mustQuote(req.Query) + `}}`), nil
+}
+func (f *fakeCapability) CodeGet(req CodeGetRequest) ([]byte, error) {
+	f.gotGet = append(f.gotGet, req)
+	return []byte(`{"schema":"eka/code-get/1","query":{"path":` + mustQuote(req.Path) + `}}`), nil
 }
 
 func TestCodeContextToolDispatch(t *testing.T) {
@@ -325,7 +335,7 @@ func TestToolsList(t *testing.T) {
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	res := out["result"].(map[string]any)
 	tools := res["tools"].([]any)
-	want := []string{"context", "code_context", "get", "domain", "status", "validate", "new", "draft_update", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard", "sync_push", "assign", "reassign", "unassign", "feedback_new", "feedback_list", "feedback_publish"}
+	want := []string{"context", "code_context", "code_discover", "code_get", "get", "domain", "status", "validate", "new", "draft_update", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard", "sync_push", "assign", "reassign", "unassign", "feedback_new", "feedback_list", "feedback_publish"}
 	got := make([]string, 0, len(tools))
 	for _, tl := range tools {
 		tm := tl.(map[string]any)

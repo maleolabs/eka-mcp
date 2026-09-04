@@ -209,6 +209,8 @@ func (f *failingStatusCapability) Context(subject, projectID, depth string) ([]b
 func (f *failingStatusCapability) CodeContext(req CodeContextRequest) ([]byte, error) {
 	return nil, errors.New("unreachable")
 }
+func (f *failingStatusCapability) CodeDiscover(req CodeDiscoverRequest) ([]byte, error) { return nil, errors.New("unreachable") }
+func (f *failingStatusCapability) CodeGet(req CodeGetRequest) ([]byte, error) { return nil, errors.New("unreachable") }
 
 func (f *failingStatusCapability) Validate(root string) ([]byte, error) {
 	return nil, errors.New("unreachable")
