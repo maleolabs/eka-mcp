@@ -170,11 +170,13 @@ var toolDescriptors = []toolDescriptor{
 		Name:        "draft_update",
 		RiskClass:   RiskLocalWrite,
 		Required:    []string{"target"},
-		Description: "Apply a partial content merge to one pending draft — read-modify-write through draft_read (schema eka-draft-update-v1). Supplied content keys overwrite/add; keys not mentioned are preserved. Publish still validates — no validation happens here.",
+		Description: "Apply a partial content merge to one pending draft — read-modify-write through draft_read (schema eka-draft-update-v1) via the runtime-owned Authoring API (not direct store). Supplied content keys overwrite/add; keys not mentioned are preserved. Publish still validates — no validation happens here. Supports optimistic concurrency via expectedRevision (revision integer) and expectedHash (sha256 hex of the draft file); mismatches refuse with a deterministic conflict (re-read with draft_read and retry).",
 		Properties: map[string]any{
-			"target":  map[string]any{"type": "string", "minLength": 1, "description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\"."},
-			"project": map[string]any{"type": "string", "description": "Optional project scope (default: the cwd repository's project)."},
-			"content": map[string]any{"type": "object", "minProperties": 1, "description": "Partial content object to merge into the draft's content — keys overwrite/add, absent keys are preserved. Must be non-empty object."},
+			"target":           map[string]any{"type": "string", "minLength": 1, "description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\"."},
+			"project":          map[string]any{"type": "string", "description": "Optional project scope (default: the cwd repository's project)."},
+			"content":          map[string]any{"type": "object", "minProperties": 1, "description": "Partial content object to merge into the draft's content — keys overwrite/add, absent keys are preserved. Must be non-empty object."},
+			"expectedRevision": map[string]any{"type": "integer", "minimum": 1, "description": "Optional optimistic concurrency guard: expected revision of the draft (refuses with conflict if the on-disk revision differs — re-read with draft_read and retry)."},
+			"expectedHash":     map[string]any{"type": "string", "pattern": "^[a-fA-F0-9]{64}$", "description": "Optional optimistic concurrency guard: expected sha256 hex of the draft file (64 hex chars; refuses with conflict if the on-disk hash differs)."},
 		},
 	},
 	{
@@ -418,6 +420,37 @@ func RiskClassOf(name string) string {
 
 // IsReadOnly reports whether a tool is read-only (risk read).
 func IsReadOnly(name string) bool { return RiskClassOf(name) == RiskRead }
+
+// isCanonicalWriteAllowed reports whether high-impact canonical writes
+// (publish, sync_push, etc., risk canonical-write) are gated via approval.
+// Disabled by default unless EKA_MCP_ALLOW_CANONICAL_WRITE=1 (explicit
+// operator approval).
+func isCanonicalWriteAllowed() bool {
+	v := strings.TrimSpace(os.Getenv("EKA_MCP_ALLOW_CANONICAL_WRITE"))
+	return v == "1" || strings.EqualFold(v, "true")
+}
+
+// isExternalAllowed reports whether external publish (feedback_publish,
+// risk external) is allowed. Isolated and disabled by default unless
+// EKA_MCP_ENABLE_FEEDBACK_PUBLISH=1 (or EKA_MCP_ALLOW_EXTERNAL=1).
+func isExternalAllowed() bool {
+	if v := strings.TrimSpace(os.Getenv("EKA_MCP_ENABLE_FEEDBACK_PUBLISH")); v == "1" || strings.EqualFold(v, "true") {
+		return true
+	}
+	v := strings.TrimSpace(os.Getenv("EKA_MCP_ALLOW_EXTERNAL"))
+	return v == "1" || strings.EqualFold(v, "true")
+}
+
+// isUserImpersonationAllowed reports whether MCP clients may impersonate
+// a user authority (byKind=user). Disabled by default — MCP is the agent
+// interface; arbitrary user impersonation is a safety risk.
+func isUserImpersonationAllowed() bool {
+	v := strings.TrimSpace(os.Getenv("EKA_MCP_ALLOW_USER_IMPERSONATION"))
+	return v == "1" || strings.EqualFold(v, "true")
+}
+
+// authorNameRe validates author names: 1-64 chars, alphanumeric + . _ -
+var authorNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 
 // descriptorByName returns the descriptor for a tool name.
 func descriptorByName(name string) *toolDescriptor {
@@ -750,11 +783,14 @@ type CodeGetRequest struct {
 	Path string
 }
 
-// DraftUpdateRequest describes one draft partial-content merge.
+// DraftUpdateRequest describes one draft partial-content merge with
+// optimistic concurrency guards.
 type DraftUpdateRequest struct {
-	Target  string
-	Project string
-	Content map[string]any
+	Target           string
+	Project          string
+	Content          map[string]any
+	ExpectedRevision *int   `json:"expectedRevision"`
+	ExpectedHash     string `json:"expectedHash"`
 }
 
 // PublishRequest describes one publish run.
@@ -1315,9 +1351,11 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 	case "draft_update":
 		// draft_update has its own required check (target) plus content object.
 		var p struct {
-			Target  string          `json:"target"`
-			Project string          `json:"project"`
-			Content json.RawMessage `json:"content"`
+			Target           string          `json:"target"`
+			Project          string          `json:"project"`
+			Content          json.RawMessage `json:"content"`
+			ExpectedRevision *int            `json:"expectedRevision"`
+			ExpectedHash     string          `json:"expectedHash"`
 		}
 		if err := s.decodeToolArgs("draft_update", args, &p); err != nil {
 			return "", err
@@ -1339,10 +1377,24 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		if len(content) == 0 {
 			return "", fmt.Errorf("draft_update requires content to be a non-empty JSON object")
 		}
+		if p.ExpectedRevision != nil && *p.ExpectedRevision < 1 {
+			s.logParamRefusal("draft_update", len(args), causeInvalidArg, "expectedRevision")
+			return "", fmt.Errorf("draft_update has an invalid argument: field \"expectedRevision\" must be >= 1")
+		}
+		if p.ExpectedHash != "" {
+			hm := strings.TrimSpace(p.ExpectedHash)
+			matched, _ := regexp.MatchString("^[a-fA-F0-9]{64}$", hm)
+			if !matched {
+				s.logParamRefusal("draft_update", len(args), causeInvalidArg, "expectedHash")
+				return "", fmt.Errorf("draft_update has an invalid argument: field \"expectedHash\" must be 64 hex characters")
+			}
+		}
 		data, err := s.cap.DraftUpdate(DraftUpdateRequest{
-			Target:  p.Target,
-			Project: p.Project,
-			Content: content,
+			Target:           p.Target,
+			Project:          p.Project,
+			Content:          content,
+			ExpectedRevision: p.ExpectedRevision,
+			ExpectedHash:     p.ExpectedHash,
 		})
 		if err != nil {
 			return "", err
@@ -1357,6 +1409,9 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		}
 		if err := s.decodeToolArgs("publish", args, &p); err != nil {
 			return "", err
+		}
+		if !isCanonicalWriteAllowed() {
+			return "", fmt.Errorf("publish is a canonical-write (high-impact) and is gated: set EKA_MCP_ALLOW_CANONICAL_WRITE=1 to enable (riskClass=canonical-write requires approval)")
 		}
 		// Reject batch flags on single publish (client must use publishBatch).
 		if len(args) != 0 && string(args) != "null" {
@@ -1408,6 +1463,9 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		if err := s.decodeToolArgs("publishBatch", args, &pb); err != nil {
 			return "", err
 		}
+		if !isCanonicalWriteAllowed() {
+			return "", fmt.Errorf("publishBatch is a canonical-write (high-impact) and is gated: set EKA_MCP_ALLOW_CANONICAL_WRITE=1 to enable (riskClass=canonical-write requires approval)")
+		}
 		data, err := s.cap.PublishBatch(PublishBatchRequest{
 			Project: pb.Project,
 			All:     pb.All,
@@ -1430,6 +1488,9 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		}
 		if err := s.decodeToolArgs("transition", args, &p); err != nil {
 			return "", err
+		}
+		if !isCanonicalWriteAllowed() {
+			return "", fmt.Errorf("transition is a canonical-write (high-impact) and is gated: set EKA_MCP_ALLOW_CANONICAL_WRITE=1 to enable (riskClass=canonical-write requires approval)")
 		}
 		by, err := resolveAuthor(p.By, p.ByKind)
 		if err != nil {
@@ -1570,6 +1631,9 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		if err := s.decodeToolArgs("sync_push", args, &p); err != nil {
 			return "", err
 		}
+		if !isCanonicalWriteAllowed() {
+			return "", fmt.Errorf("sync_push is a canonical-write (high-impact) and is gated: set EKA_MCP_ALLOW_CANONICAL_WRITE=1 to enable (riskClass=canonical-write requires approval)")
+		}
 		data, err := s.cap.SyncPush(p.RepoPath, p.Adopt, p.Override)
 		if err != nil {
 			return "", err
@@ -1585,6 +1649,9 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		}
 		if err := s.decodeToolArgs("assign", args, &p); err != nil {
 			return "", err
+		}
+		if !isCanonicalWriteAllowed() {
+			return "", fmt.Errorf("assign is a canonical-write (high-impact) and is gated: set EKA_MCP_ALLOW_CANONICAL_WRITE=1 to enable (riskClass=canonical-write requires approval)")
 		}
 		by, err := resolveAuthor(p.By, p.ByKind)
 		if err != nil {
@@ -1611,6 +1678,9 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		if err := s.decodeToolArgs("reassign", args, &p); err != nil {
 			return "", err
 		}
+		if !isCanonicalWriteAllowed() {
+			return "", fmt.Errorf("reassign is a canonical-write (high-impact) and is gated: set EKA_MCP_ALLOW_CANONICAL_WRITE=1 to enable (riskClass=canonical-write requires approval)")
+		}
 		by, err := resolveAuthor(p.By, p.ByKind)
 		if err != nil {
 			return "", err
@@ -1634,6 +1704,9 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		}
 		if err := s.decodeToolArgs("unassign", args, &p); err != nil {
 			return "", err
+		}
+		if !isCanonicalWriteAllowed() {
+			return "", fmt.Errorf("unassign is a canonical-write (high-impact) and is gated: set EKA_MCP_ALLOW_CANONICAL_WRITE=1 to enable (riskClass=canonical-write requires approval)")
 		}
 		by, err := resolveAuthor(p.By, p.ByKind)
 		if err != nil {
@@ -1694,6 +1767,9 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		if err := s.decodeToolArgs("feedback_publish", args, &p); err != nil {
 			return "", err
 		}
+		if !isExternalAllowed() {
+			return "", fmt.Errorf("feedback_publish is an external publish and is isolated/disabled by default: set EKA_MCP_ENABLE_FEEDBACK_PUBLISH=1 (or EKA_MCP_ALLOW_EXTERNAL=1) to enable (riskClass=external)")
+		}
 		data, err := s.cap.FeedbackPublish(FeedbackPublishRequest{ID: p.ID})
 		if err != nil {
 			return "", err
@@ -1713,11 +1789,20 @@ var defaultAgentIdentity = AuthorIdentity{Kind: "agent", Name: "mcp-agent"}
 // client's by/byKind when a name is given (the kind defaults to agent —
 // the MCP boundary is the agent interface), else the deterministic
 // default agent identity. The result is never empty-named, so the
-// eka-core "Engineering" fallback can never trigger.
+// eka-core "Engineering" fallback can never trigger. It validates that
+// arbitrary authority impersonation is blocked: by names are restricted to
+// the safe character set and user-kind impersonation via MCP is gated
+// (requires EKA_MCP_ALLOW_USER_IMPERSONATION=1).
 func resolveAuthor(by, byKind string) (AuthorIdentity, error) {
 	name := strings.TrimSpace(by)
 	if name == "" {
 		return defaultAgentIdentity, nil
+	}
+	if !authorNameRe.MatchString(name) {
+		return AuthorIdentity{}, fmt.Errorf("invalid author name %q: must match %s (1-64 alphanumerics, dot, underscore, hyphen)", by, authorNameRe.String())
+	}
+	if strings.EqualFold(name, "Engineering") {
+		return AuthorIdentity{}, fmt.Errorf("author name %q is reserved (the \"Engineering\" placeholder is never used via MCP)", by)
 	}
 	kind := strings.TrimSpace(byKind)
 	if kind == "" {
@@ -1725,6 +1810,9 @@ func resolveAuthor(by, byKind string) (AuthorIdentity, error) {
 	}
 	if !isAuthorKind(kind) {
 		return AuthorIdentity{}, fmt.Errorf("unknown author kind %q (allowed: user, agent, worker)", byKind)
+	}
+	if kind == "user" && !isUserImpersonationAllowed() {
+		return AuthorIdentity{}, fmt.Errorf("MCP authority impersonation blocked: byKind=user not allowed via MCP (use agent or worker) — set EKA_MCP_ALLOW_USER_IMPERSONATION=1 to override")
 	}
 	return AuthorIdentity{Kind: kind, Name: name}, nil
 }
