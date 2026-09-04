@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/maleolabs/eka-core/codegraph"
 	"github.com/maleolabs/eka-core/conformance"
@@ -175,7 +176,7 @@ func (c *Capability) Status() ([]byte, error) {
 		return json.Marshal(map[string]any{
 			"schema":      "eka-status-v1",
 			"initialized": false,
-			"path":        c.rt.Path(),
+			"path":        c.logicalPath(c.rt.Path()),
 			"message":     "workspace not initialized: run 'eka project register' to create it",
 			"objects":     0,
 			"payloads":    0,
@@ -187,7 +188,18 @@ func (c *Capability) Status() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(st)
+	data, _ := json.Marshal(st)
+	// Enforce logical path (no absolute leakage) for status payload.
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err == nil {
+		if p, ok := m["path"].(string); ok && filepath.IsAbs(p) {
+			m["path"] = c.logicalPath(p)
+			if data2, err := json.Marshal(m); err == nil {
+				return data2, nil
+			}
+		}
+	}
+	return data, nil
 }
 
 // Context builds the Context Object around one subject at one depth
@@ -381,7 +393,7 @@ func (c *Capability) NewDraft(req mcp.NewDraftRequest) ([]byte, error) {
 		Namespace:        draft.Namespace,
 		Type:             draft.Type,
 		ID:               draft.ID,
-		Path:             draft.Path,
+		Path:             c.logicalPath(draft.Path),
 		Updated:          draft.Updated,
 		LegalTransitions: legalTransitions(draft.Type),
 	})
@@ -484,7 +496,7 @@ func (c *Capability) Note(req mcp.NoteRequest) ([]byte, error) {
 		ID:           res.ID,
 		Target:       res.Target,
 		SubjectState: res.SubjectState,
-		Path:         res.Path,
+		Path:         c.logicalPath(res.Path),
 		By:           res.By,
 	})
 }
@@ -531,7 +543,7 @@ func (c *Capability) DraftList(project string) ([]byte, error) {
 			Namespace:        d.Namespace,
 			Type:             d.Type,
 			ID:               d.ID,
-			Path:             d.Path,
+			Path:             c.logicalPath(d.Path),
 			Updated:          d.Updated,
 			LegalTransitions: legalTransitions(d.Type),
 		})
@@ -606,7 +618,7 @@ func (c *Capability) SyncPush(repoPath string, adopt, override bool) ([]byte, er
 	}
 	return json.Marshal(syncPushResult{
 		Schema:            "eka-sync-push-result-v1",
-		Workspace:         report.Workspace,
+		Workspace:         c.logicalPath(report.Workspace),
 		Project:           report.Project,
 		Repo:              report.Repo,
 		PushedUnits:       report.PushedUnits,
@@ -877,6 +889,27 @@ type syncPushResult struct {
 // temporary JSON file and returns its path ("" for nil content — the
 // empty template scaffolds). The caller removes the file when done;
 // eka-core reads it synchronously.
+
+// logicalPath returns a logical/relative path for MCP results — no absolute host path leakage.
+// It prefers a path relative to the workspace (EKA_HOME) and falls back to base name.
+func (c *Capability) logicalPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	if !filepath.IsAbs(p) {
+		return p
+	}
+	if rel, err := filepath.Rel(c.Path(), p); err == nil && rel != "." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !strings.HasPrefix(rel, "..") {
+		return rel
+	}
+	if home := os.Getenv("EKA_HOME"); home != "" {
+		if rel, err := filepath.Rel(home, p); err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
+	}
+	return filepath.Base(p)
+}
+
 func stageContent(content map[string]any) (string, error) {
 	if content == nil {
 		return "", nil

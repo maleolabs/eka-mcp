@@ -335,7 +335,7 @@ func TestToolsList(t *testing.T) {
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	res := out["result"].(map[string]any)
 	tools := res["tools"].([]any)
-	want := []string{"context", "code_context", "code_discover", "code_get", "get", "domain", "status", "validate", "new", "draft_update", "publish", "transition", "note", "draft_read", "view", "draft_list", "integrity_check", "discard", "sync_push", "assign", "reassign", "unassign", "feedback_new", "feedback_list", "feedback_publish"}
+	want := []string{"context", "code_context", "code_discover", "code_get", "get", "domain", "status", "validate", "new", "draft_update", "publish", "publishBatch", "transition", "note", "draft_read", "draft_list", "integrity_check", "discard", "sync_push", "assign", "reassign", "unassign", "feedback_new", "feedback_list", "feedback_publish"}
 	got := make([]string, 0, len(tools))
 	for _, tl := range tools {
 		tm := tl.(map[string]any)
@@ -347,14 +347,11 @@ func TestToolsList(t *testing.T) {
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("tools = %v, want %v", got, want)
 	}
-	// Deprecated alias `view` must be flagged with migration note to `draft_read`.
+	// Deprecated alias `view` must NOT be advertised as primary — tools/list excludes it.
 	for _, tl := range tools {
 		tm := tl.(map[string]any)
 		if tm["name"] == "view" {
-			desc, _ := tm["description"].(string)
-			if !strings.Contains(strings.ToLower(desc), "deprecated") || !strings.Contains(desc, "draft_read") {
-				t.Errorf("tool view description = %q, want deprecated flag with migration note to draft_read", desc)
-			}
+			t.Errorf("tool view must not be advertised in tools/list (deprecated alias only for dispatch)")
 		}
 		if tm["name"] == "draft_read" {
 			desc, _ := tm["description"].(string)
@@ -362,6 +359,20 @@ func TestToolsList(t *testing.T) {
 				t.Errorf("tool draft_read must not be marked deprecated, got %q", desc)
 			}
 		}
+	}
+	// Also assert publish/publishBatch split.
+	foundPublish, foundBatch := false, false
+	for _, tl := range tools {
+		tm := tl.(map[string]any)
+		if tm["name"] == "publish" {
+			foundPublish = true
+		}
+		if tm["name"] == "publishBatch" {
+			foundBatch = true
+		}
+	}
+	if !foundPublish || !foundBatch {
+		t.Errorf("tools/list must carry both publish and publishBatch (split contract), got publish=%v batch=%v", foundPublish, foundBatch)
 	}
 }
 
@@ -1213,37 +1224,47 @@ func TestToolsCallDraftUpdate(t *testing.T) {
 	}
 }
 
-// TestToolsCallPublishBatch: publish --all / --pending batch mode publishes in topological order.
+// TestToolsCallPublishBatch: publishBatch --all / --pending batch mode publishes in topological order (split contract).
 func TestToolsCallPublishBatch(t *testing.T) {
 	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	// Batch via all:true.
-	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"publish","arguments":{"all":true}}}`)
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"publishBatch","arguments":{"all":true}}}`)
 	res := out["result"].(map[string]any)
 	if res["isError"] != false {
-		t.Fatalf("publish batch all isError = %v, want false", res["isError"])
+		t.Fatalf("publishBatch all isError = %v, want false", res["isError"])
 	}
 	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
 	var doc map[string]any
 	if err := json.Unmarshal([]byte(text), &doc); err != nil {
-		t.Fatalf("publish batch text must be JSON: %v", err)
+		t.Fatalf("publishBatch text must be JSON: %v", err)
 	}
 	if doc["schema"] != "eka-publish-batch-v1" {
 		t.Errorf("schema = %v, want eka-publish-batch-v1", doc["schema"])
 	}
 	// Batch via pending:true synonym.
-	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"publish","arguments":{"pending":true}}}`)
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"publishBatch","arguments":{"pending":true}}}`)
 	if out["result"].(map[string]any)["isError"] != false {
-		t.Errorf("publish batch pending must succeed")
+		t.Errorf("publishBatch pending must succeed")
 	}
-	// Target + all is usage error.
-	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"publish","arguments":{"target":"feather/sto:001","all":true}}}`)
+	// Batch with empty args also succeeds (no required).
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"publishBatch","arguments":{}}}`)
+	if out["result"].(map[string]any)["isError"] != false {
+		t.Errorf("publishBatch empty must succeed")
+	}
+	// publish target+all is usage error (must use publishBatch).
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"publish","arguments":{"target":"feather/sto:001","all":true}}}`)
 	if out["result"].(map[string]any)["isError"] != true {
-		t.Errorf("publish target+all must be isError=true (usage)")
+		t.Errorf("publish target+all must be isError=true (use publishBatch)")
 	}
 	// Wrong-typed all → invalid_arg.
-	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"publish","arguments":{"all":"true"}}}`)
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"publishBatch","arguments":{"all":"true"}}}`)
 	if out["result"].(map[string]any)["isError"] != true {
-		t.Errorf("publish all wrong type must be isError=true")
+		t.Errorf("publishBatch all wrong type must be isError=true")
+	}
+	// publishBatch with target should refuse.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"publishBatch","arguments":{"target":"feather/sto:001"}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Errorf("publishBatch with target must be isError=true")
 	}
 }
 

@@ -226,6 +226,11 @@ func TestRequiredFieldContractSchemaMatchesEnforcement(t *testing.T) {
 		advertised[name] = req
 	}
 	for name, want := range toolRequiredFields {
+		desc := descriptorByName(name)
+		if desc != nil && desc.Deprecated {
+			// Deprecated alias is dispatched but not advertised as primary — skip advertisement check.
+			continue
+		}
 		got, ok := advertised[name]
 		if !ok {
 			t.Errorf("tool %v is declared in toolRequiredFields but not advertised in tools/list", name)

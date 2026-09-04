@@ -34,18 +34,347 @@ import (
 // 2024-11-05 baseline of the MCP spec).
 const ProtocolVersion = "2024-11-05"
 
-// toolNames is the fixed deterministic tool order the server advertises
-// in tools/list and dispatches in tools/call. The order is the contract.
-var toolNames = []string{
-	"context", "code_context", "code_discover", "code_get", "get", "domain", "status", "validate", "new", "draft_update", "publish",
-	"transition", "note", "draft_read", "view", "draft_list", "integrity_check",
-	"discard", "sync_push", "assign", "reassign", "unassign",
-	"feedback_new", "feedback_list", "feedback_publish",
+// Risk classes for approval policy (single authoritative classification).
+const (
+	RiskRead           = "read"
+	RiskLocalWrite     = "local-write"
+	RiskCanonicalWrite = "canonical-write"
+	RiskExternal       = "external"
+)
+
+// toolDescriptor is the single authoritative declaration for one MCP tool:
+// name, description, risk class, strict JSON schema, deprecation marker
+// and deterministic order. Both the advertised tools/list schemas and the
+// runtime validation (decodeToolArgs) derive from this source, so schema
+// and enforcement cannot drift (bug:mcp-new-false-refusal).
+type toolDescriptor struct {
+	Name        string
+	Description string
+	RiskClass   string
+	Required    []string
+	Properties  map[string]any
+	Deprecated  bool
 }
 
-// ToolCount returns the number of tools the server exposes (including the
-// deprecated alias — the capability count the banner reports).
+// toolDescriptors is THE authoritative tool catalog — the fixed
+// deterministic order the server advertises and dispatches. Strict schemas
+// use required+types+enums+bounds and additionalProperties:false. Risk
+// classes: read | local-write | canonical-write | external.
+var toolDescriptors = []toolDescriptor{
+	{
+		Name:        "context",
+		RiskClass:   RiskRead,
+		Required:    []string{"subject"},
+		Description: "Build the deterministic Engineering Context Object around one knowledge subject (schema eka-context-v1): the focus in full detail, its instance-line history, and — at dependency/engineering depth — the classified one-hop neighborhood and strata landscape.",
+		Properties: map[string]any{
+			"subject":   map[string]any{"type": "string", "description": "Identity form of the focus, e.g. \"feather/adr:001-serialization:1\"."},
+			"projectId": map[string]any{"type": "string", "description": "The project for the issue-number lookup (optional)."},
+			"depth":     map[string]any{"type": "string", "enum": []string{"local", "dependency", "engineering"}, "description": "Context depth: \"local\" (default), \"dependency\" or \"engineering\"."},
+		},
+	},
+	{
+		Name:        "code_context",
+		RiskClass:   RiskRead,
+		Required:    []string{"root"},
+		Description: "Build bounded deterministic source context from the local code graph. Returns schema eka/code-context/1 with file inventory, symbols, imports and optional source content.",
+		Properties: map[string]any{
+			"root":      map[string]any{"type": "string", "description": "Repository root to index (logical relative path, no absolute host path)."},
+			"focus":     map[string]any{"type": "string", "description": "Optional file path or symbol focus."},
+			"depth":     map[string]any{"type": "string", "enum": []string{"local", "dependency", "engineering"}, "description": "Context depth for code graph."},
+			"level":     map[string]any{"type": "integer", "minimum": 0, "maximum": 3, "description": "Expansion level 0-3."},
+			"noContent": map[string]any{"type": "boolean", "description": "When true omits source content for payload economy."},
+		},
+	},
+	{
+		Name:        "code_discover",
+		RiskClass:   RiskRead,
+		Required:    []string{"root", "query"},
+		Description: "Discover code candidates deterministically from a natural-language query and optional scope filter. Returns schema eka/code-discover/1 with bounded candidates carrying reason and confidence (language-agnostic inventory; unsupported files remain inventory entries; fallback to bounded inventory when no match; no RAG canonical).",
+		Properties: map[string]any{
+			"root":  map[string]any{"type": "string", "description": "Repository root to index (logical relative path)."},
+			"query": map[string]any{"type": "string", "minLength": 1, "description": "Natural-language query (tokens matched deterministically against file paths, symbol names and imports)."},
+			"scope": map[string]any{"type": "string", "description": "Optional file path scope filter (substring, case-insensitive)."},
+			"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 64, "description": "Max candidates 1-64 (default 16)."},
+		},
+	},
+	{
+		Name:        "code_get",
+		RiskClass:   RiskRead,
+		Required:    []string{"root", "path"},
+		Description: "Retrieve exact file content deterministically by slash path. Returns schema eka/code-get/1 with file unit, symbols and imports (language-agnostic; deterministic exact path lookup).",
+		Properties: map[string]any{
+			"root": map[string]any{"type": "string", "description": "Repository root to index (logical relative path)."},
+			"path": map[string]any{"type": "string", "minLength": 1, "description": "Slash path of the file to retrieve (exact, relative to root, logical)."},
+		},
+	},
+	{
+		Name:        "get",
+		RiskClass:   RiskRead,
+		Required:    []string{"form"},
+		Description: "Fetch one Canonical Knowledge Object (CKO) by identity form: canonical \"<ns>/<type>:<id>:<v>\" or qualified line form \"<ns>/<type>:<id>\" (the latest instance of the line). Returns the machine document (schema eka-cko-v2). Supports noContent:true to strip the content payload via machine.Document.StripContent at parity with CLI --no-content (content absent, identity/stateVector/relationships intact) for payload economy. Default false (full payloads).",
+		Properties: map[string]any{
+			"form":      map[string]any{"type": "string", "minLength": 1, "description": "Identity form to resolve, e.g. \"feather/adr:001-serialization:1\"."},
+			"noContent": map[string]any{"type": "boolean", "description": "When true, strips the content payload via machine.Document.StripContent (identity/stateVector/relationships intact, content absent) — parity with CLI --no-content. Default false (full payloads)."},
+		},
+	},
+	{
+		Name:        "domain",
+		RiskClass:   RiskRead,
+		Required:    []string{"projectId", "domain"},
+		Description: "Return every unit of one Engineering Domain of a project as a machine collection (schema eka-cko-v2, sorted by canonical form). Supports noContent:true to strip each unit's content payload via machine.Document.StripContent at parity with CLI --no-content (content absent per unit, identity/stateVector/relationships intact) for payload economy. Default false (full payloads).",
+		Properties: map[string]any{
+			"projectId": map[string]any{"type": "string", "minLength": 1, "description": "The project the knowledge belongs to."},
+			"domain":    map[string]any{"type": "string", "enum": []string{"Architecture", "Planning", "Execution", "Operations", "Knowledge"}, "description": "The canonical Engineering Domain name, e.g. \"Architecture\"."},
+			"noContent": map[string]any{"type": "boolean", "description": "When true, strips each unit's content payload via machine.Document.StripContent (identity/stateVector/relationships intact, content absent per unit) — parity with CLI --no-content. Default false (full payloads)."},
+		},
+	},
+	{
+		Name:        "status",
+		RiskClass:   RiskRead,
+		Required:    nil,
+		Description: "Return the aggregated EKA workspace status: path, schema version, registered projects, canonical store totals. Path is logical/relative (no absolute host path).",
+		Properties:  map[string]any{},
+	},
+	{
+		Name:        "validate",
+		RiskClass:   RiskRead,
+		Required:    []string{"root"},
+		Description: "Run the authoring conformance gate over a repository and return the machine report (schema eka-conformance-report-v1): scanned counts, blocking errors, warnings and the deterministic findings (rules R0-R13).",
+		Properties: map[string]any{
+			"root": map[string]any{"type": "string", "minLength": 1, "description": "The repository root to validate (its docs/ tree is scanned) — logical relative path."},
+		},
+	},
+	{
+		Name:        "new",
+		RiskClass:   RiskLocalWrite,
+		Required:    []string{"project", "namespace", "type", "id"},
+		Description: "Scaffold one draft in the workspace drafts tree (schema eka-draft-v1): the deterministic v2.0 JSON authoring template with the type's owned state defaults and required content keys. The change-log authority is the resolved agent identity.",
+		Properties: map[string]any{
+			"project":   map[string]any{"type": "string", "minLength": 1, "description": "The project scope of the draft."},
+			"namespace": map[string]any{"type": "string", "minLength": 1, "description": "The frontmatter namespace of the draft."},
+			"type":      map[string]any{"type": "string", "minLength": 1, "description": "The EKA artifact type token, e.g. \"adr\", \"sto\", \"cmt\"."},
+			"id":        map[string]any{"type": "string", "minLength": 1, "description": "The draft id."},
+			"dimension": map[string]any{"type": "string", "description": "Optional primary Knowledge Dimension."},
+			"phase":     map[string]any{"type": "string", "description": "Optional phase context (scp-/plan- only)."},
+			"domain":    map[string]any{"type": "string", "description": "Optional declared Engineering Domain (canonical spelling)."},
+			"by":        map[string]any{"type": "string", "description": "Optional change-log authority name (defaults to the agent identity)."},
+			"byKind":    map[string]any{"type": "string", "enum": []string{"user", "agent", "worker"}, "description": "Optional authority kind: user | agent | worker (default agent)."},
+			"relationships": map[string]any{
+				"type": "array", "description": "Optional authoring references, e.g. {\"type\":\"depends-on\",\"target\":\"plan:x\"}.",
+				"items": map[string]any{"type": "object", "properties": map[string]any{"type": map[string]any{"type": "string"}, "target": map[string]any{"type": "string"}}, "required": []string{"type", "target"}, "additionalProperties": false},
+			},
+			"content": map[string]any{"type": "object", "description": "Optional JSON object merged over the type's required content keys."},
+		},
+	},
+	{
+		Name:        "draft_update",
+		RiskClass:   RiskLocalWrite,
+		Required:    []string{"target"},
+		Description: "Apply a partial content merge to one pending draft — read-modify-write through draft_read (schema eka-draft-update-v1). Supplied content keys overwrite/add; keys not mentioned are preserved. Publish still validates — no validation happens here.",
+		Properties: map[string]any{
+			"target":  map[string]any{"type": "string", "minLength": 1, "description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\"."},
+			"project": map[string]any{"type": "string", "description": "Optional project scope (default: the cwd repository's project)."},
+			"content": map[string]any{"type": "object", "minProperties": 1, "description": "Partial content object to merge into the draft's content — keys overwrite/add, absent keys are preserved. Must be non-empty object."},
+		},
+	},
+	{
+		Name:        "publish",
+		RiskClass:   RiskCanonicalWrite,
+		Required:    []string{"target"},
+		Description: "Publish one draft as an immutable Canonical Knowledge Object (schema eka-publish-result-v1). All-or-nothing: a failed validation or insert leaves the draft untouched; the draft file is the single-use ticket. Single-draft only — for batch use publishBatch.",
+		Properties: map[string]any{
+			"target":          map[string]any{"type": "string", "minLength": 1, "description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\" — required for single publish."},
+			"project":         map[string]any{"type": "string", "description": "Optional project scope (default: the cwd repository's project)."},
+			"instanceVersion": map[string]any{"type": "integer", "minimum": 1, "description": "Optional explicit instance version (must exceed the line's highest)."},
+		},
+	},
+	{
+		Name:        "publishBatch",
+		RiskClass:   RiskCanonicalWrite,
+		Required:    nil,
+		Description: "Publish every pending draft of the project in topological order (schema eka-publish-batch-v1) — same engine as `eka publish --all` (Kahn's algorithm, cycle and dangling-reference pre-flight refusals, per-draft atomic validation); empty backlog is a valid no-op. Batch counterpart of publish.",
+		Properties: map[string]any{
+			"project": map[string]any{"type": "string", "description": "Optional project scope (default: the cwd repository's project)."},
+			"all":     map[string]any{"type": "boolean", "description": "Batch mode flag — synonym of pending, parity with `eka publish --all` (optional, defaults to true when publishBatch is called)."},
+			"pending": map[string]any{"type": "boolean", "description": "Batch mode synonym of all — publish every pending draft in topological order."},
+		},
+	},
+	{
+		Name:        "transition",
+		RiskClass:   RiskCanonicalWrite,
+		Required:    []string{"target"},
+		Description: "Move a work item along the D1 transition table (or a plan/container/knowledge artifact along its state table) and publish the transition in place (schema eka-transition-result-v1). The R13 note gates and the active-container confirmation are enforced by the Authoring API — a refused transition publishes nothing.",
+		Properties: map[string]any{
+			"target":    map[string]any{"type": "string", "minLength": 1, "description": "The work item line: \"<ns>/<type>:<id>\" or \"<type>:<id>\"."},
+			"to":        map[string]any{"type": "string", "description": "Explicit destination state (exactly one of to/forward/backward)."},
+			"forward":   map[string]any{"type": "boolean", "description": "Take the next step of the D1 table."},
+			"backward":  map[string]any{"type": "boolean", "description": "Take the one-step pull-back."},
+			"repoPath":  map[string]any{"type": "string", "description": "Optional directory the repository is addressed from (default: the server cwd) — logical relative path."},
+			"by":        map[string]any{"type": "string", "description": "Optional change-log authority name (defaults to the agent identity)."},
+			"byKind":    map[string]any{"type": "string", "enum": []string{"user", "agent", "worker"}, "description": "Optional authority kind: user | agent | worker (default agent)."},
+			"confirmed": map[string]any{"type": "boolean", "description": "Pre-authorize the active-container confirmation gate."},
+		},
+	},
+	{
+		Name:        "note",
+		RiskClass:   RiskLocalWrite,
+		Required:    []string{"target", "role"},
+		Description: "Create one cmt- note draft discussing a subject (schema eka-note-result-v1): the per-role template (implementation | review | fix) with the discusses relationship wired to the resolved subject. The draft is visible to the R13 transition gates immediately.",
+		Properties: map[string]any{
+			"target":   map[string]any{"type": "string", "minLength": 1, "description": "The note's subject: \"<ns>/<type>:<id>\" or \"<type>:<id>\"."},
+			"role":     map[string]any{"type": "string", "enum": []string{"implementation", "review", "fix"}, "description": "Note role: implementation | review | fix."},
+			"domain":   map[string]any{"type": "string", "description": "Optional declared Engineering Domain of the note."},
+			"repoPath": map[string]any{"type": "string", "description": "Optional directory the repository is addressed from (default: the server cwd) — logical relative path."},
+			"by":       map[string]any{"type": "string", "description": "Optional change-log authority name (defaults to the agent identity)."},
+			"byKind":   map[string]any{"type": "string", "enum": []string{"user", "agent", "worker"}, "description": "Optional authority kind: user | agent | worker (default agent)."},
+			"content":  map[string]any{"type": "object", "description": "Optional JSON object merged over the per-role note template."},
+		},
+	},
+	{
+		Name:        "draft_read",
+		RiskClass:   RiskRead,
+		Required:    []string{"target"},
+		Description: "Return one draft file content verbatim (the v2.0 JSON authoring document) — the editable draft behind a target.",
+		Properties: map[string]any{
+			"target":  map[string]any{"type": "string", "minLength": 1, "description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\"."},
+			"project": map[string]any{"type": "string", "description": "Optional project scope (default: the cwd repository's project)."},
+		},
+	},
+	{
+		Name:        "view",
+		RiskClass:   RiskRead,
+		Required:    []string{"target"},
+		Description: "Deprecated: use draft_read. Return one draft file content verbatim (the v2.0 JSON authoring document) — the editable draft behind a target. This alias will be removed in the next minor version; migrate to draft_read.",
+		Properties: map[string]any{
+			"target":  map[string]any{"type": "string", "minLength": 1, "description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\"."},
+			"project": map[string]any{"type": "string", "description": "Optional project scope (default: the cwd repository's project)."},
+		},
+		Deprecated: true,
+	},
+	{
+		Name:        "draft_list",
+		RiskClass:   RiskRead,
+		Required:    nil,
+		Description: "List the draft backlog of one project (or every project) as a machine list (schema eka-draft-list-v1), ordered deterministically.",
+		Properties: map[string]any{
+			"project": map[string]any{"type": "string", "description": "Optional project scope (default: every project)."},
+		},
+	},
+	{
+		Name:        "integrity_check",
+		RiskClass:   RiskRead,
+		Required:    nil,
+		Description: "Verify the canonical store and return the deterministic integrity report (schema eka-integrity-report-v1): scanned counts, retained-history orphans and every detected violation (payload hashes, reference targets, attachment digests, registry).",
+		Properties:  map[string]any{},
+	},
+	{
+		Name:        "discard",
+		RiskClass:   RiskLocalWrite,
+		Required:    []string{"target"},
+		Description: "Delete one draft file without publishing (schema eka-discard-result-v1). The draft is gone; the identity is free for a new draft.",
+		Properties: map[string]any{
+			"target":  map[string]any{"type": "string", "minLength": 1, "description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\"."},
+			"project": map[string]any{"type": "string", "description": "Optional project scope (default: the cwd repository's project)."},
+		},
+	},
+	{
+		Name:        "sync_push",
+		RiskClass:   RiskCanonicalWrite,
+		Required:    nil,
+		Description: "Push the repository snapshot from the workspace store (schema eka-sync-push-result-v1): the push side of `eka sync push` — same snapshot compilation, same digest, same refusal classes; crash-safe (staged in .snapshots-tmp, swapped atomically) so a failed push writes nothing partially. Pull / --from-docs re-seed is not exposed (silent regression hazard); use CLI `eka sync pull`.",
+		Properties: map[string]any{
+			"repoPath": map[string]any{"type": "string", "description": "Optional repository path (default: the server cwd, same as CLI `eka sync push`) — logical relative path."},
+			"adopt":    map[string]any{"type": "boolean", "description": "Adopt workspace-native units (source_repo=runtime, `eka publish` provenance) before pushing (ADR-032; same as `eka sync push --adopt`)."},
+			"override": map[string]any{"type": "boolean", "description": "Machine override to align the repository identity to the content namespace when they differ (same as `eka sync push --override`)."},
+		},
+	},
+	{
+		Name:        "assign",
+		RiskClass:   RiskCanonicalWrite,
+		Required:    []string{"target", "to"},
+		Description: "Assign a work item to a member (schema eka-assignment-v1): the assigned-to edge (work item -> member) is added — same engine as CLI `eka assign` — same target forms, same validation, same refusal classes including deterministic refusal when already assigned to a different member; idempotent on the same member. Single-assignee, deterministic; a failed assignment writes nothing.",
+		Properties: map[string]any{
+			"target":   map[string]any{"type": "string", "minLength": 1, "description": "The work item line: \"<ns>/<type>:<id>\" or \"<type>:<id>\" (same as CLI `eka assign <item>`)."},
+			"to":       map[string]any{"type": "string", "minLength": 1, "description": "The member line to assign to: \"<mbr-id>\", \"mbr:<id>\", \"mbr-<id>\", or \"<ns>/mbr:<id>\" (same as CLI --to)."},
+			"repoPath": map[string]any{"type": "string", "description": "Optional repository path (default: the server cwd) — logical relative path."},
+			"by":       map[string]any{"type": "string", "description": "Optional change-log authority name (defaults to the agent identity)."},
+			"byKind":   map[string]any{"type": "string", "enum": []string{"user", "agent", "worker"}, "description": "Optional authority kind: user | agent | worker (default agent)."},
+		},
+	},
+	{
+		Name:        "reassign",
+		RiskClass:   RiskCanonicalWrite,
+		Required:    []string{"target", "to"},
+		Description: "Move a work item's assignment to another member in one operation (schema eka-assignment-v1): same engine as CLI `eka reassign` — same validation and refusal classes; deterministic refusal when not assigned (use assign) and idempotent on the same member; a failed reassign writes nothing.",
+		Properties: map[string]any{
+			"target":   map[string]any{"type": "string", "minLength": 1, "description": "The work item line: \"<ns>/<type>:<id>\" or \"<type>:<id>\" (same as CLI `eka reassign <item>`)."},
+			"to":       map[string]any{"type": "string", "minLength": 1, "description": "The member line to move to: \"<mbr-id>\", \"mbr:<id>\", \"mbr-<id>\", or \"<ns>/mbr:<id>\" (same as CLI --to)."},
+			"repoPath": map[string]any{"type": "string", "description": "Optional repository path (default: the server cwd) — logical relative path."},
+			"by":       map[string]any{"type": "string", "description": "Optional change-log authority name (defaults to the agent identity)."},
+			"byKind":   map[string]any{"type": "string", "enum": []string{"user", "agent", "worker"}, "description": "Optional authority kind: user | agent | worker (default agent)."},
+		},
+	},
+	{
+		Name:        "unassign",
+		RiskClass:   RiskCanonicalWrite,
+		Required:    []string{"target"},
+		Description: "Remove a work item's assigned-to edge (schema eka-assignment-v1): same engine as CLI `eka unassign` — same validation and refusal classes; deterministic no-op when already unassigned; a failed unassign writes nothing.",
+		Properties: map[string]any{
+			"target":   map[string]any{"type": "string", "minLength": 1, "description": "The work item line: \"<ns>/<type>:<id>\" or \"<type>:<id>\" (same as CLI `eka unassign <item>`)."},
+			"repoPath": map[string]any{"type": "string", "description": "Optional repository path (default: the server cwd) — logical relative path."},
+			"by":       map[string]any{"type": "string", "description": "Optional change-log authority name (defaults to the agent identity)."},
+			"byKind":   map[string]any{"type": "string", "enum": []string{"user", "agent", "worker"}, "description": "Optional authority kind: user | agent | worker (default agent)."},
+		},
+	},
+	{
+		Name:        "feedback_new",
+		RiskClass:   RiskLocalWrite,
+		Required:    []string{"type", "title"},
+		Description: "Create a feedback draft under EKA_HOME/feedback (YAML frontmatter + markdown body) — schema eka-feedback-new-v1. Same engine as CLI `eka feedback new`: same validation, same per-type scaffold, same id generation (fbk-YYYYMMDD-slug), same 0600/0700 permissions. Feedback is meta-information about the tool (ADR-026) — it NEVER enters the canonical store and never becomes a CKO.",
+		Properties: map[string]any{
+			"type":     map[string]any{"type": "string", "enum": []string{"bug", "suggestion", "improvement", "question"}, "description": "Feedback type: bug, suggestion, improvement, or question (mirrors --type)."},
+			"title":    map[string]any{"type": "string", "minLength": 1, "description": "Feedback title (mirrors --title)."},
+			"severity": map[string]any{"type": "string", "enum": []string{"low", "medium", "high"}, "description": "Feedback severity: low, medium, or high (default low, mirrors --severity)."},
+			"source":   map[string]any{"type": "string", "enum": []string{"human", "agent"}, "description": "Feedback source: human or agent (default human; agents should pass agent, mirrors --source)."},
+			"command":  map[string]any{"type": "string", "description": "The invoked command recorded in the report (default mcp:feedback_new, mirrors --command)."},
+			"content":  map[string]any{"type": "string", "description": "Markdown feedback body (mirrors --content-file contents inline); when omitted the per-type scaffold is used (bug: Steps/Expected/Actual, others: Description)."},
+		},
+	},
+	{
+		Name:        "feedback_list",
+		RiskClass:   RiskRead,
+		Required:    nil,
+		Description: "List all local feedback under EKA_HOME/feedback (schema eka-feedback-list-v1) — drafts and published, id descending (newest first, mirrors `eka feedback list`). Deterministic; the first malformed file fails the whole list naming the file. Feedback is meta-information outside the knowledge model — never a CKO, never part of the canonical store.",
+		Properties:  map[string]any{},
+	},
+	{
+		Name:        "feedback_publish",
+		RiskClass:   RiskExternal,
+		Required:    []string{"id"},
+		Description: "Publish a feedback draft as a GitHub issue on the fixed target repository (schema eka-feedback-publish-v1) — same engine as CLI `eka feedback publish`. Inherited constraints: release-binary token gate (refuses with \"issue token not bundled — use a release binary\" when not a release), missing/invalid token refuses deterministically naming remediation (never raw HTTP error), token never appears in outputs/errors/logs, already-published refuses idempotently, unknown id refuses deterministically. Feedback never enters the canonical store.",
+		Properties: map[string]any{
+			"id": map[string]any{"type": "string", "minLength": 1, "description": "Feedback id to publish: fbk-YYYYMMDD-slug (with or without .md suffix, mirrors `eka feedback publish <id>`)."},
+		},
+	},
+}
+
+// toolNames is the advertised tool order (non-deprecated only). Deprecated
+// alias view is dispatched but not advertised as primary.
+var toolNames = func() []string {
+	out := make([]string, 0, len(toolDescriptors))
+	for _, d := range toolDescriptors {
+		if !d.Deprecated {
+			out = append(out, d.Name)
+		}
+	}
+	return out
+}()
+
+// ToolCount returns the number of advertised tools (deprecated alias excluded).
 func ToolCount() int { return len(toolNames) }
+
+// AdvertisedToolCount is the count including deprecated alias (for banner compat check).
+func AdvertisedToolCount() int { return len(toolDescriptors) }
 
 // ResourceCount returns the total number of resources the server exposes:
 // eka://status (1) plus every embedded skill plus every draft template
@@ -63,45 +392,41 @@ func ResourceCount() (int, error) {
 	return 1 + len(skills) + len(types), nil
 }
 
-// toolRequiredFields is THE single declaration of the required string
-// arguments per tool — the required-field contract of the MCP surface.
-// BOTH consumers are derived from this one map, so they cannot drift:
-//
-//  1. the advertised inputSchema: handleToolsList copies each tool's
-//     slice into its schema "required" array verbatim;
-//  2. the runtime validation: decodeToolArgs enforces exactly these
-//     fields (present, a string, non-empty) for every tools/call.
-//
-// Drift between what is advertised and what is enforced is how the
-// eka_new false-refusal incident happened (bug:mcp-new-false-refusal):
-// a reviewed source branch advertised/enforced only {type,id} while the
-// deployed build enforced {project,namespace,type,id}, so callers that
-// trusted the reviewed schema were refused by the runtime. Do NOT
-// hardcode a "required" array anywhere else; add the fields here.
-//
-// The slice order is the deterministic report order: when several
-// fields are absent, the FIRST declared offender is named.
-var toolRequiredFields = map[string][]string{
-	"context":          {"subject"},
-	"code_context":     {"root"},
-	"code_discover":    {"root", "query"},
-	"code_get":         {"root", "path"},
-	"get":              {"form"},
-	"domain":           {"projectId", "domain"},
-	"validate":         {"root"},
-	"new":              {"project", "namespace", "type", "id"},
-	"draft_update":     {"target"},
-	"publish":          {"target"},
-	"transition":       {"target"},
-	"note":             {"target", "role"},
-	"draft_read":       {"target"},
-	"view":             {"target"},
-	"discard":          {"target"},
-	"assign":           {"target", "to"},
-	"reassign":         {"target", "to"},
-	"unassign":         {"target"},
-	"feedback_new":     {"type", "title"},
-	"feedback_publish": {"id"},
+// toolRequiredFields is DERIVED from toolDescriptors — the single source.
+// Do NOT hardcode a "required" array anywhere else; add the fields in the descriptor.
+var toolRequiredFields = func() map[string][]string {
+	m := make(map[string][]string, len(toolDescriptors))
+	for _, d := range toolDescriptors {
+		if len(d.Required) > 0 {
+			cp := make([]string, len(d.Required))
+			copy(cp, d.Required)
+			m[d.Name] = cp
+		}
+	}
+	return m
+}()
+
+// RiskClassOf returns the risk class of a tool (read | local-write | canonical-write | external).
+func RiskClassOf(name string) string {
+	for _, d := range toolDescriptors {
+		if d.Name == name {
+			return d.RiskClass
+		}
+	}
+	return ""
+}
+
+// IsReadOnly reports whether a tool is read-only (risk read).
+func IsReadOnly(name string) bool { return RiskClassOf(name) == RiskRead }
+
+// descriptorByName returns the descriptor for a tool name.
+func descriptorByName(name string) *toolDescriptor {
+	for i := range toolDescriptors {
+		if toolDescriptors[i].Name == name {
+			return &toolDescriptors[i]
+		}
+	}
+	return nil
 }
 
 // Parameter-refusal diagnostic causes (bug:mcp-new-false-refusal): the
@@ -680,604 +1005,40 @@ func (s *Server) handleInitialize(req request) []byte {
 	})
 }
 
-// handleToolsList returns the tool set of the server: the EKA
-// knowledge-retrieval, context and authoring surfaces as MCP tools,
-// with JSON Schema input definitions. The order is fixed and
-// deterministic (the acceptance contract of the milestone). Each
-// tool's advertised "required" array is DERIVED from
-// toolRequiredFields — the single-source required-field contract
-// shared with the runtime validation (bug:mcp-new-false-refusal), so
-// advertisement and enforcement cannot drift apart.
+// handleToolsList returns the advertised tool set — derived entirely from
+// toolDescriptors (single authoritative source). Deprecated tools (view) are
+// NOT advertised; they remain dispatched for compatibility. Each schema is
+// strict: required+types+enums+bounds and additionalProperties:false.
 func (s *Server) handleToolsList(req request) []byte {
-	tools := []any{
-		map[string]any{
-			"name": "context",
-			"description": "Build the deterministic Engineering Context Object around one knowledge subject " +
-				"(schema eka-context-v1): the focus in full detail, its instance-line history, and — at " +
-				"dependency/engineering depth — the classified one-hop neighborhood and strata landscape.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"subject": map[string]any{
-						"type":        "string",
-						"description": "Identity form of the focus, e.g. \"feather/adr:001-serialization:1\".",
-					},
-					"projectId": map[string]any{
-						"type":        "string",
-						"description": "The project for the issue-number lookup (optional).",
-					},
-					"depth": map[string]any{
-						"type":        "string",
-						"description": "Context depth: \"local\" (default), \"dependency\" or \"engineering\".",
-					},
-				},
-			},
-		},
-		map[string]any{
-			"name": "code_context",
-			"description": "Build bounded deterministic source context from the local code graph. " +
-				"Returns schema eka/code-context/1 with file inventory, symbols, imports and optional source content.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"root":      map[string]any{"type": "string", "description": "Repository root to index."},
-					"focus":     map[string]any{"type": "string", "description": "Optional file path or symbol focus."},
-					"depth":     map[string]any{"type": "string", "enum": []string{"local", "dependency", "engineering"}},
-					"level":     map[string]any{"type": "integer", "minimum": 0, "maximum": 3},
-					"noContent": map[string]any{"type": "boolean"},
-				},
-				"required": toolRequiredFields["code_context"],
-			},
-		},
-		map[string]any{
-			"name":        "code_discover",
-			"description": "Discover code candidates deterministically from a natural-language query and optional scope filter. Returns schema eka/code-discover/1 with bounded candidates carrying reason and confidence (language-agnostic inventory; unsupported files remain inventory entries; fallback to bounded inventory when no match; no RAG canonical).",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"root":  map[string]any{"type": "string", "description": "Repository root to index."},
-					"query": map[string]any{"type": "string", "description": "Natural-language query (tokens matched deterministically against file paths, symbol names and imports)."},
-					"scope": map[string]any{"type": "string", "description": "Optional file path scope filter (substring, case-insensitive)."},
-					"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 64},
-				},
-				"required": toolRequiredFields["code_discover"],
-			},
-		},
-		map[string]any{
-			"name":        "code_get",
-			"description": "Retrieve exact file content deterministically by slash path. Returns schema eka/code-get/1 with file unit, symbols and imports (language-agnostic; deterministic exact path lookup).",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"root": map[string]any{"type": "string", "description": "Repository root to index."},
-					"path": map[string]any{"type": "string", "description": "Slash path of the file to retrieve (exact, relative to root)."},
-				},
-				"required": toolRequiredFields["code_get"],
-			},
-		},
-		map[string]any{
-			"name": "get",
-			"description": "Fetch one Canonical Knowledge Object (CKO) by identity form: " +
-				"canonical \"<ns>/<type>:<id>:<v>\" or qualified line form \"<ns>/<type>:<id>\" " +
-				"(the latest instance of the line). Returns the machine document (schema eka-cko-v2). " +
-				"Supports noContent:true to strip the content payload via machine.Document.StripContent at parity " +
-				"with CLI --no-content (content absent, identity/stateVector/relationships intact) for payload economy. " +
-				"Default false (full payloads).",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"form": map[string]any{
-						"type":        "string",
-						"description": "Identity form to resolve, e.g. \"feather/adr:001-serialization:1\".",
-					},
-					"noContent": map[string]any{
-						"type":        "boolean",
-						"description": "When true, strips the content payload via machine.Document.StripContent (identity/stateVector/relationships intact, content absent) — parity with CLI --no-content. Default false (full payloads).",
-					},
-				},
-			},
-		},
-		map[string]any{
-			"name": "domain",
-			"description": "Return every unit of one Engineering Domain of a project as a machine " +
-				"collection (schema eka-cko-v2, sorted by canonical form). " +
-				"Supports noContent:true to strip each unit's content payload via machine.Document.StripContent at parity " +
-				"with CLI --no-content (content absent per unit, identity/stateVector/relationships intact) for payload economy. " +
-				"Default false (full payloads).",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"projectId": map[string]any{
-						"type":        "string",
-						"description": "The project the knowledge belongs to.",
-					},
-					"domain": map[string]any{
-						"type":        "string",
-						"description": "The canonical Engineering Domain name, e.g. \"Architecture\".",
-					},
-					"noContent": map[string]any{
-						"type":        "boolean",
-						"description": "When true, strips each unit's content payload via machine.Document.StripContent (identity/stateVector/relationships intact, content absent per unit) — parity with CLI --no-content. Default false (full payloads).",
-					},
-				},
-			},
-		},
-		map[string]any{
-			"name": "status",
-			"description": "Return the aggregated EKA workspace status: path, schema version, " +
-				"registered projects, canonical store totals.",
-			"inputSchema": map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-		},
-		map[string]any{
-			"name": "validate",
-			"description": "Run the authoring conformance gate over a repository and return the machine " +
-				"report (schema eka-conformance-report-v1): scanned counts, blocking errors, warnings and " +
-				"the deterministic findings (rules R0-R13).",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"root": map[string]any{
-						"type":        "string",
-						"description": "The repository root to validate (its docs/ tree is scanned).",
-					},
-				},
-			},
-		},
-		map[string]any{
-			"name": "new",
-			"description": "Scaffold one draft in the workspace drafts tree (schema eka-draft-v1): the " +
-				"deterministic v2.0 JSON authoring template with the type's owned state defaults and " +
-				"required content keys. The change-log authority is the resolved agent identity.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"project": map[string]any{
-						"type":        "string",
-						"description": "The project scope of the draft.",
-					},
-					"namespace": map[string]any{
-						"type":        "string",
-						"description": "The frontmatter namespace of the draft.",
-					},
-					"type": map[string]any{
-						"type":        "string",
-						"description": "The EKA artifact type token, e.g. \"adr\", \"sto\", \"cmt\".",
-					},
-					"id": map[string]any{
-						"type":        "string",
-						"description": "The draft id.",
-					},
-					"dimension": map[string]any{
-						"type":        "string",
-						"description": "Optional primary Knowledge Dimension.",
-					},
-					"phase": map[string]any{
-						"type":        "string",
-						"description": "Optional phase context (scp-/plan- only).",
-					},
-					"domain": map[string]any{
-						"type":        "string",
-						"description": "Optional declared Engineering Domain (canonical spelling).",
-					},
-					"by": map[string]any{
-						"type":        "string",
-						"description": "Optional change-log authority name (defaults to the agent identity).",
-					},
-					"byKind": map[string]any{
-						"type":        "string",
-						"description": "Optional authority kind: user | agent | worker (default agent).",
-					},
-					"relationships": map[string]any{
-						"type": "array",
-						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"type":   map[string]any{"type": "string"},
-								"target": map[string]any{"type": "string"},
-							},
-						},
-						"description": "Optional authoring references, e.g. {\"type\":\"depends-on\",\"target\":\"plan:x\"}.",
-					},
-					"content": map[string]any{
-						"type":        "object",
-						"description": "Optional JSON object merged over the type's required content keys.",
-					},
-				},
-			},
-		},
-		map[string]any{
-			"name": "draft_update",
-			"description": "Apply a partial content merge to one pending draft — read-modify-write through draft_read (schema eka-draft-update-v1). " +
-				"Supplied content keys overwrite/add; keys not mentioned are preserved. Publish still validates — no validation happens here.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"target": map[string]any{
-						"type":        "string",
-						"description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\".",
-					},
-					"project": map[string]any{
-						"type":        "string",
-						"description": "Optional project scope (default: the cwd repository's project).",
-					},
-					"content": map[string]any{
-						"type":        "object",
-						"description": "Partial content object to merge into the draft's content — keys overwrite/add, absent keys are preserved.",
-					},
-				},
-			},
-		},
-		map[string]any{
-			"name": "publish",
-			"description": "Publish one draft as an immutable Canonical Knowledge Object (schema " +
-				"eka-publish-result-v1). All-or-nothing: a failed validation or insert leaves the draft " +
-				"untouched; the draft file is the single-use ticket. Batch mode: --all / --pending synonyms publish every pending " +
-				"draft of the project's pending set in topological order (referenced drafts first) via the same engine `eka publish --all` uses " +
-				"(schema eka-publish-batch-v1, Kahn's algorithm, cycle and dangling-reference pre-flight refusals, per-draft atomic validation); " +
-				"empty backlog is a valid no-op. DECLINED: scaffold+publish single-call merge (collapses lifecycle steps, weakens draft gate).",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"target": map[string]any{
-						"type":        "string",
-						"description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\" — required for single publish, absent for batch (--all/--pending).",
-					},
-					"project": map[string]any{
-						"type":        "string",
-						"description": "Optional project scope (default: the cwd repository's project).",
-					},
-					"instanceVersion": map[string]any{
-						"type":        "integer",
-						"description": "Optional explicit instance version (must exceed the line's highest) — single-target only, not available with --all/--pending.",
-					},
-					"all": map[string]any{
-						"type":        "boolean",
-						"description": "Batch mode: publish every pending draft of the project in topological order (referenced drafts first) — synonym of pending, parity with `eka publish --all` (schema eka-publish-batch-v1). Target must be absent when true.",
-					},
-					"pending": map[string]any{
-						"type":        "boolean",
-						"description": "Batch mode: synonym of all — publish every pending draft in topological order (schema eka-publish-batch-v1).",
-					},
-				},
-			},
-		},
-		map[string]any{
-			"name": "transition",
-			"description": "Move a work item along the D1 transition table (or a plan/container/knowledge " +
-				"artifact along its state table) and publish the transition in place (schema " +
-				"eka-transition-result-v1). The R13 note gates and the active-container confirmation are " +
-				"enforced by the Authoring API — a refused transition publishes nothing.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"target": map[string]any{
-						"type":        "string",
-						"description": "The work item line: \"<ns>/<type>:<id>\" or \"<type>:<id>\".",
-					},
-					"to": map[string]any{
-						"type":        "string",
-						"description": "Explicit destination state (exactly one of to/forward/backward).",
-					},
-					"forward": map[string]any{
-						"type":        "boolean",
-						"description": "Take the next step of the D1 table.",
-					},
-					"backward": map[string]any{
-						"type":        "boolean",
-						"description": "Take the one-step pull-back.",
-					},
-					"repoPath": map[string]any{
-						"type":        "string",
-						"description": "Optional directory the repository is addressed from (default: the server cwd).",
-					},
-					"by": map[string]any{
-						"type":        "string",
-						"description": "Optional change-log authority name (defaults to the agent identity).",
-					},
-					"byKind": map[string]any{
-						"type":        "string",
-						"description": "Optional authority kind: user | agent | worker (default agent).",
-					},
-					"confirmed": map[string]any{
-						"type":        "boolean",
-						"description": "Pre-authorize the active-container confirmation gate.",
-					},
-				},
-			},
-		},
-		map[string]any{
-			"name": "note",
-			"description": "Create one cmt- note draft discussing a subject (schema eka-note-result-v1): " +
-				"the per-role template (implementation | review | fix) with the discusses relationship wired " +
-				"to the resolved subject. The draft is visible to the R13 transition gates immediately.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"target": map[string]any{
-						"type":        "string",
-						"description": "The note's subject: \"<ns>/<type>:<id>\" or \"<type>:<id>\".",
-					},
-					"role": map[string]any{
-						"type":        "string",
-						"description": "Note role: implementation | review | fix.",
-					},
-					"domain": map[string]any{
-						"type":        "string",
-						"description": "Optional declared Engineering Domain of the note.",
-					},
-					"repoPath": map[string]any{
-						"type":        "string",
-						"description": "Optional directory the repository is addressed from (default: the server cwd).",
-					},
-					"by": map[string]any{
-						"type":        "string",
-						"description": "Optional change-log authority name (defaults to the agent identity).",
-					},
-					"byKind": map[string]any{
-						"type":        "string",
-						"description": "Optional authority kind: user | agent | worker (default agent).",
-					},
-					"content": map[string]any{
-						"type":        "object",
-						"description": "Optional JSON object merged over the per-role note template.",
-					},
-				},
-			},
-		},
-		map[string]any{
-			"name": "draft_read",
-			"description": "Return one draft file content verbatim (the v2.0 JSON authoring document) — " +
-				"the editable draft behind a target.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"target": map[string]any{
-						"type":        "string",
-						"description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\".",
-					},
-					"project": map[string]any{
-						"type":        "string",
-						"description": "Optional project scope (default: the cwd repository's project).",
-					},
-				},
-			},
-		},
-		// TODO(td:mcp-view-naming-fix): remove deprecated `view` alias in next minor version after 1.1.3.
-		// It remains for one minor version as migration window for MCP clients.
-		map[string]any{
-			"name": "view",
-			"description": "Deprecated: use draft_read. Return one draft file content verbatim (the v2.0 JSON authoring document) — " +
-				"the editable draft behind a target. This alias will be removed in the next minor version; migrate to draft_read.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"target": map[string]any{
-						"type":        "string",
-						"description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\".",
-					},
-					"project": map[string]any{
-						"type":        "string",
-						"description": "Optional project scope (default: the cwd repository's project).",
-					},
-				},
-			},
-		},
-		map[string]any{
-			"name": "draft_list",
-			"description": "List the draft backlog of one project (or every project) as a machine list " +
-				"(schema eka-draft-list-v1), ordered deterministically.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"project": map[string]any{
-						"type":        "string",
-						"description": "Optional project scope (default: every project).",
-					},
-				},
-			},
-		},
-		map[string]any{
-			"name": "integrity_check",
-			"description": "Verify the canonical store and return the deterministic integrity report " +
-				"(schema eka-integrity-report-v1): scanned counts, retained-history orphans and every " +
-				"detected violation (payload hashes, reference targets, attachment digests, registry).",
-			"inputSchema": map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-		},
-		map[string]any{
-			"name": "discard",
-			"description": "Delete one draft file without publishing (schema eka-discard-result-v1). " +
-				"The draft is gone; the identity is free for a new draft.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"target": map[string]any{
-						"type":        "string",
-						"description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\".",
-					},
-					"project": map[string]any{
-						"type":        "string",
-						"description": "Optional project scope (default: the cwd repository's project).",
-					},
-				},
-			},
-		},
-		map[string]any{
-			"name": "sync_push",
-			"description": "Push the repository snapshot from the workspace store (schema eka-sync-push-result-v1): " +
-				"the push side of `eka sync push` — same snapshot compilation, same digest, same refusal classes; " +
-				"crash-safe (staged in .snapshots-tmp, swapped atomically) so a failed push writes nothing partially. " +
-				"Pull / --from-docs re-seed is not exposed (silent regression hazard); use CLI `eka sync pull`.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"repoPath": map[string]any{
-						"type":        "string",
-						"description": "Optional repository path (default: the server cwd, same as CLI `eka sync push`).",
-					},
-					"adopt": map[string]any{
-						"type":        "boolean",
-						"description": "Adopt workspace-native units (source_repo=runtime, `eka publish` provenance) before pushing (ADR-032; same as `eka sync push --adopt`).",
-					},
-					"override": map[string]any{
-						"type":        "boolean",
-						"description": "Machine override to align the repository identity to the content namespace when they differ (same as `eka sync push --override`).",
-					},
-				},
-			},
-		},
-		map[string]any{
-			"name":        "assign",
-			"description": "Assign a work item to a member (schema eka-assignment-v1): the assigned-to edge (work item -> member) is added — same engine as CLI `eka assign` — same target forms, same validation, same refusal classes including deterministic refusal when already assigned to a different member; idempotent on the same member. Single-assignee, deterministic; a failed assignment writes nothing.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"target": map[string]any{
-						"type":        "string",
-						"description": "The work item line: \"<ns>/<type>:<id>\" or \"<type>:<id>\" (same as CLI `eka assign <item>`).",
-					},
-					"to": map[string]any{
-						"type":        "string",
-						"description": "The member line to assign to: \"<mbr-id>\", \"mbr:<id>\", \"mbr-<id>\", or \"<ns>/mbr:<id>\" (same as CLI --to).",
-					},
-					"repoPath": map[string]any{
-						"type":        "string",
-						"description": "Optional repository path (default: the server cwd).",
-					},
-					"by": map[string]any{
-						"type":        "string",
-						"description": "Optional change-log authority name (defaults to the agent identity).",
-					},
-					"byKind": map[string]any{
-						"type":        "string",
-						"description": "Optional authority kind: user | agent | worker (default agent).",
-					},
-				},
-			},
-		},
-		map[string]any{
-			"name":        "reassign",
-			"description": "Move a work item's assignment to another member in one operation (schema eka-assignment-v1): same engine as CLI `eka reassign` — same validation and refusal classes; deterministic refusal when not assigned (use assign) and idempotent on the same member; a failed reassign writes nothing.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"target": map[string]any{
-						"type":        "string",
-						"description": "The work item line: \"<ns>/<type>:<id>\" or \"<type>:<id>\" (same as CLI `eka reassign <item>`).",
-					},
-					"to": map[string]any{
-						"type":        "string",
-						"description": "The member line to move to: \"<mbr-id>\", \"mbr:<id>\", \"mbr-<id>\", or \"<ns>/mbr:<id>\" (same as CLI --to).",
-					},
-					"repoPath": map[string]any{
-						"type":        "string",
-						"description": "Optional repository path (default: the server cwd).",
-					},
-					"by": map[string]any{
-						"type":        "string",
-						"description": "Optional change-log authority name (defaults to the agent identity).",
-					},
-					"byKind": map[string]any{
-						"type":        "string",
-						"description": "Optional authority kind: user | agent | worker (default agent).",
-					},
-				},
-			},
-		},
-		map[string]any{
-			"name":        "unassign",
-			"description": "Remove a work item's assigned-to edge (schema eka-assignment-v1): same engine as CLI `eka unassign` — same validation and refusal classes; deterministic no-op when already unassigned; a failed unassign writes nothing.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"target": map[string]any{
-						"type":        "string",
-						"description": "The work item line: \"<ns>/<type>:<id>\" or \"<type>:<id>\" (same as CLI `eka unassign <item>`).",
-					},
-					"repoPath": map[string]any{
-						"type":        "string",
-						"description": "Optional repository path (default: the server cwd).",
-					},
-					"by": map[string]any{
-						"type":        "string",
-						"description": "Optional change-log authority name (defaults to the agent identity).",
-					},
-					"byKind": map[string]any{
-						"type":        "string",
-						"description": "Optional authority kind: user | agent | worker (default agent).",
-					},
-				},
-			},
-		},
-		map[string]any{
-			"name":        "feedback_new",
-			"description": "Create a feedback draft under EKA_HOME/feedback (YAML frontmatter + markdown body) — schema eka-feedback-new-v1. Same engine as CLI `eka feedback new`: same validation, same per-type scaffold, same id generation (fbk-YYYYMMDD-slug), same 0600/0700 permissions. Feedback is meta-information about the tool (ADR-026) — it NEVER enters the canonical store and never becomes a CKO.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"type": map[string]any{
-						"type":        "string",
-						"description": "Feedback type: bug, suggestion, improvement, or question (mirrors --type).",
-					},
-					"title": map[string]any{
-						"type":        "string",
-						"description": "Feedback title (mirrors --title).",
-					},
-					"severity": map[string]any{
-						"type":        "string",
-						"description": "Feedback severity: low, medium, or high (default low, mirrors --severity).",
-					},
-					"source": map[string]any{
-						"type":        "string",
-						"description": "Feedback source: human or agent (default human; agents should pass agent, mirrors --source).",
-					},
-					"command": map[string]any{
-						"type":        "string",
-						"description": "The invoked command recorded in the report (default mcp:feedback_new, mirrors --command).",
-					},
-					"content": map[string]any{
-						"type":        "string",
-						"description": "Markdown feedback body (mirrors --content-file contents inline); when omitted the per-type scaffold is used (bug: Steps/Expected/Actual, others: Description).",
-					},
-				},
-			},
-		},
-		map[string]any{
-			"name":        "feedback_list",
-			"description": "List all local feedback under EKA_HOME/feedback (schema eka-feedback-list-v1) — drafts and published, id descending (newest first, mirrors `eka feedback list`). Deterministic; the first malformed file fails the whole list naming the file. Feedback is meta-information outside the knowledge model — never a CKO, never part of the canonical store.",
-			"inputSchema": map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-		},
-		map[string]any{
-			"name":        "feedback_publish",
-			"description": "Publish a feedback draft as a GitHub issue on the fixed target repository (schema eka-feedback-publish-v1) — same engine as CLI `eka feedback publish`. Inherited constraints: release-binary token gate (refuses with \"issue token not bundled — use a release binary\" when not a release), missing/invalid token refuses deterministically naming remediation (never raw HTTP error), token never appears in outputs/errors/logs, already-published refuses idempotently, unknown id refuses deterministically. Feedback never enters the canonical store.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id": map[string]any{
-						"type":        "string",
-						"description": "Feedback id to publish: fbk-YYYYMMDD-slug (with or without .md suffix, mirrors `eka feedback publish <id>`).",
-					},
-				},
-			},
-		},
-	}
-	// Derivation (bug:mcp-new-false-refusal): every tool's advertised
-	// "required" array is copied from the single-source declaration —
-	// there is deliberately no hardcoded required list anywhere else.
-	for _, t := range tools {
-		tm := t.(map[string]any)
-		if reqFields := toolRequiredFields[tm["name"].(string)]; len(reqFields) > 0 {
-			tm["inputSchema"].(map[string]any)["required"] = reqFields
+	tools := make([]any, 0, len(toolDescriptors))
+	for _, d := range toolDescriptors {
+		if d.Deprecated {
+			continue
 		}
+		schema := map[string]any{
+			"type":                 "object",
+			"properties":           d.Properties,
+			"additionalProperties": false,
+		}
+		if len(d.Required) > 0 {
+			schema["required"] = d.Required
+		}
+		entry := map[string]any{
+			"name":        d.Name,
+			"description": d.Description,
+			"inputSchema": schema,
+		}
+		// Surface risk class and annotations for approval policy.
+		entry["annotations"] = map[string]any{
+			"riskClass":   d.RiskClass,
+			"readOnly":    d.RiskClass == RiskRead,
+			"destructive": d.RiskClass == RiskCanonicalWrite || d.RiskClass == RiskExternal,
+			"openWorld":   d.RiskClass == RiskExternal,
+		}
+		tools = append(tools, entry)
 	}
+	_ = toolRequiredFields // keep reference for linter
+
 	return s.resultResponse(req.ID, map[string]any{"tools": tools})
 }
 
@@ -1588,67 +1349,69 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		}
 		return string(data), nil
 	case "publish":
-		// Batch detection: all:true or pending:true => batch publish path, no target required.
-		// We inspect the raw arguments before the strict target-required decode.
-		var rawProbe map[string]json.RawMessage
-		isBatch := false
-		if len(bytes.TrimSpace(args)) != 0 && string(bytes.TrimSpace(args)) != "null" {
-			if err := json.Unmarshal(args, &rawProbe); err == nil {
-				for _, k := range []string{"all", "pending"} {
-					if v, ok := rawProbe[k]; ok {
-						var b bool
-						if err := json.Unmarshal(v, &b); err != nil {
-							s.logParamRefusal("publish", len(args), causeInvalidArg, k)
-							return "", fmt.Errorf("publish has an invalid argument: field %q must be a boolean", k)
-						}
-						if b {
-							isBatch = true
-						}
-					}
-				}
-				// Type check for target/project/instanceVersion when batch vs single?
-			}
-		}
-		if isBatch {
-			var p struct {
-				Target          string `json:"target"`
-				Project         string `json:"project"`
-				InstanceVersion int    `json:"instanceVersion"`
-				All             bool   `json:"all"`
-				Pending         bool   `json:"pending"`
-			}
-			if err := json.Unmarshal(args, &p); err != nil {
-				s.logParamRefusal("publish", len(args), causeInvalidArg, typeErrorField(err))
-				return "", fmt.Errorf("publish has an invalid argument: %s", typeErrorDetail(err))
-			}
-			if strings.TrimSpace(p.Target) != "" {
-				return "", fmt.Errorf("publish: target is not available with --all/--pending; versions are auto-assigned per draft")
-			}
-			if p.InstanceVersion != 0 {
-				return "", fmt.Errorf("publish: --instance-version is a single-target flag and is not available with --all/--pending; versions are auto-assigned per draft")
-			}
-			data, err := s.cap.PublishBatch(PublishBatchRequest{
-				Project: p.Project,
-				All:     p.All,
-				Pending: p.Pending,
-			})
-			if err != nil {
-				return "", err
-			}
-			return string(data), nil
-		}
-		var p2 struct {
+		// Strict single-draft publish — batch mode is publishBatch (split contract).
+		var p struct {
 			Target          string `json:"target"`
 			Project         string `json:"project"`
 			InstanceVersion int    `json:"instanceVersion"`
 		}
-		if err := s.decodeToolArgs("publish", args, &p2); err != nil {
+		if err := s.decodeToolArgs("publish", args, &p); err != nil {
 			return "", err
 		}
+		// Reject batch flags on single publish (client must use publishBatch).
+		if len(args) != 0 && string(args) != "null" {
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(args, &raw); err == nil {
+				for _, k := range []string{"all", "pending"} {
+					if _, has := raw[k]; has {
+						return "", fmt.Errorf("publish: batch flags not available on single publish; use publishBatch")
+					}
+				}
+			}
+		}
 		data, err := s.cap.Publish(PublishRequest{
-			Target:          p2.Target,
-			Project:         p2.Project,
-			InstanceVersion: p2.InstanceVersion,
+			Target:          p.Target,
+			Project:         p.Project,
+			InstanceVersion: p.InstanceVersion,
+		})
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case "publishBatch":
+		// Reject single-publish fields on batch.
+		if len(args) != 0 && string(bytes.TrimSpace(args)) != "null" && string(bytes.TrimSpace(args)) != "" {
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(args, &raw); err == nil {
+				for _, k := range []string{"all", "pending"} {
+					if v, ok := raw[k]; ok {
+						var b bool
+						if err := json.Unmarshal(v, &b); err != nil {
+							s.logParamRefusal("publishBatch", len(args), causeInvalidArg, k)
+							return "", fmt.Errorf("publishBatch has an invalid argument: field %q must be a boolean", k)
+						}
+					}
+				}
+				if _, has := raw["target"]; has {
+					return "", fmt.Errorf("publishBatch: target is not available; use publish for single draft")
+				}
+				if _, has := raw["instanceVersion"]; has {
+					return "", fmt.Errorf("publishBatch: instanceVersion not available in batch mode")
+				}
+			}
+		}
+		var pb struct {
+			Project string `json:"project"`
+			All     bool   `json:"all"`
+			Pending bool   `json:"pending"`
+		}
+		if err := s.decodeToolArgs("publishBatch", args, &pb); err != nil {
+			return "", err
+		}
+		data, err := s.cap.PublishBatch(PublishBatchRequest{
+			Project: pb.Project,
+			All:     pb.All,
+			Pending: pb.Pending,
 		})
 		if err != nil {
 			return "", err
