@@ -278,8 +278,10 @@ func TestNewDraftScaffolds(t *testing.T) {
 	if path == "" {
 		t.Fatal("draft result must carry the draft path")
 	}
-	// The draft file exists and carries the agent author + merged content.
-	raw, err := os.ReadFile(path)
+	if filepath.IsAbs(path) || strings.Contains(path, "/tmp") {
+		t.Errorf("draft path must be logical/relative, got %q", path)
+	}
+	raw, err := os.ReadFile(resolveDraftPath(t, cap, path))
 	if err != nil {
 		t.Fatalf("draft file missing: %v", err)
 	}
@@ -327,6 +329,10 @@ func TestPublishDraft(t *testing.T) {
 	if draftPath == "" {
 		t.Fatal("draft result must carry the draft path")
 	}
+	if strings.Contains(draftPath, "/tmp") || filepath.IsAbs(draftPath) {
+		t.Errorf("draft path must be logical/relative, got %q", draftPath)
+	}
+	draftPath = resolveDraftPath(t, cap, draftPath)
 
 	data, err := cap.Publish(mcp.PublishRequest{Target: "feather/adr:003-publish", Project: "feather"})
 	if err != nil {
@@ -400,7 +406,10 @@ func TestNoteCreatesDraft(t *testing.T) {
 	if path == "" {
 		t.Fatal("note result must carry the draft path")
 	}
-	if _, err := os.Stat(path); err != nil {
+	if path == "" || strings.Contains(path, "/tmp") || filepath.IsAbs(path) {
+		t.Errorf("note path must be logical/relative, got %q", path)
+	}
+	if _, err := os.Stat(resolveDraftPath(t, cap, path)); err != nil {
 		t.Fatalf("note draft file missing: %v", err)
 	}
 }
@@ -771,6 +780,18 @@ func TestInjectLegalTransitionsInvalidJSONPassthrough(t *testing.T) {
 			t.Errorf("missing type passthrough mismatch: got %s want %s", out2, noType)
 		}
 	}
+}
+
+func resolveDraftPath(t *testing.T, cap *Capability, logical string) string {
+	t.Helper()
+	if filepath.IsAbs(logical) {
+		return logical
+	}
+	// logical is relative to workspace (EKA_HOME)
+	if home := os.Getenv("EKA_HOME"); home != "" {
+		return filepath.Join(home, logical)
+	}
+	return filepath.Join(cap.Path(), logical)
 }
 
 func equalStringSlices(a, b []string) bool {
