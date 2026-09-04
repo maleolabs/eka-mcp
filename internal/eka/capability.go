@@ -13,6 +13,7 @@ package eka
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -632,13 +633,16 @@ func (c *Capability) SyncPush(repoPath string, adopt, override bool) ([]byte, er
 }
 
 // DraftUpdate applies a partial content merge to one pending draft
-// (schema eka-draft-update-v1). It is read-modify-write through
-// draft_read: the draft file is read verbatim, the supplied content keys
-// overwrite/add (keys not mentioned are preserved), the updated document
-// is written atomically, and publish still validates — no validation
-// happens here. Unknown target and post-publish (draft already gone —
-// the single-use ticket) refuse deterministically via
-// *runtime.DraftNotFoundError.
+// (schema eka-draft-update-v1) via the runtime-owned Authoring API
+// (runtime.Authoring.ResolveDraft) — not direct store. It is
+// read-modify-write through draft_read: supplied content keys
+// overwrite/add, keys not mentioned are preserved, publish still
+// validates — no validation here. Optimistic concurrency via
+// expectedRevision/expectedHash refuses deterministically on mismatch
+// (re-read with draft_read and retry). Unknown target and post-publish
+// (draft already gone — the single-use ticket) refuse via
+// *runtime.DraftNotFoundError; concurrent modification refuses with a
+// deterministic conflict error.
 func (c *Capability) DraftUpdate(req mcp.DraftUpdateRequest) ([]byte, error) {
 	if req.Content == nil {
 		return nil, fmt.Errorf("draft_update requires content to be a JSON object")
@@ -654,11 +658,33 @@ func (c *Capability) DraftUpdate(req mcp.DraftUpdateRequest) ([]byte, error) {
 		}
 		return nil, fmt.Errorf("draft_update: cannot read draft %s: %w", req.Target, err)
 	}
+	// Optimistic concurrency: expectedHash (sha256 hex of raw bytes).
+	if req.ExpectedHash != "" {
+		h := sha256.Sum256(raw)
+		actual := hex.EncodeToString(h[:])
+		if !strings.EqualFold(strings.TrimSpace(req.ExpectedHash), actual) {
+			return nil, fmt.Errorf("draft %s conflict: expected hash %s but found %s (concurrent modification — re-read with draft_read and retry)", req.Target, strings.TrimSpace(req.ExpectedHash), actual)
+		}
+	}
 	var doc map[string]any
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return nil, fmt.Errorf("draft_update: draft %s is not valid JSON: %w", req.Target, err)
 	}
-	// Content is the merge target; preserve all other top-level keys.
+	if req.ExpectedRevision != nil {
+		var current int
+		if v, ok := doc["revision"]; ok {
+			switch n := v.(type) {
+			case float64:
+				current = int(n)
+			case int:
+				current = n
+			}
+		}
+		if current != *req.ExpectedRevision {
+			return nil, fmt.Errorf("draft %s conflict: expected revision %d but found revision %d (concurrent modification — re-read with draft_read and retry)", req.Target, *req.ExpectedRevision, current)
+		}
+	}
+	// Merge content.
 	contentRaw, hasContent := doc["content"]
 	var contentMap map[string]any
 	if hasContent {
@@ -674,8 +700,6 @@ func (c *Capability) DraftUpdate(req mcp.DraftUpdateRequest) ([]byte, error) {
 		contentMap[k] = v
 	}
 	doc["content"] = contentMap
-	// Stable JSON encoding (2-space indent, trailing newline) like
-	// draftJSON — deterministic, byte-stable.
 	out, err := json.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("draft_update: cannot encode draft %s: %w", req.Target, err)
