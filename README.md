@@ -104,7 +104,8 @@ the MCP server over stdio (JSON-RPC 2.0, newline-delimited). It reports MCP
 protocol version `2024-11-05` and advertises the `tools` and `resources`
 capabilities.
 
-The server exposes 21 tools (including one deprecated alias) and three resource families over the EKA capability
+The server exposes 25 tools (including one deprecated alias) and six resource families over the EKA capability
+layer (guidance remains resource content, operations remain tools):
 layer:
 
 | Tool / resource | Description |
@@ -115,7 +116,9 @@ layer:
 | `status` | Return the aggregated EKA workspace status (path, schema version, projects, canonical store totals). When no workspace is present it returns `{"initialized":false,…}` deterministically. |
 | `validate` | Run the authoring conformance gate over a repository. |
 | `new` | Scaffold one draft (schema `eka-draft-v1`). |
+| `draft_update` | Apply a partial content merge to one pending draft (schema `eka-draft-update-v1`). |
 | `publish` | Publish one draft (schema `eka-publish-result-v1`). |
+| `publishBatch` | Publish every pending draft in topological order (schema `eka-publish-batch-v1`). |
 | `transition` | Move a work item along the transition table (schema `eka-transition-result-v1`). |
 | `note` | Create one `cmt-` note draft (schema `eka-note-result-v1`). |
 | `draft_read` | Return one draft file content verbatim (the v2.0 JSON authoring document) — the editable draft behind a target. |
@@ -126,6 +129,9 @@ layer:
 | `sync_push` | Push the repository snapshot from the workspace store (schema `eka-sync-push-result-v1`). Same engine as CLI `eka sync push` — deterministic snapshot & digest, same refusal classes; crash-safe atomic swap so a failed push writes nothing partially. Pull / --from-docs is not exposed (silent regression hazard; use CLI `eka sync pull`). |
 | `assign` | Assign a work item to a member (schema `eka-assignment-v1`). Same engine as CLI `eka assign` — same target forms, same validation, same refusal classes (already assigned to different member → deterministic refusal; idempotent on same member). |
 | `reassign` | Move a work item's assignment in one operation (schema `eka-assignment-v1`). Same engine as CLI `eka reassign` — same validation and refusal classes; refusal when not assigned, idempotent on same member. |
+| `code_context` | Build bounded deterministic source context from the local code graph (schema `eka/code-context/1`). |
+| `code_discover` | Discover code candidates deterministically from a natural-language query (schema `eka/code-discover/1`). |
+| `code_get` | Retrieve exact file content by slash path (schema `eka/code-get/1`). |
 | `unassign` | Remove a work item's assigned-to edge (schema `eka-assignment-v1`). Same engine as CLI `eka unassign` — same validation; no-op when already unassigned. |
 | `feedback_new` | Create a feedback draft under `EKA_HOME/feedback` (YAML frontmatter + markdown body, schema `eka-feedback-new-v1`). Same engine as CLI `eka feedback new` — same validation, same per-type scaffold, same `fbk-YYYYMMDD-slug` id, same `0600/0700` permissions. Feedback is meta-information outside the knowledge model (ADR-026) — it never enters the canonical store and never becomes a CKO. |
 | `feedback_list` | List all local feedback under `EKA_HOME/feedback` (schema `eka-feedback-list-v1`) — drafts and published, id descending (newest first, same as CLI `eka feedback list`). Deterministic; first malformed file fails naming the file. |
@@ -133,6 +139,18 @@ layer:
 | `eka://status` (resource) | The same workspace status, as a readable resource (`application/json`). |
 | `eka://skills/<name>` (resource) | The `SKILL.md` of one embedded skill (read-only). |
 | `eka://templates/<type>` (resource) | The v2.0 JSON draft template of one type (read-only). |
+| `eka://manifest` (resource) | Compact pack manifest/index (`eka-pack-manifest-v1`) — sorted skills/templates/commands with versions, no bodies (lazy). |
+| `eka://bootstrap` (resource) | Bootstrap guidance (`text/markdown`) — lazy load order, versioned reads (`@<version>` suffix) and fallback. |
+| `eka://commands/<name>` (resource) | The command guidance markdown of one embedded command (read-only, `text/markdown`), lazy with `@<version>` support. |
+
+Resource loading and fallback:
+
+- Compact index first: read `eka://manifest` for the full `skills`/`templates`/`commands` lists plus `pack`/`plugin` versions (no bodies, <8 KB).
+- Lazy fetch: read only the needed `eka://skills/<name>`, `eka://templates/<type>` or `eka://commands/<name>` (or `eka://bootstrap` for the guide). All pack resources support versioned reads via an `@<version>` suffix (e.g. `eka://skills/eka-router@1.3.2`); unversioned means current.
+- Version fallback: unknown versions refuse `Resource not found (-32002)` naming the available version (`+pack.Version`) and directing to retry the unversioned URI. Only the current version is retained (single-version pack); unversioned is the canonical fallback.
+- Offline/install fallback: when resources are unavailable (old server, no MCP), install locally via `eka-mcp install skills` / `eka-mcp install commands` or `eka-mcp configure --with-all` and read `<install-dir>/<name>/SKILL.md` directly. `eka://manifest` is the source of truth for the entry lists; never synthesize guidance.
+
+Every `resources/list` entry carries MCP `annotations` (`audience`, `priority`) so clients can prioritize bootstrap/manifest (1.0) over skills (0.9), commands (0.8), templates (0.7) and status (0.6). Guidance stays resource content, operations stay tools — tools never return guidance directly.
 
 Human projections (`eka view` / `eka watch` — Kanban, roadmap, dependency tree, etc.) remain **CLI-only** and are not exposed as MCP tools or resources; the MCP `draft_read` tool is a draft-file reader (authoring aid), not a human projection.
 

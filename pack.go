@@ -10,6 +10,7 @@ package pack
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -140,6 +141,20 @@ const templateDir = "eka-knowledge-authoring/templates/drafts"
 // (the type token is the file name minus the suffix).
 const templateSuffix = "-template.json"
 
+// Resource URI constants — the canonical MCP resource identifiers for
+// the pack. Guidance (skills, commands, templates, manifest, bootstrap)
+// is always resource content; operations remain tools. The manifest is
+// compact (index only, no bodies), skills/templates/commands are lazy
+// versioned reads.
+const (
+	ManifestURI     = "eka://manifest"
+	BootstrapURI    = "eka://bootstrap"
+	StatusURI       = "eka://status"
+	SkillsPrefix    = "eka://skills/"
+	TemplatesPrefix = "eka://templates/"
+	CommandsPrefix  = "eka://commands/"
+)
+
 // SkillDirs lists the embedded skill directory names (the eka-*
 // directories at the skills/ root of the embedded filesystem), sorted.
 // The names come from the embedded filesystem — the manifest and the
@@ -266,6 +281,242 @@ func TemplateFile(typeToken string) ([]byte, error) {
 		return nil, fmt.Errorf("pack: no draft template for type %q", typeToken)
 	}
 	return fs.ReadFile(packFS, filepath.Join(templateDir, typeToken+templateSuffix))
+}
+
+// CommandFile returns the markdown content of one embedded command file —
+// the read-only resource source of eka://commands/<name>. The name must be
+// a known command file (including the .md suffix) or the bare stem without
+// suffix (both accepted for ergonomics). Unknown or path-traversal names
+// are refused deterministically.
+func CommandFile(name string) ([]byte, error) {
+	// Normalize: allow "eka-discuss" as well as "eka-discuss.md".
+	if !strings.HasSuffix(name, ".md") {
+		name = name + ".md"
+	}
+	files, err := CommandFiles()
+	if err != nil {
+		return nil, err
+	}
+	if !contains(files, name) {
+		return nil, fmt.Errorf("pack: unknown command %q", name)
+	}
+	return fs.ReadFile(packFS, filepath.Join("commands", name))
+}
+
+// CommandDescription returns the frontmatter description of one embedded
+// command file — the resource-listing description of eka://commands/<name>.
+// Reuses the same frontmatter contract as SkillDescription.
+func CommandDescription(name string) (string, error) {
+	data, err := CommandFile(name)
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Split(string(data), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return "", fmt.Errorf("pack: command %q has no frontmatter", name)
+	}
+	for _, line := range lines[1:] {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "---" {
+			break
+		}
+		if value, ok := strings.CutPrefix(trimmed, "description:"); ok {
+			description := strings.TrimSpace(value)
+			if description == "" {
+				return "", fmt.Errorf("pack: command %q has an empty frontmatter description", name)
+			}
+			return description, nil
+		}
+	}
+	return "", fmt.Errorf("pack: command %q has no frontmatter description", name)
+}
+
+// ManifestJSON returns the compact pack manifest/index resource — the
+// compact JSON of eka://manifest. It is the lazy bootstrap index: pack
+// identity, plugin version, and the deterministic sorted entry lists for
+// skills, templates and commands (no bodies). Same source as BuildManifest
+// plus pack manifest yaml identity.
+func ManifestJSON() ([]byte, error) {
+	skills, err := SkillDirs()
+	if err != nil {
+		return nil, err
+	}
+	types, err := TemplateTypes()
+	if err != nil {
+		return nil, err
+	}
+	commands, err := CommandFiles()
+	if err != nil {
+		return nil, err
+	}
+	info, err := ReadPackInfo()
+	if err != nil {
+		// Fallback to plugin version when pack manifest is unreadable.
+		info = PackInfo{Name: "eka-ai-skill-pack", Version: Version, Status: "stable"}
+	}
+	payload := map[string]any{
+		"schema":    "eka-pack-manifest-v1",
+		"pack":      map[string]any{"name": info.Name, "version": info.Version, "status": info.Status},
+		"plugin":    map[string]any{"name": Name, "version": Version},
+		"skills":    skills,
+		"templates": types,
+		"commands":  commands,
+		"resources": map[string]any{
+			"manifest":  ManifestURI,
+			"bootstrap": BootstrapURI,
+			"status":    StatusURI,
+			"skills":    SkillsPrefix,
+			"templates": TemplatesPrefix,
+			"commands":  CommandsPrefix,
+		},
+	}
+	return json.Marshal(payload)
+}
+
+// BootstrapContent returns the markdown bootstrap resource — the
+// human/assistant guidance for lazy resource loading and fallback
+// (eka://bootstrap). It is versioned with the pack so clients can pin,
+// and is the single recommended entry point for agents that discover
+// the pack via resources/list.
+func BootstrapContent() ([]byte, error) {
+	info, err := ReadPackInfo()
+	if err != nil {
+		info = PackInfo{Name: "eka-ai-skill-pack", Version: Version, Status: "stable"}
+	}
+	skills, _ := SkillDirs()
+	types, _ := TemplateTypes()
+	commands, _ := CommandFiles()
+	var b strings.Builder
+	b.WriteString("# EKA Bootstrap\n\n")
+	b.WriteString("This is the bootstrap entry point for the EKA pack. Guidance is resource content; operations are tools.\n\n")
+	b.WriteString("## Pack\n\n")
+	fmt.Fprintf(&b, "- pack: %s v%s (%s)\n", info.Name, info.Version, info.Status)
+	fmt.Fprintf(&b, "- plugin: %s v%s (%s)\n", Name, Version, Source)
+	b.WriteString("\n## Load order (lazy)\n\n")
+	b.WriteString("1. Read `eka://manifest` — compact JSON index of skills, templates and commands (no bodies).\n")
+	b.WriteString("2. Lazy-fetch only what the task needs:\n")
+	b.WriteString("   - skill guidance: `eka://skills/<name>` (text/markdown, frontmatter-described)\n")
+	b.WriteString("   - draft template: `eka://templates/<type>` (application/json)\n")
+	b.WriteString("   - command guidance: `eka://commands/<name>` (text/markdown)\n")
+	b.WriteString("3. Synthesis: use the fetched guidance to drive the operation tools (`context`, `get`, `new`, `publish`, …). Guidance stays in resources, operations stay in tools — never the reverse.\n")
+	b.WriteString("\n## Versioned reads\n\n")
+	b.WriteString("All pack resources support lazy versioned reads via an `@<version>` suffix:\n")
+	b.WriteString("- `eka://skills/eka-orientation@1.3.2`\n")
+	b.WriteString("- `eka://templates/adr@1.3.2`\n")
+	b.WriteString("- `eka://commands/eka-discuss.md@1.3.2`\n")
+	b.WriteString("- `eka://manifest@1.3.2` and `eka://bootstrap@1.3.2`\n")
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "The current pack version is `%s` and the plugin version is `%s`. An unversioned read is the pinned current version.\n", info.Version, Version)
+	b.WriteString("\n## Fallback\n\n")
+	b.WriteString("- If a resource is not found (`-32002 Resource not found`), read `eka://manifest` to confirm the exact `skills`/`templates`/`commands` entries and retry the unversioned URI.\n")
+	b.WriteString("- If a versioned read is not found, retry the unversioned URI — only the current version is retained (single-version pack, no history).\n")
+	b.WriteString("- If no MCP resources are available (old server, offline), install the pack locally: `eka-mcp install skills` / `eka-mcp install commands` or `eka-mcp configure --with-all`, then read `<install-dir>/<name>/SKILL.md` directly. This file is the canonical fallback; resource guidance is never synthesized.\n")
+	b.WriteString("- Missing skill `eka-router` on disk is not a blocker: this bootstrap plus `eka://manifest` carries the discovery table; consult the pack README for role contracts.\n")
+	b.WriteString("\n## Available entries\n\n")
+	fmt.Fprintf(&b, "- skills (%d): %s\n", len(skills), strings.Join(skills, ", "))
+	fmt.Fprintf(&b, "- templates (%d): %s\n", len(types), strings.Join(types, ", "))
+	fmt.Fprintf(&b, "- commands (%d): %s\n", len(commands), strings.Join(commands, ", "))
+	b.WriteString("\n## Notes\n\n")
+	b.WriteString("- `eka://status` is the live workspace status (application/json) — not pack guidance, but a readable resource.\n")
+	b.WriteString("- All pack resources are read-only and deterministic; same inputs produce same bytes.\n")
+	return []byte(b.String()), nil
+}
+
+// ParseVersionedURI splits a resource URI into base URI and version suffix.
+// An `@<version>` suffix after the last path segment denotes the version;
+// without it the version is empty (meaning current). The version must not
+// contain slash, whitespace or control chars; empty version suffix is
+// treated as no version.
+func ParseVersionedURI(uri string) (base string, version string) {
+	idx := strings.LastIndex(uri, "@")
+	if idx < 0 {
+		return uri, ""
+	}
+	// Ensure @ is after the last slash (so host @ not confused, though our scheme has no host).
+	slash := strings.LastIndex(uri, "/")
+	if slash >= 0 && idx < slash {
+		return uri, ""
+	}
+	base = uri[:idx]
+	version = uri[idx+1:]
+	if strings.TrimSpace(version) == "" || strings.Contains(version, "/") || strings.Contains(version, " ") {
+		return uri, ""
+	}
+	return base, version
+}
+
+// IsCurrentVersion reports whether v is the current pack/plugin version.
+// Empty means unversioned (current). Valid current versions are the plugin
+// Version and the pack manifest version.
+func IsCurrentVersion(v string) bool {
+	if v == "" {
+		return true
+	}
+	if v == Version {
+		return true
+	}
+	info, err := ReadPackInfo()
+	if err == nil && v == info.Version {
+		return true
+	}
+	return false
+}
+
+// ResourceAnnotations returns the MCP annotations for one resource URI
+// (base URI without version suffix). Guidance resources are high-priority
+// for the assistant; status is lower.
+func ResourceAnnotations(uri string) map[string]any {
+	base, _ := ParseVersionedURI(uri)
+	switch base {
+	case ManifestURI:
+		return map[string]any{"audience": []string{"assistant", "user"}, "priority": 1.0}
+	case BootstrapURI:
+		return map[string]any{"audience": []string{"assistant", "user"}, "priority": 1.0}
+	case StatusURI:
+		return map[string]any{"audience": []string{"assistant"}, "priority": 0.6}
+	default:
+		if strings.HasPrefix(base, SkillsPrefix) {
+			return map[string]any{"audience": []string{"assistant", "user"}, "priority": 0.9}
+		}
+		if strings.HasPrefix(base, CommandsPrefix) {
+			return map[string]any{"audience": []string{"assistant", "user"}, "priority": 0.8}
+		}
+		if strings.HasPrefix(base, TemplatesPrefix) {
+			return map[string]any{"audience": []string{"assistant"}, "priority": 0.7}
+		}
+	}
+	return map[string]any{"audience": []string{"assistant"}, "priority": 0.5}
+}
+
+// AllResourceURIs returns the deterministic full set of resource URIs
+// (unversioned) the pack exposes: manifest, bootstrap, status, plus every
+// skill, template and command in sorted order. The source of truth is the
+// embedded filesystem — the caller and the server share this list.
+func AllResourceURIs() ([]string, error) {
+	skills, err := SkillDirs()
+	if err != nil {
+		return nil, err
+	}
+	types, err := TemplateTypes()
+	if err != nil {
+		return nil, err
+	}
+	commands, err := CommandFiles()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, 2+1+len(skills)+len(types)+len(commands))
+	out = append(out, ManifestURI, BootstrapURI, StatusURI)
+	for _, s := range skills {
+		out = append(out, SkillsPrefix+s)
+	}
+	for _, t := range types {
+		out = append(out, TemplatesPrefix+t)
+	}
+	for _, c := range commands {
+		out = append(out, CommandsPrefix+c)
+	}
+	return out, nil
 }
 
 // --- Delegation mappings (req:agent-agnostic-skill-pack R4) ---

@@ -1046,9 +1046,8 @@ func TestResourcesList(t *testing.T) {
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":8,"method":"resources/list"}`)
 	res := out["result"].(map[string]any)
 	resources := res["resources"].([]any)
-	// The deterministic resource set: eka://status + every embedded
-	// skill + every embedded draft template type.
-	wantCount := 1 + len(mustSkillDirs(t)) + len(mustTemplateTypes(t))
+	// The deterministic resource set: eka://status + manifest + bootstrap + every embedded skill + every template + every command.
+	wantCount := len(mustAllResourceURIs(t))
 	if len(resources) != wantCount {
 		t.Fatalf("resources = %d, want %d", len(resources), wantCount)
 	}
@@ -1056,11 +1055,24 @@ func TestResourcesList(t *testing.T) {
 	if r["uri"] != "eka://status" {
 		t.Errorf("resource uri = %v, want eka://status", r["uri"])
 	}
-	// Every resource must carry a uri and a mimeType.
+	// Every resource must carry a uri, mimeType and annotations.
 	for _, rl := range resources {
 		rm := rl.(map[string]any)
 		if rm["uri"] == nil || rm["mimeType"] == nil {
 			t.Errorf("resource %v must carry uri and mimeType", rm)
+		}
+		if rm["annotations"] == nil {
+			t.Errorf("resource %v must carry annotations", rm["uri"])
+		}
+	}
+	// Manifest and bootstrap must be advertised.
+	byURI := map[string]bool{}
+	for _, rl := range resources {
+		byURI[rl.(map[string]any)["uri"].(string)] = true
+	}
+	for _, want := range []string{pack.ManifestURI, pack.BootstrapURI} {
+		if !byURI[want] {
+			t.Errorf("resources/list must include %s", want)
 		}
 	}
 }
