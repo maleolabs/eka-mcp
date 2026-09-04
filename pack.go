@@ -32,7 +32,7 @@ import (
 // binary reports the tagged version in its manifest and serverInfo.
 // The -X target is the module path (not .../pack): this package lives
 // at the module root, so its import path IS the module path.
-var Version = "1.4.0"
+var Version = "1.5.0"
 
 // Name is the stable plugin identity reported in the manifest.
 const Name = "mcp"
