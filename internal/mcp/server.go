@@ -379,19 +379,16 @@ func ToolCount() int { return len(toolNames) }
 func AdvertisedToolCount() int { return len(toolDescriptors) }
 
 // ResourceCount returns the total number of resources the server exposes:
-// eka://status (1) plus every embedded skill plus every draft template
-// type. The counts are read from the embedded filesystem so the banner
-// never drifts from the actual capability set. Deterministic.
+// eka://status + eka://manifest + eka://bootstrap (3) plus every
+// embedded skill, draft template type and command file. The counts are
+// read from the embedded filesystem so the banner never drifts from the
+// actual capability set. Deterministic.
 func ResourceCount() (int, error) {
-	skills, err := pack.SkillDirs()
+	uris, err := pack.AllResourceURIs()
 	if err != nil {
 		return 0, err
 	}
-	types, err := pack.TemplateTypes()
-	if err != nil {
-		return 0, err
-	}
-	return 1 + len(skills) + len(types), nil
+	return len(uris), nil
 }
 
 // toolRequiredFields is DERIVED from toolDescriptors — the single source.
@@ -1843,19 +1840,38 @@ func parseContent(raw json.RawMessage) (map[string]any, error) {
 
 // handleResourcesList returns the resource set of the server: the
 // workspace status resource (a real, readable view over eka-core) plus
-// the read-only embedded pack resources — every skill's SKILL.md and
-// every draft template type. The enumeration is deterministic (the
-// embedded filesystem is the source of truth). Skill resource
-// descriptions come from the SKILL.md frontmatter
-// (req:agent-agnostic-skill-pack R9); a skill without a parseable
-// description degrades to the generic form.
+// the compact manifest, bootstrap, and the read-only embedded pack
+// resources — every skill's SKILL.md, every draft template type and
+// every command file. The enumeration is deterministic (the embedded
+// filesystem is the source of truth). Skill/command resource descriptions
+// come from the frontmatter (req:agent-agnostic-skill-pack R9); a skill
+// without a parseable description degrades to the generic form. Every
+// entry carries MCP annotations (audience, priority) for the client.
+// The manifest is the compact index (no bodies); skills/templates/commands
+// are lazy — bodies only on resources/read (optionally versioned via
+// `@<version>` suffix, current version is pack.Version).
 func (s *Server) handleResourcesList(req request) []byte {
 	resources := []any{
 		map[string]any{
-			"uri":         "eka://status",
+			"uri":         pack.StatusURI,
 			"name":        "EKA workspace status",
 			"description": "The aggregated EKA workspace status: path, schema version, projects, canonical store totals.",
 			"mimeType":    "application/json",
+			"annotations": pack.ResourceAnnotations(pack.StatusURI),
+		},
+		map[string]any{
+			"uri":         pack.ManifestURI,
+			"name":        "EKA pack manifest",
+			"description": "Compact EKA pack manifest/index (eka-pack-manifest-v1) — skills, templates and commands with versions (no bodies).",
+			"mimeType":    "application/json",
+			"annotations": pack.ResourceAnnotations(pack.ManifestURI),
+		},
+		map[string]any{
+			"uri":         pack.BootstrapURI,
+			"name":        "EKA bootstrap",
+			"description": "EKA bootstrap guidance — lazy load order, versioned reads and fallback for the pack resources.",
+			"mimeType":    "text/markdown",
+			"annotations": pack.ResourceAnnotations(pack.BootstrapURI),
 		},
 	}
 	skills, err := pack.SkillDirs()
@@ -1868,10 +1884,11 @@ func (s *Server) handleResourcesList(req request) []byte {
 			description = d
 		}
 		resources = append(resources, map[string]any{
-			"uri":         "eka://skills/" + name,
+			"uri":         pack.SkillsPrefix + name,
 			"name":        "EKA skill " + name,
 			"description": description,
 			"mimeType":    "text/markdown",
+			"annotations": pack.ResourceAnnotations(pack.SkillsPrefix + name),
 		})
 	}
 	types, err := pack.TemplateTypes()
@@ -1880,10 +1897,28 @@ func (s *Server) handleResourcesList(req request) []byte {
 	}
 	for _, t := range types {
 		resources = append(resources, map[string]any{
-			"uri":         "eka://templates/" + t,
+			"uri":         pack.TemplatesPrefix + t,
 			"name":        "EKA draft template " + t,
 			"description": "The v2.0 JSON draft template of type " + t + " (read-only).",
 			"mimeType":    "application/json",
+			"annotations": pack.ResourceAnnotations(pack.TemplatesPrefix + t),
+		})
+	}
+	commands, err := pack.CommandFiles()
+	if err != nil {
+		return s.errorResponse(req.ID, codeInternalError, "listing commands: "+SanitizeError(err))
+	}
+	for _, c := range commands {
+		description := "The command guidance of " + c + " (read-only)."
+		if d, err := pack.CommandDescription(c); err == nil && d != "" {
+			description = d
+		}
+		resources = append(resources, map[string]any{
+			"uri":         pack.CommandsPrefix + c,
+			"name":        "EKA command " + c,
+			"description": description,
+			"mimeType":    "text/markdown",
+			"annotations": pack.ResourceAnnotations(pack.CommandsPrefix + c),
 		})
 	}
 	return s.resultResponse(req.ID, map[string]any{"resources": resources})
@@ -1891,7 +1926,14 @@ func (s *Server) handleResourcesList(req request) []byte {
 
 // handleResourcesRead reads one resource URI: eka://status (the status
 // read from the capability layer) or the read-only embedded pack
-// resources eka://skills/<name> and eka://templates/<type>.
+// resources eka://skills/<name>, eka://templates/<type>,
+// eka://commands/<name>, plus the compact manifest eka://manifest and
+// the bootstrap eka://bootstrap. All pack resources support lazy
+// versioned reads via an `@<version>` suffix (e.g. eka://skills/eka-router@1.3.2);
+// unversioned means current. Unknown versions or names are
+// -32002 Resource not found with a deterministic hint mentioning the
+// available version and the unversioned fallback. Guidance remains
+// resource content; operations remain tools.
 func (s *Server) handleResourcesRead(req request) []byte {
 	var p struct {
 		URI string `json:"uri"`
@@ -1899,8 +1941,12 @@ func (s *Server) handleResourcesRead(req request) []byte {
 	if err := json.Unmarshal(req.Params, &p); err != nil || p.URI == "" {
 		return s.errorResponse(req.ID, codeInvalidParams, "resources/read requires {\"uri\": string}")
 	}
+	base, ver := pack.ParseVersionedURI(p.URI)
+	if ver != "" && !pack.IsCurrentVersion(ver) {
+		return s.errorResponse(req.ID, codeResourceNotFound, "resource not found: "+p.URI+" (unknown version "+ver+", available "+pack.Version+"; retry the unversioned URI "+base+" as fallback)")
+	}
 	switch {
-	case p.URI == "eka://status":
+	case base == pack.StatusURI:
 		data, err := s.cap.Status()
 		if err != nil {
 			return s.errorResponse(req.ID, codeInternalError, "reading eka://status: "+SanitizeError(err))
@@ -1914,8 +1960,39 @@ func (s *Server) handleResourcesRead(req request) []byte {
 				},
 			},
 		})
-	case strings.HasPrefix(p.URI, "eka://skills/"):
-		name := strings.TrimPrefix(p.URI, "eka://skills/")
+	case base == pack.ManifestURI:
+		data, err := pack.ManifestJSON()
+		if err != nil {
+			return s.errorResponse(req.ID, codeInternalError, "reading eka://manifest: "+SanitizeError(err))
+		}
+		return s.resultResponse(req.ID, map[string]any{
+			"contents": []any{
+				map[string]any{
+					"uri":      p.URI,
+					"mimeType": "application/json",
+					"text":     string(data),
+				},
+			},
+		})
+	case base == pack.BootstrapURI:
+		data, err := pack.BootstrapContent()
+		if err != nil {
+			return s.errorResponse(req.ID, codeInternalError, "reading eka://bootstrap: "+SanitizeError(err))
+		}
+		return s.resultResponse(req.ID, map[string]any{
+			"contents": []any{
+				map[string]any{
+					"uri":      p.URI,
+					"mimeType": "text/markdown",
+					"text":     string(data),
+				},
+			},
+		})
+	case strings.HasPrefix(base, pack.SkillsPrefix):
+		name := strings.TrimPrefix(base, pack.SkillsPrefix)
+		if strings.TrimSpace(name) == "" || strings.Contains(name, "/") {
+			return s.errorResponse(req.ID, codeResourceNotFound, "resource not found: "+p.URI)
+		}
 		data, err := pack.SkillFile(name)
 		if err != nil {
 			return s.errorResponse(req.ID, codeResourceNotFound, "resource not found: "+p.URI)
@@ -1929,8 +2006,11 @@ func (s *Server) handleResourcesRead(req request) []byte {
 				},
 			},
 		})
-	case strings.HasPrefix(p.URI, "eka://templates/"):
-		typeToken := strings.TrimPrefix(p.URI, "eka://templates/")
+	case strings.HasPrefix(base, pack.TemplatesPrefix):
+		typeToken := strings.TrimPrefix(base, pack.TemplatesPrefix)
+		if strings.TrimSpace(typeToken) == "" || strings.Contains(typeToken, "/") {
+			return s.errorResponse(req.ID, codeResourceNotFound, "resource not found: "+p.URI)
+		}
 		data, err := pack.TemplateFile(typeToken)
 		if err != nil {
 			return s.errorResponse(req.ID, codeResourceNotFound, "resource not found: "+p.URI)
@@ -1940,6 +2020,24 @@ func (s *Server) handleResourcesRead(req request) []byte {
 				map[string]any{
 					"uri":      p.URI,
 					"mimeType": "application/json",
+					"text":     string(data),
+				},
+			},
+		})
+	case strings.HasPrefix(base, pack.CommandsPrefix):
+		name := strings.TrimPrefix(base, pack.CommandsPrefix)
+		if strings.TrimSpace(name) == "" || strings.Contains(name, "/") {
+			return s.errorResponse(req.ID, codeResourceNotFound, "resource not found: "+p.URI)
+		}
+		data, err := pack.CommandFile(name)
+		if err != nil {
+			return s.errorResponse(req.ID, codeResourceNotFound, "resource not found: "+p.URI)
+		}
+		return s.resultResponse(req.ID, map[string]any{
+			"contents": []any{
+				map[string]any{
+					"uri":      p.URI,
+					"mimeType": "text/markdown",
 					"text":     string(data),
 				},
 			},

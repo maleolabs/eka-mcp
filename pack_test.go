@@ -1,6 +1,7 @@
 package pack
 
 import (
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -568,4 +569,170 @@ func containsString(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// --- Resource delivery (sto:mcp-resource-agent-delivery) ---
+
+func TestManifestJSONCompact(t *testing.T) {
+	data, err := ManifestJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("ManifestJSON must be valid JSON: %v", err)
+	}
+	if doc["schema"] != "eka-pack-manifest-v1" {
+		t.Errorf("schema = %v, want eka-pack-manifest-v1", doc["schema"])
+	}
+	if doc["skills"] == nil || doc["templates"] == nil || doc["commands"] == nil {
+		t.Error("manifest must carry skills/templates/commands")
+	}
+	skills := doc["skills"].([]any)
+	if len(skills) == 0 {
+		t.Error("manifest skills must not be empty")
+	}
+	if len(data) > 8000 {
+		t.Errorf("manifest is not compact: %d bytes (want <8k)", len(data))
+	}
+	b, _ := ManifestJSON()
+	if string(data) != string(b) {
+		t.Error("ManifestJSON must be deterministic")
+	}
+}
+
+func TestBootstrapContent(t *testing.T) {
+	data, err := BootstrapContent()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	for _, want := range []string{"# EKA Bootstrap", "eka://manifest", "eka://skills/", "eka://templates/", "eka://commands/", "Fallback", "lazy", "versioned"} {
+		if !strings.Contains(strings.ToLower(s), strings.ToLower(want)) && !strings.Contains(s, want) {
+			t.Errorf("bootstrap must contain %q, got:\n%s", want, s[:600])
+		}
+	}
+	if !strings.Contains(s, Version) {
+		t.Errorf("bootstrap must mention the plugin version %q", Version)
+	}
+	a, _ := BootstrapContent()
+	if string(a) != s {
+		t.Error("BootstrapContent must be deterministic")
+	}
+}
+
+func TestCommandFilesAndDescriptions(t *testing.T) {
+	files, err := CommandFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) < 2 {
+		t.Fatalf("want at least 2 commands, got %v", files)
+	}
+	for _, f := range files {
+		data, err := CommandFile(f)
+		if err != nil {
+			t.Errorf("CommandFile(%q): %v", f, err)
+			continue
+		}
+		if len(data) == 0 {
+			t.Errorf("CommandFile(%q) empty", f)
+		}
+		desc, err := CommandDescription(f)
+		if err != nil {
+			t.Errorf("CommandDescription(%q): %v", f, err)
+			continue
+		}
+		if desc == "" {
+			t.Errorf("CommandDescription(%q) empty", f)
+		}
+	}
+	if _, err := CommandFile("bogus.md"); err == nil {
+		t.Error("unknown command must error")
+	}
+}
+
+func TestAllResourceURIs(t *testing.T) {
+	uris, err := AllResourceURIs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCount := 3 + len(mustSkillDirsForPackTest(t)) + len(mustTemplateTypesForPackTest(t)) + len(mustCommandFilesForPackTest(t))
+	if len(uris) != wantCount {
+		t.Fatalf("AllResourceURIs = %d, want %d (%v)", len(uris), wantCount, uris)
+	}
+	// Must contain manifest and bootstrap and status
+	want := map[string]bool{ManifestURI: false, BootstrapURI: false, StatusURI: false}
+	for _, u := range uris {
+		if _, ok := want[u]; ok {
+			want[u] = true
+		}
+	}
+	for k, v := range want {
+		if !v {
+			t.Errorf("AllResourceURIs missing %s", k)
+		}
+	}
+	// Contains every skill/template/command
+	for _, s := range mustSkillDirsForPackTest(t) {
+		if !containsString(uris, SkillsPrefix+s) {
+			t.Errorf("AllResourceURIs missing %s%s", SkillsPrefix, s)
+		}
+	}
+}
+
+func mustSkillDirsForPackTest(t *testing.T) []string {
+	t.Helper()
+	dirs, err := SkillDirs()
+	if err != nil {
+		t.Fatalf("SkillDirs: %v", err)
+	}
+	return dirs
+}
+func mustTemplateTypesForPackTest(t *testing.T) []string {
+	t.Helper()
+	types, err := TemplateTypes()
+	if err != nil {
+		t.Fatalf("TemplateTypes: %v", err)
+	}
+	return types
+}
+func mustCommandFilesForPackTest(t *testing.T) []string {
+	t.Helper()
+	files, err := CommandFiles()
+	if err != nil {
+		t.Fatalf("CommandFiles: %v", err)
+	}
+	return files
+}
+
+func TestParseVersionedURI(t *testing.T) {
+	cases := []struct{ in, base, ver string }{
+		{"eka://skills/eka-router", "eka://skills/eka-router", ""},
+		{"eka://skills/eka-router@1.3.2", "eka://skills/eka-router", "1.3.2"},
+		{"eka://manifest@1.3.2", "eka://manifest", "1.3.2"},
+		{"eka://bootstrap", "eka://bootstrap", ""},
+		{"eka://templates/adr@1.0.1", "eka://templates/adr", "1.0.1"},
+	}
+	for _, tc := range cases {
+		b, v := ParseVersionedURI(tc.in)
+		if b != tc.base || v != tc.ver {
+			t.Errorf("ParseVersionedURI(%q) = (%q,%q), want (%q,%q)", tc.in, b, v, tc.base, tc.ver)
+		}
+	}
+	if !IsCurrentVersion(Version) || !IsCurrentVersion("") {
+		t.Error("IsCurrentVersion must accept plugin version and empty")
+	}
+	if IsCurrentVersion("9.9.9") {
+		t.Error("IsCurrentVersion must reject unknown version")
+	}
+}
+
+func TestResourceAnnotations(t *testing.T) {
+	for _, uri := range []string{ManifestURI, BootstrapURI, StatusURI, SkillsPrefix + "eka-router", TemplatesPrefix + "adr", CommandsPrefix + "eka-discuss.md"} {
+		ann := ResourceAnnotations(uri)
+		if ann == nil || ann["priority"] == nil || ann["audience"] == nil {
+			t.Errorf("ResourceAnnotations(%q) = %v, want priority and audience", uri, ann)
+		}
+	}
 }

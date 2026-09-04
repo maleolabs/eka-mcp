@@ -239,20 +239,45 @@ func TestConformanceToolsCallSuccess(t *testing.T) {
 }
 
 // TestConformanceResourcesList (spike point 5a): resources/list exposes
-// the deterministic resource set — eka://status first, then every
-// embedded skill and every embedded draft template type.
+// the deterministic resource set — eka://status first, then the compact
+// manifest and bootstrap, then every embedded skill, every embedded draft
+// template type and every command file.
 func TestConformanceResourcesList(t *testing.T) {
 	s := conformanceServer()
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"resources/list"}`)
 	res := mustResult(t, out)
 	resources := res["resources"].([]any)
-	wantCount := 1 + len(mustSkillDirs(t)) + len(mustTemplateTypes(t))
+	wantCount := len(mustAllResourceURIs(t))
 	if len(resources) != wantCount {
 		t.Fatalf("resources = %d, want %d", len(resources), wantCount)
 	}
 	r := resources[0].(map[string]any)
 	if r["uri"] != "eka://status" {
 		t.Errorf("resource uri = %v, want eka://status", r["uri"])
+	}
+	byURI := map[string]bool{}
+	for _, rr := range resources {
+		byURI[rr.(map[string]any)["uri"].(string)] = true
+	}
+	for _, want := range []string{pack.ManifestURI, pack.BootstrapURI} {
+		if !byURI[want] {
+			t.Errorf("resources/list is missing %s (compact manifest/bootstrap)", want)
+		}
+	}
+	for _, c := range mustCommandFiles(t) {
+		if !byURI[pack.CommandsPrefix+c] {
+			t.Errorf("resources/list is missing %s%s", pack.CommandsPrefix, c)
+		}
+	}
+	// Every resource must carry annotations and mimeType.
+	for _, rr := range resources {
+		rm := rr.(map[string]any)
+		if rm["annotations"] == nil {
+			t.Errorf("resource %v must carry annotations (audience, priority)", rm["uri"])
+		}
+		if rm["mimeType"] == nil {
+			t.Errorf("resource %v must carry mimeType", rm["uri"])
+		}
 	}
 }
 
@@ -1002,3 +1027,20 @@ func (f *failingSyncPushCapability) FeedbackPublish(req FeedbackPublishRequest) 
 	return nil, nil
 }
 func (f *failingSyncPushCapability) Unassign(req UnassignRequest) ([]byte, error) { return nil, nil }
+
+func mustAllResourceURIs(t *testing.T) []string {
+	t.Helper()
+	uris, err := pack.AllResourceURIs()
+	if err != nil {
+		t.Fatalf("AllResourceURIs: %v", err)
+	}
+	return uris
+}
+func mustCommandFiles(t *testing.T) []string {
+	t.Helper()
+	files, err := pack.CommandFiles()
+	if err != nil {
+		t.Fatalf("CommandFiles: %v", err)
+	}
+	return files
+}

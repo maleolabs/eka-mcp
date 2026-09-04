@@ -87,6 +87,35 @@ Feedback is **meta-information about the tool** — it is not engineering knowle
 
 Explicit statement: **feedback is meta-information outside the knowledge model** — the MCP feedback tools transport reports about the tool itself; they do not author, publish, or transition CKOs and they do not read the canonical store.
 
+## Skill pack resources (sto:mcp-resource-agent-delivery)
+
+Skills and command guidance are delivered via **MCP resources**, not tools, and without mandatory per-agent installation (configure defaults to MCP resources only; `eka-mcp configure --with-skills/--with-commands/--with-all` is opt-in).
+
+### Resource set
+
+| URI | Kind | Mime | Description |
+|---|---|---|---|
+| `eka://manifest` | index | `application/json` | Compact manifest (`eka-pack-manifest-v1`) — pack/plugin versions plus sorted `skills`/`templates`/`commands` lists, no bodies. |
+| `eka://bootstrap` | guide | `text/markdown` | Bootstrap — lazy load order, versioned reads and fallback. |
+| `eka://status` | status | `application/json` | Live workspace status (same as `status` tool). |
+| `eka://skills/<name>` | guidance | `text/markdown` | One skill's `SKILL.md` (frontmatter-described, annotated). |
+| `eka://templates/<type>` | guidance | `application/json` | One v2.0 draft template (annotated). |
+| `eka://commands/<name>` | guidance | `text/markdown` | One command's markdown guide (frontmatter-described, annotated). |
+
+All resources are read-only, deterministic and versioned. Every `resources/list` entry carries `annotations` (`audience: ["assistant","user"]` for guidance, `priority` 1.0 for manifest/bootstrap, 0.9 for skills, 0.8 for commands, 0.7 for templates, 0.6 for status) so clients can prioritize.
+
+### Loading and fallback
+
+1. **Compact index first** — read `eka://manifest` (no bodies). It is the single source of truth for the entry lists; do not synthesize guidance.
+2. **Lazy fetch** — read only the needed `eka://skills/<name>`, `eka://templates/<type>` or `eka://commands/<name>` (or `eka://bootstrap` for the full guide). Bodies are fetched on demand.
+3. **Versioned reads** — any pack resource supports an `@<version>` suffix, e.g. `eka://skills/eka-router@1.3.2`, `eka://manifest@1.3.2`. Unversioned means current (plugin `pack.Version` / pack `manifest.yaml` version). Unknown versions refuse `-32002 Resource not found` naming the available version and directing to retry the unversioned URI; only the current version is retained.
+4. **Runtime fallback** — unknown URIs (bad name, trailing slash segment, missing skill) refuse `-32002` deterministically.
+5. **Offline/install fallback** — when resources are unavailable (old server, no MCP connection), install locally: `eka-mcp install skills`, `eka-mcp install commands` or `eka-mcp configure --target <ecosystem> --with-all`, then read `<install-dir>/<name>/SKILL.md` directly. This file is the canonical fallback; resource guidance is never synthesized. The `eka://manifest` entry list remains the discovery contract.
+
+### Separation
+
+Guidance (skills, commands, templates, manifest, bootstrap) is always **resource content**; operations (context, get, domain, new, publish, transition, etc.) are always **tools**. Tools never return guidance directly; resources never perform writes. This keeps the transport thin and the behavior layer in the Skill Pack.
+
 ## Status
 
-MCP integration: **implemented** in `eka-mcp` (stdio JSON-RPC 2.0, protocol `2024-11-05`) — tools `context`, `get`, `domain`, `status`, `validate`, `new`, `publish`, `transition`, `note`, `draft_read` (+ deprecated alias `view`), `draft_list`, `integrity_check`, `discard`, `sync_push`, `assign`, `reassign`, `unassign`, `feedback_new`, `feedback_list`, `feedback_publish`; resources `eka://status`, `eka://skills/*`, `eka://templates/*`. Human projections (`eka view`/`eka watch`) remain CLI-only. Feedback is explicitly excluded from the knowledge model (meta-information, never a CKO, never in the canonical store) per ADR-026 and req:eka-mcp-production revision 4 §8.2 decision 4. This document is the agreed boundary so that the contracts (Runtime API, Authoring API, Context Object, CKO JSON schemas) remain the interface — and the Skill Pack sits unchanged on top.
+MCP integration: **implemented** in `eka-mcp` (stdio JSON-RPC 2.0, protocol `2024-11-05`) — tools `context`, `code_context`, `code_discover`, `code_get`, `get`, `domain`, `status`, `validate`, `new`, `draft_update`, `publish`, `publishBatch`, `transition`, `note`, `draft_read` (+ deprecated alias `view`), `draft_list`, `integrity_check`, `discard`, `sync_push`, `assign`, `reassign`, `unassign`, `feedback_new`, `feedback_list`, `feedback_publish`; resources `eka://status`, `eka://manifest`, `eka://bootstrap`, `eka://skills/*`, `eka://templates/*`, `eka://commands/*` (all with annotations and lazy `@<version>` reads). Human projections (`eka view`/`eka watch`) remain CLI-only. Feedback is explicitly excluded from the knowledge model (meta-information, never a CKO, never in the canonical store) per ADR-026 and req:eka-mcp-production revision 4 §8.2 decision 4. This document is the agreed boundary so that the contracts (Runtime API, Authoring API, Context Object, CKO JSON schemas) remain the interface — and the Skill Pack sits unchanged on top.
