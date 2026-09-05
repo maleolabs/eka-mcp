@@ -257,9 +257,10 @@ var toolDescriptors = []toolDescriptor{
 		Name:        "draft_list",
 		RiskClass:   RiskRead,
 		Required:    nil,
-		Description: "List the draft backlog of one project (or every project) as a machine list (schema eka-draft-list-v1), ordered deterministically.",
+		Description: "List the draft backlog of one project (or every project) as a machine list (schema eka-draft-list-v1), ordered deterministically. Supports provenance filter human|inferred|reconciled|all (default all; eka.yaml capture.provenanceFilterDefault applies server-side when omitted). Inferred/reconciled drafts carry provenance tags in CLI board/status.",
 		Properties: map[string]any{
 			"project": map[string]any{"type": "string", "description": "Optional project scope (default: every project)."},
+			"provenance": map[string]any{"type": "string", "enum": []string{"human", "inferred", "reconciled", "all"}, "description": "Filter by provenance: human|inferred|reconciled|all (default all)."},
 		},
 	},
 	{
@@ -1569,10 +1570,23 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		return string(data), nil
 	case "draft_list":
 		var p struct {
-			Project string `json:"project"`
+			Project    string `json:"project"`
+			Provenance string `json:"provenance"`
 		}
 		if err := s.decodeToolArgs("draft_list", args, &p); err != nil {
 			return "", err
+		}
+		prov := p.Provenance
+		if prov == "" {
+			prov = "all"
+		}
+		// Prefer filtered path when available; fallback to DraftList for backward compat.
+		if typed, ok := s.cap.(interface{ DraftListWithProvenance(string, string) ([]byte, error) }); ok {
+			data, err := typed.DraftListWithProvenance(p.Project, prov)
+			if err != nil {
+				return "", err
+			}
+			return string(data), nil
 		}
 		data, err := s.cap.DraftList(p.Project)
 		if err != nil {

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/maleolabs/eka-core/codegraph"
@@ -532,8 +533,32 @@ func (c *Capability) View(target, project string) ([]byte, error) {
 // DraftList lists the draft backlog of one project (or every project
 // when project is "") as a machine list (schema eka-draft-list-v1),
 // ordered deterministically by eka-core's Authoring.Drafts.
+// provenance filter is human|inferred|reconciled|all (default all).
 func (c *Capability) DraftList(project string) ([]byte, error) {
+	return c.DraftListWithProvenance(project, "all")
+}
+
+// DraftListWithProvenance lists the draft backlog filtered by provenance.
+func (c *Capability) DraftListWithProvenance(project, provenance string) ([]byte, error) {
+	if provenance == "" {
+		provenance = "all"
+	}
 	drafts, err := runtime.Authoring.Drafts(c.rt, project)
+	if provenance != "all" && provenance != "" {
+		// Filter locally for backward compat with eka-core v1.6.0 (DraftsByProvenance absent).
+		// When core's Draft lacks Provenance field, reflection falls back to no filtering.
+		filtered := make([]runtime.Draft, 0, len(drafts))
+		for _, d := range drafts {
+			prov := provenanceOfDraft(d)
+			if prov == "" {
+				prov = "human"
+			}
+			if prov == provenance {
+				filtered = append(filtered, d)
+			}
+		}
+		drafts = filtered
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -992,6 +1017,18 @@ func legalTransitions(typeToken string) map[string][]string {
 		out[d] = cp
 	}
 	return out
+}
+
+// provenanceOfDraft extracts provenance via reflection for backward compat with eka-core without provenance field.
+func provenanceOfDraft(d runtime.Draft) string {
+	// Avoid hard dependency on field existence: reflect over struct.
+	// When core's Draft has Provenance string field, return it; else "".
+	v := reflect.ValueOf(d)
+	f := v.FieldByName("Provenance")
+	if f.IsValid() && f.Kind() == reflect.String {
+		return f.String()
+	}
+	return ""
 }
 
 // injectLegalTransitions enriches a verbatim draft JSON document with the
