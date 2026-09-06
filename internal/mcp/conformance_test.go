@@ -875,7 +875,7 @@ func (f *failingFeedbackCapability) Domain(p, d string, noContent bool) ([]byte,
 func (f *failingFeedbackCapability) Status() ([]byte, error) {
 	return f.StatusWithAll(false)
 }
-func (f *failingFeedbackCapability) StatusWithAll(all bool) ([]byte, error)                { return []byte(`{}`), nil }
+func (f *failingFeedbackCapability) StatusWithAll(all bool) ([]byte, error) { return []byte(`{}`), nil }
 func (f *failingFeedbackCapability) Context(s, p, d string) ([]byte, error) { return nil, nil }
 func (f *failingFeedbackCapability) CodeContext(req CodeContextRequest) ([]byte, error) {
 	return nil, nil
@@ -935,7 +935,9 @@ func (f *failingAssignmentCapability) Domain(p, d string, noContent bool) ([]byt
 func (f *failingAssignmentCapability) Status() ([]byte, error) {
 	return f.StatusWithAll(false)
 }
-func (f *failingAssignmentCapability) StatusWithAll(all bool) ([]byte, error)                { return []byte(`{}`), nil }
+func (f *failingAssignmentCapability) StatusWithAll(all bool) ([]byte, error) {
+	return []byte(`{}`), nil
+}
 func (f *failingAssignmentCapability) Context(s, p, d string) ([]byte, error) { return nil, nil }
 func (f *failingAssignmentCapability) CodeContext(req CodeContextRequest) ([]byte, error) {
 	return nil, nil
@@ -996,7 +998,7 @@ func (f *failingSyncPushCapability) Domain(p, d string, noContent bool) ([]byte,
 func (f *failingSyncPushCapability) Status() ([]byte, error) {
 	return f.StatusWithAll(false)
 }
-func (f *failingSyncPushCapability) StatusWithAll(all bool) ([]byte, error)                { return []byte(`{}`), nil }
+func (f *failingSyncPushCapability) StatusWithAll(all bool) ([]byte, error) { return []byte(`{}`), nil }
 func (f *failingSyncPushCapability) Context(s, p, d string) ([]byte, error) { return nil, nil }
 func (f *failingSyncPushCapability) CodeContext(req CodeContextRequest) ([]byte, error) {
 	return nil, nil
