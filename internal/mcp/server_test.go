@@ -95,6 +95,9 @@ func (f *fakeCapability) Domain(projectID, domain string, noContent bool) ([]byt
 }
 
 func (f *fakeCapability) Status() ([]byte, error) {
+	return f.StatusWithAll(false)
+}
+func (f *fakeCapability) StatusWithAll(all bool) ([]byte, error) {
 	return []byte(f.statusJSON), nil
 }
 

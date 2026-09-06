@@ -132,8 +132,8 @@ var toolDescriptors = []toolDescriptor{
 		Name:        "status",
 		RiskClass:   RiskRead,
 		Required:    nil,
-		Description: "Return the aggregated EKA workspace status: path, schema version, registered projects, canonical store totals. Path is logical/relative (no absolute host path).",
-		Properties:  map[string]any{},
+		Description: "Return the aggregated EKA workspace status: path, schema version, registered projects, canonical store totals. Auto repo-scoped inside repo, global outside; use all=true to force global. Path is logical/relative (no absolute host path).",
+		Properties:  map[string]any{"all": map[string]any{"type": "boolean", "description": "When true, force global workspace status (disable repo-scoped filtering). Default false (auto-scoped)."}},
 	},
 	{
 		Name:        "validate",
@@ -649,6 +649,7 @@ type Capability interface {
 	Domain(projectID, domain string, noContent bool) ([]byte, error)
 	// Status returns the workspace status as JSON.
 	Status() ([]byte, error)
+	StatusWithAll(all bool) ([]byte, error)
 	// Context builds the Context Object around one subject at a depth
 	// (schema eka-context-v1).
 	Context(subject, projectID, depth string) ([]byte, error)
@@ -1288,7 +1289,13 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		}
 		return string(data), nil
 	case "status":
-		data, err := s.cap.Status()
+		var sp struct {
+			All bool `json:"all"`
+		}
+		if err := s.decodeToolArgs("status", args, &sp); err != nil {
+			return "", err
+		}
+		data, err := s.cap.StatusWithAll(sp.All)
 		if err != nil {
 			return "", err
 		}
