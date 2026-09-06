@@ -173,7 +173,15 @@ func (c *Capability) Domain(projectID, domain string, noContent bool) ([]byte, e
 // unset or empty), it returns a deterministic uninitialized shape
 // instead of an error, so the MCP server answers cleanly without a
 // workspace — the initialized flag is the deterministic signal.
+// Auto repo-scoped inside repo unless all=true: mirrors CLI `eka status` behavior.
 func (c *Capability) Status() ([]byte, error) {
+	return c.StatusWithAll(false)
+}
+
+// StatusWithAll returns workspace status with optional global override.
+// When all is false and cwd is inside a registered repo, only that
+// project's status is returned; when all is true, global is forced.
+func (c *Capability) StatusWithAll(all bool) ([]byte, error) {
 	if !c.Exists() {
 		return json.Marshal(map[string]any{
 			"schema":      "eka-status-v1",
@@ -190,6 +198,9 @@ func (c *Capability) Status() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !all {
+		st = c.scopeStatus(st)
+	}
 	data, _ := json.Marshal(st)
 	// Enforce logical path (no absolute leakage) for status payload.
 	var m map[string]any
@@ -202,6 +213,35 @@ func (c *Capability) Status() ([]byte, error) {
 		}
 	}
 	return data, nil
+}
+
+// scopeStatus mirrors cmd/status.go scopeStatus: when cwd is inside a
+// registered repo path, return only that project's slice.
+func (c *Capability) scopeStatus(st *runtime.WorkspaceStatus) *runtime.WorkspaceStatus {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return st
+	}
+	cwd = filepath.Clean(cwd)
+	var matched *runtime.ProjectStatus
+	matchedLen := -1
+	for i := range st.Projects {
+		for _, rs := range st.Projects[i].Repos {
+			repoPath := filepath.Clean(rs.Repo.Path)
+			if cwd == repoPath || strings.HasPrefix(cwd+string(filepath.Separator), repoPath+string(filepath.Separator)) {
+				if len(repoPath) > matchedLen {
+					matchedLen = len(repoPath)
+					matched = &st.Projects[i]
+				}
+			}
+		}
+	}
+	if matched == nil {
+		return st
+	}
+	out := *st
+	out.Projects = []runtime.ProjectStatus{*matched}
+	return &out
 }
 
 // Context builds the Context Object around one subject at one depth

@@ -200,6 +200,9 @@ func (f *failingStatusCapability) Domain(projectID, domain string, noContent boo
 }
 
 func (f *failingStatusCapability) Status() ([]byte, error) {
+	return f.StatusWithAll(false)
+}
+func (f *failingStatusCapability) StatusWithAll(all bool) ([]byte, error) {
 	return nil, errors.New("unable to open database file: /home/user/.eka/workspace.db")
 }
 
