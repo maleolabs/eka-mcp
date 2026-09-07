@@ -1,9 +1,9 @@
 ---
-name: shr-builder
+name: eka-shr-builder
 description: EKA sharing object (shr) builder for agents — EKA-to-EKA and audited non-EKA spike
 ---
 
-# Shr Builder Skill (EKA)
+# EKA Shr Builder Skill
 
 Use this skill when an agent needs to build, publish, and share EKA knowledge as `shr` sharing objects.
 
