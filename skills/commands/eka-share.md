@@ -11,6 +11,20 @@ Build **shr sharing objects** — reusable snapshot copies pinned by `sourceHash
 - **EKA-to-EKA**: source is a qualified CKO (`eka/<type>:<id>`) present in the workspace (`eka get <source>` succeeds). Examples: ADR, SCP, REQ.
 - **Non-EKA spike**: source is a filesystem path to a regular codebase (not EKA). Use `--provenance audited`.
 
+## Role contract
+
+| Role | Kind | Input | Deliverable | Escalates to |
+|---|---|---|---|---|
+| architect | analysis-only | the Engineering Context Object + the proposal under discussion | architecture impact assessment: constraints in force, strata impact, dependency effects, related-knowledge landscape | primary agent |
+| backend | implementing | work item identity + context object + acceptance criteria + branch/worktree conventions | implemented change on its own branch in its own worktree, quality gates green, evidence note published | primary agent |
+| frontend | implementing | UI scope + acceptance criteria + branch/worktree conventions | implemented UI change on its own branch in its own worktree, quality gates green, evidence note published | primary agent |
+| security-review | analysis-only | the proposal/diff + its context object | security findings with severity; blocking findings gate approval | primary agent |
+| code-review | analysis-only | the proposal/diff + acceptance criteria | technical-correctness verdict with findings | primary agent |
+| product-review | analysis-only | user-facing proposal/item + product context | product, UX and holistic experience verdict (this role absorbs UX-review and holistic review-specialist duties) | primary agent |
+| qa | analysis-only (gate) | the draft/artifact + its evidence trail + conformance rules | QA verdict: conformance, state/change-log integrity, consistency, traceability | primary agent |
+| devops | implementing | infrastructure/build/CI scope + conventions | infrastructure change on its own branch in its own worktree, quality gates green, evidence note published | primary agent |
+| documenter | implementing | documentation-only scope + conventions | documentation change on its own branch in its own worktree, evidence note published | primary agent |
+
 ## Primitives (CLI ↔ MCP)
 
 | Primitive | CLI | MCP |
