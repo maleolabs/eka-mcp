@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/maleolabs/eka-core v1.9.1
+	github.com/maleolabs/eka-core v1.10.0
 	github.com/mattn/go-isatty v0.0.20
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -21,5 +21,3 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.45.0 // indirect
 )
-
-replace github.com/maleolabs/eka-core => /home/m2codeloan/m2code/maleolabs/eka/eka-core
