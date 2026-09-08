@@ -28,4 +28,18 @@ eka share --level L0 --project X --version Y --source <CKO|path> --title "..."
 # TTY prompts missing flags; non-TTY requires flags
 ```
 
+## Role contract
+
+| Role | Kind |
+|---|---|
+| architect | analysis-only |
+| backend | implementing |
+| frontend | implementing |
+| security-review | analysis-only |
+| code-review | analysis-only |
+| product-review | analysis-only |
+| qa | analysis-only |
+| devops | implementing |
+| documenter | implementing |
+
 See `eka-shr-builder` for EKA, `eka-shr-non-eka` for non-EKA L0 vs L1/L2.
