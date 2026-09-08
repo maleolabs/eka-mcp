@@ -72,6 +72,9 @@ func TestCodeContextToolRequiresRoot(t *testing.T) {
 }
 
 func (f *fakeCapability) Get(form string, noContent bool) ([]byte, error) {
+	return f.GetWithFilters(form, noContent, "", "", "")
+}
+func (f *fakeCapability) GetWithFilters(form string, noContent bool, level, project, version string) ([]byte, error) {
 	f.gotForms = append(f.gotForms, form)
 	if f.getErr != nil {
 		return nil, f.getErr
@@ -85,6 +88,9 @@ func (f *fakeCapability) Get(form string, noContent bool) ([]byte, error) {
 }
 
 func (f *fakeCapability) Domain(projectID, domain string, noContent bool) ([]byte, error) {
+	return f.DomainWithFilters(projectID, domain, noContent, "", "", "")
+}
+func (f *fakeCapability) DomainWithFilters(projectID, domain string, noContent bool, level, project, version string) ([]byte, error) {
 	if f.domainErr != nil {
 		return nil, f.domainErr
 	}

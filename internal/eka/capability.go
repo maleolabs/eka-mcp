@@ -118,6 +118,9 @@ func (c *Capability) RepoCount() (int, error) {
 // uninitialized error without leaking store paths — the MCP boundary
 // sanitizes any residual path, but the capability already avoids it.
 func (c *Capability) Get(form string, noContent bool) ([]byte, error) {
+	return c.GetWithFilters(form, noContent, "", "", "")
+}
+func (c *Capability) GetWithFilters(form string, noContent bool, level, project, version string) ([]byte, error) {
 	if !c.Exists() {
 		return nil, fmt.Errorf("eka: workspace not initialized")
 	}
@@ -127,6 +130,30 @@ func (c *Capability) Get(form string, noContent bool) ([]byte, error) {
 	}
 	if !ok {
 		return nil, fmt.Errorf("eka: no object resolves from %q", form)
+	}
+	if level != "" {
+		if lvl := shrLevelOf(u); lvl != "" && lvl != level {
+			return nil, fmt.Errorf("eka: %q level %q does not match filter level %q", form, lvl, level)
+		}
+		if lvl := shrLevelOf(u); lvl == "" {
+			return nil, fmt.Errorf("eka: --level filter only applies to shr objects, %q is not a shr", form)
+		}
+	}
+	if project != "" {
+		if proj := shrProjectOf(u); proj != "" && proj != project {
+			return nil, fmt.Errorf("eka: %q project %q does not match filter --project %q", form, proj, project)
+		}
+		if proj := shrProjectOf(u); proj == "" {
+			return nil, fmt.Errorf("eka: --project filter only applies to shr objects, %q is not a shr", form)
+		}
+	}
+	if version != "" {
+		if ver := shrVersionOf(u); ver != "" && ver != version {
+			return nil, fmt.Errorf("eka: %q version %q does not match filter --version %q", form, ver, version)
+		}
+		if ver := shrVersionOf(u); ver == "" {
+			return nil, fmt.Errorf("eka: --version filter only applies to shr objects, %q is not a shr", form)
+		}
 	}
 	doc, err := machine.NewDocument(u)
 	if err != nil {
@@ -147,12 +174,26 @@ func (c *Capability) Get(form string, noContent bool) ([]byte, error) {
 // (identity, stateVector, relationships etc. intact; "content" absent
 // per unit) for payload economy. Default false preserves full payloads.
 func (c *Capability) Domain(projectID, domain string, noContent bool) ([]byte, error) {
+	return c.DomainWithFilters(projectID, domain, noContent, "", "", "")
+}
+func (c *Capability) DomainWithFilters(projectID, domain string, noContent bool, level, project, version string) ([]byte, error) {
 	if !c.Exists() {
 		return nil, fmt.Errorf("eka: workspace not initialized")
 	}
 	units, err := c.rt.Knowledge.Search(runtime.SearchQuery{ProjectID: projectID, Domain: domain})
 	if err != nil {
 		return nil, err
+	}
+	// Deterministic dedup latest per line (parity CLI)
+	units = dedupLinesLatest(units)
+	if level != "" {
+		units = filterByShrLevel(units, level)
+	}
+	if project != "" {
+		units = filterByShrProject(units, project)
+	}
+	if version != "" {
+		units = filterByShrVersion(units, version)
 	}
 	col, err := machine.NewCollection(domain, units)
 	if err != nil {
@@ -164,6 +205,67 @@ func (c *Capability) Domain(projectID, domain string, noContent bool) ([]byte, e
 		}
 	}
 	return col.MarshalCompact()
+}
+
+
+func shrLevelOf(u *exchange.Unit) string {
+	if u.Identity.Type != "shr" { return "" }
+	if len(u.ContentPayload) == 0 { return "" }
+	var m map[string]any
+	if err := json.Unmarshal(u.ContentPayload, &m); err != nil { return "" }
+	if v, ok := m["level"].(string); ok { return strings.ToUpper(strings.TrimSpace(v)) }
+	return ""
+}
+func shrProjectOf(u *exchange.Unit) string {
+	if u.Identity.Type != "shr" { return "" }
+	if len(u.ContentPayload) == 0 { return "" }
+	var m map[string]any
+	if err := json.Unmarshal(u.ContentPayload, &m); err != nil { return "" }
+	if v, ok := m["sourceProject"].(string); ok { return strings.TrimSpace(v) }
+	return ""
+}
+func shrVersionOf(u *exchange.Unit) string {
+	if u.Identity.Type != "shr" { return "" }
+	if len(u.ContentPayload) == 0 { return "" }
+	var m map[string]any
+	if err := json.Unmarshal(u.ContentPayload, &m); err != nil { return "" }
+	if v, ok := m["sourceVersion"].(string); ok { return strings.TrimSpace(v) }
+	return ""
+}
+func filterByShrLevel(units []*exchange.Unit, lvl string) []*exchange.Unit {
+	out := make([]*exchange.Unit, 0, len(units))
+	for _, u := range units { if shrLevelOf(u) == lvl { out = append(out, u) } }
+	return out
+}
+func filterByShrProject(units []*exchange.Unit, proj string) []*exchange.Unit {
+	out := make([]*exchange.Unit, 0, len(units))
+	for _, u := range units { if shrProjectOf(u) == proj { out = append(out, u) } }
+	return out
+}
+func filterByShrVersion(units []*exchange.Unit, ver string) []*exchange.Unit {
+	out := make([]*exchange.Unit, 0, len(units))
+	for _, u := range units { if shrVersionOf(u) == ver { out = append(out, u) } }
+	return out
+}
+func dedupLinesLatest(units []*exchange.Unit) []*exchange.Unit {
+	byKey := make(map[string]*exchange.Unit)
+	for _, u := range units {
+		key := u.Identity.Namespace + "/" + u.Identity.Type + ":" + u.Identity.ID
+		cur, ok := byKey[key]
+		if !ok || u.Identity.InstanceVersion > cur.Identity.InstanceVersion { byKey[key] = u }
+	}
+	out := make([]*exchange.Unit, 0, len(byKey))
+	for _, u := range byKey { out = append(out, u) }
+	// Sort by canonical form for determinism
+	// Use simple string compare
+	for i := 0; i < len(out); i++ {
+		for j := i+1; j < len(out); j++ {
+			if out[j].CanonicalIdentityForm < out[i].CanonicalIdentityForm {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out
 }
 
 // Status returns the aggregated workspace status as JSON (eka-core's

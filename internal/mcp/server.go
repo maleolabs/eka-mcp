@@ -111,21 +111,27 @@ var toolDescriptors = []toolDescriptor{
 		Name:        "get",
 		RiskClass:   RiskRead,
 		Required:    []string{"form"},
-		Description: "Fetch one Canonical Knowledge Object (CKO) by identity form: canonical \"<ns>/<type>:<id>:<v>\" or qualified line form \"<ns>/<type>:<id>\" (the latest instance of the line). Returns the machine document (schema eka-cko-v2). Supports noContent:true to strip the content payload via machine.Document.StripContent at parity with CLI --no-content (content absent, identity/stateVector/relationships intact) for payload economy. Default false (full payloads).",
+		Description: "Fetch one Canonical Knowledge Object (CKO) by identity form: canonical \"<ns>/<type>:<id>:<v>\" or qualified line form \"<ns>/<type>:<id>\" (the latest instance of the line). Returns the machine document (schema eka-cko-v2). Supports noContent:true to strip the content payload via machine.Document.StripContent at parity with CLI --no-content (content absent, identity/stateVector/relationships intact) for payload economy. Default false (full payloads). Also supports shr filters --level/--project/--version server-side (parity CLI get --level/--project/--version).",
 		Properties: map[string]any{
 			"form":      map[string]any{"type": "string", "minLength": 1, "description": "Identity form to resolve, e.g. \"feather/adr:001-serialization:1\"."},
 			"noContent": map[string]any{"type": "boolean", "description": "When true, strips the content payload via machine.Document.StripContent (identity/stateVector/relationships intact, content absent) — parity with CLI --no-content. Default false (full payloads)."},
+			"level":     map[string]any{"type": "string", "enum": []string{"L0","L1","L2"}, "description": "Shr only: filter by level L0|L1|L2 — server-side (parity CLI --level)."},
+			"project":   map[string]any{"type": "string", "description": "Shr only: filter by sourceProject per-project identifier (parity CLI --project)."},
+			"version":   map[string]any{"type": "string", "description": "Shr only: filter by sourceVersion semver (parity CLI --version)."},
 		},
 	},
 	{
 		Name:        "domain",
 		RiskClass:   RiskRead,
 		Required:    []string{"projectId", "domain"},
-		Description: "Return every unit of one Engineering Domain of a project as a machine collection (schema eka-cko-v2, sorted by canonical form). Supports noContent:true to strip each unit's content payload via machine.Document.StripContent at parity with CLI --no-content (content absent per unit, identity/stateVector/relationships intact) for payload economy. Default false (full payloads).",
+		Description: "Return every unit of one Engineering Domain of a project as a machine collection (schema eka-cko-v2, sorted by canonical form). Supports noContent:true to strip each unit's content payload via machine.Document.StripContent at parity with CLI --no-content (content absent per unit, identity/stateVector/relationships intact) for payload economy. Default false (full payloads). Also supports shr filters --level/--project/--version server-side (parity CLI).",
 		Properties: map[string]any{
 			"projectId": map[string]any{"type": "string", "minLength": 1, "description": "The project the knowledge belongs to."},
 			"domain":    map[string]any{"type": "string", "enum": []string{"Architecture", "Planning", "Execution", "Operations", "Knowledge"}, "description": "The canonical Engineering Domain name, e.g. \"Architecture\"."},
 			"noContent": map[string]any{"type": "boolean", "description": "When true, strips each unit's content payload via machine.Document.StripContent (identity/stateVector/relationships intact, content absent per unit) — parity with CLI --no-content. Default false (full payloads)."},
+			"level":     map[string]any{"type": "string", "enum": []string{"L0","L1","L2"}, "description": "Shr only: filter by level L0|L1|L2 — server-side (parity CLI --level)."},
+			"project":   map[string]any{"type": "string", "description": "Shr only: filter by sourceProject per-project identifier."},
+			"version":   map[string]any{"type": "string", "description": "Shr only: filter by sourceVersion semver."},
 		},
 	},
 	{
@@ -641,12 +647,14 @@ type Capability interface {
 	// machine.Document.StripContent at parity with CLI --no-content
 	// (content absent, identity/stateVector/relationships intact).
 	Get(form string, noContent bool) ([]byte, error)
+	GetWithFilters(form string, noContent bool, level, project, version string) ([]byte, error)
 	// Domain returns one Engineering Domain's units of a project as a
 	// machine collection. When noContent is true each unit's content
 	// payload is stripped via StripContent at parity with CLI
 	// --no-content (content absent per unit, identity/stateVector/
 	// relationships intact).
 	Domain(projectID, domain string, noContent bool) ([]byte, error)
+	DomainWithFilters(projectID, domain string, noContent bool, level, project, version string) ([]byte, error)
 	// Status returns the workspace status as JSON.
 	Status() ([]byte, error)
 	StatusWithAll(all bool) ([]byte, error)
@@ -1265,11 +1273,20 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 		var p struct {
 			Form      string `json:"form"`
 			NoContent bool   `json:"noContent"`
+			Level     string `json:"level"`
+			Project   string `json:"project"`
+			Version   string `json:"version"`
 		}
 		if err := s.decodeToolArgs("get", args, &p); err != nil {
 			return "", err
 		}
-		data, err := s.cap.Get(p.Form, p.NoContent)
+		var data []byte
+		var err error
+		if p.Level != "" || p.Project != "" || p.Version != "" {
+			data, err = s.cap.GetWithFilters(p.Form, p.NoContent, p.Level, p.Project, p.Version)
+		} else {
+			data, err = s.cap.Get(p.Form, p.NoContent)
+		}
 		if err != nil {
 			return "", err
 		}
@@ -1279,11 +1296,20 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			ProjectID string `json:"projectId"`
 			Domain    string `json:"domain"`
 			NoContent bool   `json:"noContent"`
+			Level     string `json:"level"`
+			Project   string `json:"project"`
+			Version   string `json:"version"`
 		}
 		if err := s.decodeToolArgs("domain", args, &p); err != nil {
 			return "", err
 		}
-		data, err := s.cap.Domain(p.ProjectID, p.Domain, p.NoContent)
+		var data []byte
+		var err error
+		if p.Level != "" || p.Project != "" || p.Version != "" {
+			data, err = s.cap.DomainWithFilters(p.ProjectID, p.Domain, p.NoContent, p.Level, p.Project, p.Version)
+		} else {
+			data, err = s.cap.Domain(p.ProjectID, p.Domain, p.NoContent)
+		}
 		if err != nil {
 			return "", err
 		}

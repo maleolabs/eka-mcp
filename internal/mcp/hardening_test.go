@@ -192,10 +192,16 @@ func TestResourceReadErrorSanitized(t *testing.T) {
 type failingStatusCapability struct{}
 
 func (f *failingStatusCapability) Get(form string, noContent bool) ([]byte, error) {
+	return f.GetWithFilters(form, noContent, "", "", "")
+}
+func (f *failingStatusCapability) GetWithFilters(form string, noContent bool, level, project, version string) ([]byte, error) {
 	return nil, errors.New("unreachable")
 }
 
 func (f *failingStatusCapability) Domain(projectID, domain string, noContent bool) ([]byte, error) {
+	return f.DomainWithFilters(projectID, domain, noContent, "", "", "")
+}
+func (f *failingStatusCapability) DomainWithFilters(projectID, domain string, noContent bool, level, project, version string) ([]byte, error) {
 	return nil, errors.New("unreachable")
 }
 

@@ -69,3 +69,34 @@ Agent can discover `shr` via `eca get/domain` and fetch `title`/`description`/`l
 ## References
 - `cmd/shr.go` (builder)
 - `cmd/get.go` (server-side --level)
+
+## Clarified (knowledge-sharing-clarified, per follow-up)
+
+### Per-project identifier
+- `sourceProject` / `sourceVersion` captured from `eka.yaml` (EKA, derived via resolveNewScope, not hardcode `eka`) or asked for non-EKA (CLI asks, MCP via --project)
+- `eka get operations --type shr --level L0 --project my-app --version 1.2.3` — server-side filters `level` + `project` + `version` (also identity `eka/shr:<id> --level/--project/--version` strict match)
+- `sourceNamespace` derived from target project, not source repo
+- Semver immutability: 3-part `X.Y.Z` major immutable, 2-part `X.Y` minor immutable — enforced on `shr build`/`delete` (collision exit 1, `--force` override for correction)
+- EKA vs non-EKA detection: check `eka.yaml` exists; EKA uses `eka.yaml` project/namespace, non-EKA asks user for project id
+
+### Dedicated shr export/import (ekapkg RSF, type distinction)
+- `eka shr export eka/shr:<id> -o <file>.ekapkg` — deterministic RSF package `type=shared` (not reuse `eka export`)
+- `eka shr import <file>.ekapkg` — restores share in other workspace with correct level/provenance, type `shared` vs `live KMS` preserved
+
+### Delete shared knowledge
+- `eka shr delete eka/shr:<id> --yes/--force` or `eka shr delete --project <name> --version <v> --level L0 --yes`
+- Requires confirmation (`--yes`/`--force`), respects immutability but allows `--force` correction, does not disturb other references
+
+### Deep audit (non-EKA) level-adjusted
+- `L0` shallow fast (file list, 200 cap, skip .git/node_modules/.eka)
+- `L1/L2` deep scan docs (.md) + codegraph (.go/.ts/.js/.py/.yaml) + sensitivity redaction (.env/secret/.pem filtered), 1MiB snapshot guard
+- `auditNonEKAPathLevel(root, level)` — hash pinned per level
+
+### Skills split & interactive share
+- `eka-shr-builder` (EKA) vs `eka-shr-non-eka` (non-EKA deep audit) — both English, `eka-` prefix, discoverable via `eka://skills/eka-shr-builder` & `eka://skills/eka-shr-non-eka` (MCP) and `eka get operations --type shr`
+- General command `eka share` (interactive Q&A: level, identifier project+version, provenance, title, export choice) — `isTerminal` prompt, not conflicting with skill name
+
+### MCP parity
+- `get`/`domain` tools now expose `level`, `project`, `version` (parity CLI `--level/--project/--version`)
+- Agents can scan `shr` without cloning source repo via `domain` + `get` with shr filters
+

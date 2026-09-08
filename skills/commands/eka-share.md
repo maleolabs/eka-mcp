@@ -91,3 +91,14 @@ eka validate  # optional, R0-R13
 ```
 
 If `--level` mismatches → `eka: get: ... level "Lx" does not match filter --level "Ly"` (exit 2). Collision on `shr build` with existing id → `exit 1`.
+
+## Clarified additions (knowledge-sharing-clarified)
+
+- Per-project: `eka shr build <source> --level L0 --project my-app` captures `sourceProject`/`sourceVersion` (from eka.yaml or asked), `eka get operations --type shr --level L0 --project my-app --version 1.2.3` server-side filters (CLI & MCP parity)
+- Namespace derived from target project via resolveNewScope, not hardcode `eka`; EKA vs non-EKA detection via `eka.yaml` existence
+- Dedicated: `eka shr export eka/shr:<id> -o <file>.ekapkg` (type `shared`) & `eka shr import <file>.ekapkg` (type `shared` vs `live KMS` preserved) — not reuse `eka export`/`import`
+- Delete: `eka shr delete eka/shr:<id> --yes` or `eka shr delete --project <name> --version <v> --level L0 --yes` (respect semver immutability, `--force` override)
+- Deep audit: L0 shallow vs L1/L2 deep scan docs+codegraph+redaction (see eka-shr-non-eka)
+- Interactive: `eka share` Q&A (level, identifier project+version, provenance, title, export choice) via isTerminal — skills `eka-shr-builder` (EKA) & `eka-shr-non-eka` (non-EKA) both English eka- prefix
+- MCP: `get`/`domain` now support `level`/`project`/`version` filters, scan without source repo
+
