@@ -115,7 +115,7 @@ var toolDescriptors = []toolDescriptor{
 		Properties: map[string]any{
 			"form":      map[string]any{"type": "string", "minLength": 1, "description": "Identity form to resolve, e.g. \"feather/adr:001-serialization:1\"."},
 			"noContent": map[string]any{"type": "boolean", "description": "When true, strips the content payload via machine.Document.StripContent (identity/stateVector/relationships intact, content absent) — parity with CLI --no-content. Default false (full payloads)."},
-			"level":     map[string]any{"type": "string", "enum": []string{"L0","L1","L2"}, "description": "Shr only: filter by level L0|L1|L2 — server-side (parity CLI --level)."},
+			"level":     map[string]any{"type": "string", "enum": []string{"L0", "L1", "L2"}, "description": "Shr only: filter by level L0|L1|L2 — server-side (parity CLI --level)."},
 			"project":   map[string]any{"type": "string", "description": "Shr only: filter by sourceProject per-project identifier (parity CLI --project)."},
 			"version":   map[string]any{"type": "string", "description": "Shr only: filter by sourceVersion semver (parity CLI --version)."},
 		},
@@ -129,7 +129,7 @@ var toolDescriptors = []toolDescriptor{
 			"projectId": map[string]any{"type": "string", "minLength": 1, "description": "The project the knowledge belongs to."},
 			"domain":    map[string]any{"type": "string", "enum": []string{"Architecture", "Planning", "Execution", "Operations", "Knowledge"}, "description": "The canonical Engineering Domain name, e.g. \"Architecture\"."},
 			"noContent": map[string]any{"type": "boolean", "description": "When true, strips each unit's content payload via machine.Document.StripContent (identity/stateVector/relationships intact, content absent per unit) — parity with CLI --no-content. Default false (full payloads)."},
-			"level":     map[string]any{"type": "string", "enum": []string{"L0","L1","L2"}, "description": "Shr only: filter by level L0|L1|L2 — server-side (parity CLI --level)."},
+			"level":     map[string]any{"type": "string", "enum": []string{"L0", "L1", "L2"}, "description": "Shr only: filter by level L0|L1|L2 — server-side (parity CLI --level)."},
 			"project":   map[string]any{"type": "string", "description": "Shr only: filter by sourceProject per-project identifier."},
 			"version":   map[string]any{"type": "string", "description": "Shr only: filter by sourceVersion semver."},
 		},

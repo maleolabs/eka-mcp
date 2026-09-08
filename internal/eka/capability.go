@@ -207,44 +207,79 @@ func (c *Capability) DomainWithFilters(projectID, domain string, noContent bool,
 	return col.MarshalCompact()
 }
 
-
 func shrLevelOf(u *exchange.Unit) string {
-	if u.Identity.Type != "shr" { return "" }
-	if len(u.ContentPayload) == 0 { return "" }
+	if u.Identity.Type != "shr" {
+		return ""
+	}
+	if len(u.ContentPayload) == 0 {
+		return ""
+	}
 	var m map[string]any
-	if err := json.Unmarshal(u.ContentPayload, &m); err != nil { return "" }
-	if v, ok := m["level"].(string); ok { return strings.ToUpper(strings.TrimSpace(v)) }
+	if err := json.Unmarshal(u.ContentPayload, &m); err != nil {
+		return ""
+	}
+	if v, ok := m["level"].(string); ok {
+		return strings.ToUpper(strings.TrimSpace(v))
+	}
 	return ""
 }
 func shrProjectOf(u *exchange.Unit) string {
-	if u.Identity.Type != "shr" { return "" }
-	if len(u.ContentPayload) == 0 { return "" }
+	if u.Identity.Type != "shr" {
+		return ""
+	}
+	if len(u.ContentPayload) == 0 {
+		return ""
+	}
 	var m map[string]any
-	if err := json.Unmarshal(u.ContentPayload, &m); err != nil { return "" }
-	if v, ok := m["sourceProject"].(string); ok { return strings.TrimSpace(v) }
+	if err := json.Unmarshal(u.ContentPayload, &m); err != nil {
+		return ""
+	}
+	if v, ok := m["sourceProject"].(string); ok {
+		return strings.TrimSpace(v)
+	}
 	return ""
 }
 func shrVersionOf(u *exchange.Unit) string {
-	if u.Identity.Type != "shr" { return "" }
-	if len(u.ContentPayload) == 0 { return "" }
+	if u.Identity.Type != "shr" {
+		return ""
+	}
+	if len(u.ContentPayload) == 0 {
+		return ""
+	}
 	var m map[string]any
-	if err := json.Unmarshal(u.ContentPayload, &m); err != nil { return "" }
-	if v, ok := m["sourceVersion"].(string); ok { return strings.TrimSpace(v) }
+	if err := json.Unmarshal(u.ContentPayload, &m); err != nil {
+		return ""
+	}
+	if v, ok := m["sourceVersion"].(string); ok {
+		return strings.TrimSpace(v)
+	}
 	return ""
 }
 func filterByShrLevel(units []*exchange.Unit, lvl string) []*exchange.Unit {
 	out := make([]*exchange.Unit, 0, len(units))
-	for _, u := range units { if shrLevelOf(u) == lvl { out = append(out, u) } }
+	for _, u := range units {
+		if shrLevelOf(u) == lvl {
+			out = append(out, u)
+		}
+	}
 	return out
 }
 func filterByShrProject(units []*exchange.Unit, proj string) []*exchange.Unit {
 	out := make([]*exchange.Unit, 0, len(units))
-	for _, u := range units { if shrProjectOf(u) == proj { out = append(out, u) } }
+	for _, u := range units {
+		if shrProjectOf(u) == proj {
+			out = append(out, u)
+		}
+	}
 	return out
 }
 func filterByShrVersion(units []*exchange.Unit, ver string) []*exchange.Unit {
 	out := make([]*exchange.Unit, 0, len(units))
-	for _, u := range units { if shrVersionOf(u) == ver { out = append(out, u) } }
+	for _, u := range units {
+		if shrVersionOf(u) == ver {
+			out = append(out, u)
+		}
+	}
 	return out
 }
 func dedupLinesLatest(units []*exchange.Unit) []*exchange.Unit {
@@ -252,14 +287,18 @@ func dedupLinesLatest(units []*exchange.Unit) []*exchange.Unit {
 	for _, u := range units {
 		key := u.Identity.Namespace + "/" + u.Identity.Type + ":" + u.Identity.ID
 		cur, ok := byKey[key]
-		if !ok || u.Identity.InstanceVersion > cur.Identity.InstanceVersion { byKey[key] = u }
+		if !ok || u.Identity.InstanceVersion > cur.Identity.InstanceVersion {
+			byKey[key] = u
+		}
 	}
 	out := make([]*exchange.Unit, 0, len(byKey))
-	for _, u := range byKey { out = append(out, u) }
+	for _, u := range byKey {
+		out = append(out, u)
+	}
 	// Sort by canonical form for determinism
 	// Use simple string compare
 	for i := 0; i < len(out); i++ {
-		for j := i+1; j < len(out); j++ {
+		for j := i + 1; j < len(out); j++ {
 			if out[j].CanonicalIdentityForm < out[i].CanonicalIdentityForm {
 				out[i], out[j] = out[j], out[i]
 			}
