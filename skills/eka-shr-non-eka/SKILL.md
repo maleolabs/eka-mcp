@@ -1,28 +1,31 @@
 ---
 name: eka-shr-non-eka
-description: Non-EKA deep audit shr skill — audit filesystem codebase for non-EKA sharing, level-adjusted deep scan
+description: Audits non-EKA filesystem codebases into shr via level-adjusted deep scan — use when source is directory and eka.yaml missing, L0 shallow vs L1/L2 docs+codegraph+redaction.
 ---
 
-# EKA Shr Non-EKA
-
-Audit a non-EKA codebase (filesystem path) into shr with level-adjusted deep audit. English, eka- prefix, discoverable via MCP.
-
-## Levels (deep audit adjusted to target level)
-- `L0` shallow OK — file list only, fast, 500 cap, skip .git/node_modules/.eka/dist
-- `L1/L2` deep scan — docs (.md) + codegraph (.go/.ts/.js/.py/.yaml, 100 files) + sensitivity redaction (.env/secret/.pem filtered), 1000 cap, snapshot 1MiB guard, hash pinned per level
-
-## Usage (provenance audited)
-```sh
-eka shr build /path/to/codebase --provenance audited --level L0 --id share-codebase-l0
-eka shr build /path/to/codebase --provenance audited --levels L0,L1 --id share-codebase
-eka publish eka/shr:share-codebase-l0
-eka get operations --type shr --level L0 --project my-app   # scan via MCP without source repo
-```
-
-## Implementation
-- `auditNonEKAPathLevel(root, level)` — branching on level, redaction, docs/codegraph sample
-- MCP `get`/`domain` with `project`/`version`/`level` filters work for audited shr too (`sourceProject` from CLI --project or eka.yaml fallback)
-- Skills split: this skill for non-EKA, `eka-shr-builder` for EKA — both English
+# Auditing non-EKA codebases
 
 ## When to use
-- Source is directory path (not CKO), eka.yaml missing → ask user for project id (non-EKA), not hardcode `eka`
+Source is directory path (not CKO). `eka.yaml` missing → asks `project` id (not hardcode `eka`).
+
+## Run exactly
+```bash
+eka shr build /path/to/code --provenance audited --level L0 --id share-<base>-l0
+eka shr build /path/to/code --provenance audited --levels L0,L1
+eka publish <ns>/shr:<id>
+```
+
+## Levels
+| Level | Scan | Cap | Files |
+|---|---|---|---|
+| L0 | file list only | 500 | skip .git/node_modules/.eka/dist |
+| L1/L2 | +docs(.md)+codegraph(.go/.ts/.js/.py/.yaml) + redaction(.env/secret/.pem) | 1000, 1 MiB guard | hash pinned per level |
+
+See `references/audit-levels.md` for sample truncation.
+
+## Scan (MCP parity)
+```bash
+eka get operations --type shr --level L0 --project my-app
+```
+
+For EKA CKO, see `eka-shr-builder`.

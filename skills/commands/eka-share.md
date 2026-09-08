@@ -1,104 +1,31 @@
 ---
-description: Build and publish shr sharing objects — EKA-to-EKA and audited non-EKA spike, reusable for agents. Opt-in L0/L1/L2, batch --levels, server-side filtering, and publish flow.
+description: Builds shr sharing objects via CLI — use when creating L0-L2 snapshots from EKA CKO or audited filesystem codebase, with server-side filtering and publish flow.
 ---
 
-# EKA Shr Build
+# Shr sharing via CLI
 
-Build **shr sharing objects** — reusable snapshot copies pinned by `sourceHash` + `level` + `provenance` — for both EKA and non-EKA codebases. This command is a **reusable prompt** for agents: when to build, which flags to use, and how to publish so objects can be scanned via MCP without the source repo.
-
-## When to build
-
-- **EKA-to-EKA**: source is a qualified CKO (`eka/<type>:<id>`) present in the workspace (`eka get <source>` succeeds). Examples: ADR, SCP, REQ.
-- **Non-EKA spike**: source is a filesystem path to a regular codebase (not EKA). Use `--provenance audited`.
-
-## Role contract
-
-| Role | Kind | Input | Deliverable | Escalates to |
-|---|---|---|---|---|
-| architect | analysis-only | the Engineering Context Object + the proposal under discussion | architecture impact assessment: constraints in force, strata impact, dependency effects, related-knowledge landscape | primary agent |
-| backend | implementing | work item identity + context object + acceptance criteria + branch/worktree conventions | implemented change on its own branch in its own worktree, quality gates green, evidence note published | primary agent |
-| frontend | implementing | UI scope + acceptance criteria + branch/worktree conventions | implemented UI change on its own branch in its own worktree, quality gates green, evidence note published | primary agent |
-| security-review | analysis-only | the proposal/diff + its context object | security findings with severity; blocking findings gate approval | primary agent |
-| code-review | analysis-only | the proposal/diff + acceptance criteria | technical-correctness verdict with findings | primary agent |
-| product-review | analysis-only | user-facing proposal/item + product context | product, UX and holistic experience verdict (this role absorbs UX-review and holistic review-specialist duties) | primary agent |
-| qa | analysis-only (gate) | the draft/artifact + its evidence trail + conformance rules | QA verdict: conformance, state/change-log integrity, consistency, traceability | primary agent |
-| devops | implementing | infrastructure/build/CI scope + conventions | infrastructure change on its own branch in its own worktree, quality gates green, evidence note published | primary agent |
-| documenter | implementing | documentation-only scope + conventions | documentation change on its own branch in its own worktree, evidence note published | primary agent |
-
-## Primitives (CLI ↔ MCP)
-
-| Primitive | CLI | MCP |
-|---|---|---|
-| get (identity/domain) | `eka get <form> [--level L0|L1|L2]` | `get` / `domain` |
-| shr build | `eka shr build <source> --level L0 --provenance extracted|audited` | — (via CLI) |
-| publish | `eka publish <ns>/shr:<id>` | `publish` |
-| status/sync | `eka status`, `eka sync push` | `status` |
-
-## Primary flags
-
-- `--level L0|L1|L2` — opt-in, required for single build
-- `--levels L0,L1,L2` — batch 1–3 shr at once (deduped, mutually exclusive with `--level`)
-- `--provenance extracted` (default, EKA) | `audited` (non-EKA spike, source is directory path)
-- `--id <shr-id>` — bare id, normalized to lowercase-hyphen (default `share-<source-id>-<level>` or `share-<basename>-<level>` for audited)
-- `--title` / `--description` — default derived from source + short hash
-
-Levels: `L0` metadata only, `L1` + safe summary/structure, `L2` + full snapshot (guarded 1 MiB).
-
-Hardening: IDs normalized, L1/L2 dedup via `buildCommonShrFields`, snapshot guard, collision exits `1` (fail) not `2` (usage), `domainTokens` via registry + alias `records → Operations`.
-
-## Reusable flow (copy-paste for agents)
-
-### EKA-to-EKA
-```sh
-eka status && eka sync
-eka get eka/adr:sharing-object-model   # verify source exists
-eka shr build eka/adr:sharing-object-model --level L0 --id my-share
-eka shr build eka/adr:sharing-object-model --levels L0,L1,L2
-eka publish eka/shr:my-share-l0
-eka get eka/shr:my-share-l0 --level L0        # strict filter
-eka get operations --level L0 --type shr      # scan without source repo
+## Run exactly
+```bash
+eka shr build <source> --level L0 --id <shr-id>
+eka shr build <source> --levels L0,L1,L2
+eka publish <ns>/shr:<id>
+eka shr export <ns>/shr:<id> -o <file>.ekapkg  # type shared
+eka shr import <file>.ekapkg
+eka shr delete <ns>/shr:<id> --yes --force
 ```
 
-### Non-EKA audited (spike)
-```sh
-eka shr build /path/to/codebase --level L0 --provenance audited --id share-codebase-l0
-eka shr build /path/to/codebase --levels L0,L1 --provenance audited
-eka publish eka/shr:share-codebase-l0
-eka get operations --level L0                # agent scans title/description via content fields
+## Flags
+| Flag | Use |
+|---|---|
+| `--level L0\|L1\|L2` | single, required |
+| `--levels L0,L1,L2` | batch 1–3, suffix -l0/-l1/-l2 |
+| `--provenance extracted\|audited` | `audited` = directory path |
+| `--project/--version` | per-project, see `references/semver-immutability.md` |
+
+## Interactive
+```bash
+eka share --level L0 --project X --version Y --source <CKO|path> --title "..."
+# TTY prompts missing flags; non-TTY requires flags
 ```
 
-## Server-side filtering (MCP-friendly)
-
-```sh
-eka get operations --level L0
-eka get records --level L0          # alias records → Operations
-eka get eka/shr:my-share-l0 --level L0
-```
-
-MCP `get`/`domain` expose the same `--level` filter — agents can scan `shr` without cloning the source repo (use `get operations --level L0 --no-content` to save tokens, then `get` identity for `title`/`description`/`level`/`provenance`).
-
-## Skill to load
-
-Load the `eka-shr-builder` skill for full guidance (level semantics, batch, guard):
-- Install: `eka-mcp configure --with-skills` or `eka-mcp configure --target opencode|claude|codex --with-skills`
-- MCP resource: `eka://skills/eka-shr-builder`
-
-## Validation before publish
-
-```sh
-eka get eka/shr:<id> --level L0
-eka validate  # optional, R0-R13
-```
-
-If `--level` mismatches → `eka: get: ... level "Lx" does not match filter --level "Ly"` (exit 2). Collision on `shr build` with existing id → `exit 1`.
-
-## Clarified additions (knowledge-sharing-clarified)
-
-- Per-project: `eka shr build <source> --level L0 --project my-app` captures `sourceProject`/`sourceVersion` (from eka.yaml or asked), `eka get operations --type shr --level L0 --project my-app --version 1.2.3` server-side filters (CLI & MCP parity)
-- Namespace derived from target project via resolveNewScope, not hardcode `eka`; EKA vs non-EKA detection via `eka.yaml` existence
-- Dedicated: `eka shr export eka/shr:<id> -o <file>.ekapkg` (type `shared`) & `eka shr import <file>.ekapkg` (type `shared` vs `live KMS` preserved) — not reuse `eka export`/`import`
-- Delete: `eka shr delete eka/shr:<id> --yes` or `eka shr delete --project <name> --version <v> --level L0 --yes` (respect semver immutability, `--force` override)
-- Deep audit: L0 shallow vs L1/L2 deep scan docs+codegraph+redaction (see eka-shr-non-eka)
-- Interactive: `eka share` Q&A (level, identifier project+version, provenance, title, export choice) via isTerminal — skills `eka-shr-builder` (EKA) & `eka-shr-non-eka` (non-EKA) both English eka- prefix
-- MCP: `get`/`domain` now support `level`/`project`/`version` filters, scan without source repo
-
+See `eka-shr-builder` for EKA, `eka-shr-non-eka` for non-EKA L0 vs L1/L2.
