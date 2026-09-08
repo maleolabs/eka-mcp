@@ -1,13 +1,13 @@
 ---
 name: eka-shr-builder
-description: Builds shr snapshots (L0-L2, pinned sourceHash) for EKA CKO and audited filesystem codebases — use when sharing knowledge without cloning source or when publishing L0-L2 levels via CLI/MCP.
+description: Builds shr snapshots (L0-L2, pinned sourceHash) for any EKA project using eka as KMS (any repo with eka.yaml) and audited filesystem codebases — use when sharing knowledge without cloning source or publishing L0-L2 via CLI/MCP.
 ---
 
-# Building shr snapshots
+# Building shr snapshots (EKA-to-EKA = any project with eka.yaml)
 
 ## When to use
-- Source is qualified CKO (`<ns>/<type>:<id>`) — `eka get <source>` succeeds
-- Source is directory — use `--provenance audited` and see `eka-shr-non-eka` for L0 vs L1/L2
+- **EKA** (any project with `eka.yaml`, not just `project eka`): source is qualified CKO (`<ns>/<type>:<id>`) — `eka get <source>` succeeds → extract from live KMS (no FS scan), except **L2 deep scan** for API contracts
+- **Non-EKA** (no `eka.yaml`): source is directory path → `eka-shr-non-eka` (L0 shallow vs L1/L2 deep scan)
 
 ## Run exactly (low-freedom)
 ```bash
@@ -19,16 +19,21 @@ eka publish <ns>/shr:<id>
 ## Flags
 | Flag | Values | Note |
 |---|---|---|
-| `--level` | `L0\|L1\|L2` required | `L0` meta, `L1` +summary, `L2` +snapshot (see `references/shr-levels.md`) |
-| `--levels` | `L0,L1,L2` batch | 1–3 shr, suffix `-l0/-l1/-l2`, mutually exclusive with `--level` |
-| `--provenance` | `extracted` (EKA), `audited` (non-EKA) | audited scans directory |
-| `--project/--version` | `sourceProject`/`sourceVersion` | from `eka.yaml` (EKA) or asked (non-EKA); see `references/semver-immutability.md` |
+| `--level` | `L0\|L1\|L2` required | `L0` meta, `L1` +summary, `L2` +snapshot + **deepDocs** (EKA L2 scans `docs/spec/api`) |
+| `--levels` | `L0,L1,L2` batch | 1–3 shr, suffix `-l0/-l1/-l2` |
+| `--provenance` | `extracted` (EKA), `audited` (non-EKA path) | auto-hint if path has `eka.yaml` → should be CKO |
+| `--project/--version` | `sourceProject`/`sourceVersion` | from `eka.yaml` (any EKA project) via `resolveNewScope`; semver: 3-part major immutable, 2-part minor |
 
 ## Scan without source (MCP parity)
 ```bash
 eka get operations --type shr --level L0 --project my-app --version 1.2.3
 eka get <ns>/shr:<id> --level L0 --project X --version Y
-# MCP: tools `get`/`domain` with `level/project/version`
 ```
 
-See `references/shr-filters.md` for strict vs domain filtering. For non-EKA deep audit detail, see `eka-shr-non-eka`.
+See `references/shr-levels.md` for payload, `references/semver-immutability.md` for version, `references/eka-l2-deep.md` for EKA L2 deepDocs.
+
+## EKA vs non-EKA (clarified)
+- **EKA** = any repo with `eka.yaml` (KMS live) → `extract` from KMS (no FS scan) except L2 deepDocs
+- **Non-EKA** = no `eka.yaml` → ask `project` id, `audited` spike with level-adjusted scan
+
+For non-EKA detail see `eka-shr-non-eka`.
