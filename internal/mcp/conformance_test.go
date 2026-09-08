@@ -867,9 +867,15 @@ type failingFeedbackCapability struct {
 }
 
 func (f *failingFeedbackCapability) Get(form string, noContent bool) ([]byte, error) {
+	return f.GetWithFilters(form, noContent, "", "", "")
+}
+func (f *failingFeedbackCapability) GetWithFilters(form string, noContent bool, level, project, version string) ([]byte, error) {
 	return nil, nil
 }
 func (f *failingFeedbackCapability) Domain(p, d string, noContent bool) ([]byte, error) {
+	return f.DomainWithFilters(p, d, noContent, "", "", "")
+}
+func (f *failingFeedbackCapability) DomainWithFilters(p, d string, noContent bool, level, project, version string) ([]byte, error) {
 	return nil, nil
 }
 func (f *failingFeedbackCapability) Status() ([]byte, error) {
@@ -927,9 +933,15 @@ type failingAssignmentCapability struct {
 }
 
 func (f *failingAssignmentCapability) Get(form string, noContent bool) ([]byte, error) {
+	return f.GetWithFilters(form, noContent, "", "", "")
+}
+func (f *failingAssignmentCapability) GetWithFilters(form string, noContent bool, level, project, version string) ([]byte, error) {
 	return nil, nil
 }
 func (f *failingAssignmentCapability) Domain(p, d string, noContent bool) ([]byte, error) {
+	return f.DomainWithFilters(p, d, noContent, "", "", "")
+}
+func (f *failingAssignmentCapability) DomainWithFilters(p, d string, noContent bool, level, project, version string) ([]byte, error) {
 	return nil, nil
 }
 func (f *failingAssignmentCapability) Status() ([]byte, error) {
@@ -990,9 +1002,15 @@ type failingSyncPushCapability struct {
 }
 
 func (f *failingSyncPushCapability) Get(form string, noContent bool) ([]byte, error) {
+	return f.GetWithFilters(form, noContent, "", "", "")
+}
+func (f *failingSyncPushCapability) GetWithFilters(form string, noContent bool, level, project, version string) ([]byte, error) {
 	return nil, nil
 }
 func (f *failingSyncPushCapability) Domain(p, d string, noContent bool) ([]byte, error) {
+	return f.DomainWithFilters(p, d, noContent, "", "", "")
+}
+func (f *failingSyncPushCapability) DomainWithFilters(p, d string, noContent bool, level, project, version string) ([]byte, error) {
 	return nil, nil
 }
 func (f *failingSyncPushCapability) Status() ([]byte, error) {
