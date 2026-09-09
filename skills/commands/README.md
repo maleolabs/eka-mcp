@@ -74,11 +74,11 @@ The `caveman` skill is a *communication-mode* skill: it injects a persistent com
 
 The execution command must survive interruptions (credit/context limits, network loss, machine shutdown) without losing context. The architecture, in three rules:
 
-1. **State on disk, not in context.** Item states live in the EKA store (moved by `eka transition`), work lives in git worktrees, position lives in `.eka/execution-state.md`. Conversation memory is disposable.
+1. **State on disk, not in context.** Item states live in the EKA store (moved by `eka transition`), work lives in git worktrees, position lives in `.eka/execution-state.md` (dual-written to the `<ns>/ses:execution-state` CKO after every checkpoint — ADR-037). Conversation memory is disposable.
 2. **Resume = re-derive, never remember.** `eka get`/`eka context` are deterministic — a resume reconstructs the working context from the store + checkpoint with zero dependency on the previous transcript. This is the property that makes EKA uniquely suited for resumable execution: the context object for a subject is byte-stable, so "rebuild context" is a command, not a memory.
 3. **Atomic unit = one work item.** At most one item is mid-flight; a crash loses at most that item's pending work (recoverable from the checkpoint's `current.pending` sub-state).
 
-The checkpoint file is **operational state, not knowledge** — deliberately outside `docs/`, so it is never scanned by `eka validate` and never becomes canonical. The knowledge counterpart (what items are done, in what order, with what evidence) lives in the store itself via transitions and notes.
+The checkpoint file is **operational state, not knowledge** — deliberately outside `docs/`, so it is never scanned by `eka validate`. After every checkpoint it is dual-written to the canonical snapshot `<ns>/ses:execution-state` (ADR-037, project-scoped under the repo's own namespace): the file stays the fast local resume source, the ses line is the synced, immutable position history (`eka status` renders its latest instance; full history via `eka get <ns>/ses:execution-state --timeline`). The knowledge counterpart (what items are done, in what order, with what evidence) lives in the store itself via transitions and notes.
 
 ## Maintenance
 

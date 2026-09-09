@@ -146,7 +146,7 @@ For each work item in order (parallel batches only when files do not overlap; ne
    - after review sign-off: **merge the item branch into the development branch** (PR/MR or direct merge per repository convention), then `transition <line> done` — gated on every note resolved, and only after the merge landed (knowledge must never claim `done` before the code is on the development branch).
    - Never force: `--force` confirms the active-container warning only; it never bypasses a gate.
 7. **Synchronize** — `sync` push (refresh the repository snapshot with the new states); for parallel batches, pull the development branch before each next batch (never start work on a stale snapshot); after every merge, `git pull` the development branch in the primary checkout and clean up the item's worktree.
-8. **Checkpoint** — append to `.eka/execution-state.md` (Phase 4) after EVERY item.
+8. **Checkpoint** — append to `.eka/execution-state.md` (Phase 4) after EVERY item, then dual-write the canonical snapshot: publish `<ns>/ses:execution-state` (project/namespace from the repo's `eka.yaml`) with the same scope/current/next/items/mode/decisions — this is what `eka status` renders in its `Execution` section.
 
 ## Phase 3 — Container close
 
@@ -162,7 +162,7 @@ When every item of the container is `done`/`canceled`: `transition ctr:<id> comp
 
 ### Checkpoint file
 
-`.eka/execution-state.md` at the repository root — **operational state, not knowledge**: outside `docs/`, never scanned by `validate`, never synced into the store.
+`.eka/execution-state.md` at the repository root is the fast local checkpoint — **operational state, not knowledge**: outside `docs/`, never scanned by `validate`. It is dual-written to the canonical snapshot `<ns>/ses:execution-state` (ADR-037, project-scoped under the repo's own namespace from `eka.yaml`): after every checkpoint append, publish the ses CKO (`eka new <ns>/ses:execution-state --project <proj> --namespace <ns>`, fill scope/current/next/items/mode/decisions plus `context`/`notes`/`verification`, `eka publish`) so `eka status` and other devices see the same position via `sync push`. The markdown stays the resume source when the store is unreachable; the ses line (immutable `instanceVersion` per update) is what `eka status` renders — latest only, full history via `eka get <ns>/ses:execution-state --timeline`.
 
 ```markdown
 # Execution State
