@@ -408,9 +408,19 @@ func (c *Capability) fetchExecutionState(projectID string) map[string]any {
 	if !c.Exists() || projectID == "" {
 		return nil
 	}
+	// Namespace comes from the repo record (eka.yaml); each
+	// project publishes its own line under its own namespace,
+	// so a cross-project global resolve would leak state.
+	// ponytail: repos registered before schema v3 carry Namespace "".
+	ns := "eka"
+	if cwd, cerr := os.Getwd(); cerr == nil {
+		if repo, found, ferr := c.rt.Workspace.FindRepo(cwd); ferr == nil && found && repo.ProjectID == projectID && repo.Namespace != "" {
+			ns = repo.Namespace
+		}
+	}
 	units, err := c.rt.Knowledge.Search(runtime.SearchQuery{
 		ProjectID: projectID,
-		Namespace: "eka",
+		Namespace: ns,
 		Type:      "ses",
 		ID:        "execution-state",
 	})
