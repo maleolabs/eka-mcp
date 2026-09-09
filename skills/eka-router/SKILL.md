@@ -18,6 +18,7 @@ A routing decision tree for EKA work. Load this skill when the task mentions EKA
 | changing existing knowledge (state, revision, correction) | [`eka-knowledge-modification`](../eka-knowledge-modification/SKILL.md) | immutability, transitions, revisions |
 | reviewing knowledge or a change | [`eka-knowledge-review`](../eka-knowledge-review/SKILL.md) | EKA-native validation, constraint checks |
 | bringing a non-EKA project into EKA (existing docs or none) | [`eka-adoption`](../eka-adoption/SKILL.md) | assessment, classification, migration paths, greenfield capture |
+| needing context from ANOTHER project shared as shr (no cloning) | [`eka-shared-knowledge`](../eka-shared-knowledge/SKILL.md) | discover → select → consume shared snapshots; trust and durability |
 | software engineering work inside EKA (planning, tickets, delivery) | [`eka-engineering-workflow`](../eka-engineering-workflow/SKILL.md) | the canonical-domain spine and the full loop |
 | a command refused, failed, or errored | [`eka-troubleshooting`](../eka-troubleshooting/SKILL.md) | refusal classes, exit codes, fixes |
 | unsure what the task needs | [`eka-project-understanding`](../eka-project-understanding/SKILL.md) | orient first, then route onward |

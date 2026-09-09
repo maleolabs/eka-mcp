@@ -39,6 +39,8 @@ Do **not** load every skill for every task. Pick the skill whose description mat
 | Relating EKA to software development work (planning, tickets, delivery) | [`eka-engineering-workflow`](eka-engineering-workflow/SKILL.md) | the canonical-domain spine, methodology independence, the full loop |
 | A command refused, failed, or errored | [`eka-troubleshooting`](eka-troubleshooting/SKILL.md) | refusal classes, exit codes, deterministic fixes |
 | Reporting a shortcoming of EKA itself (bug, suggestion, rough edge) | [`eka-feedback`](eka-feedback/SKILL.md) | the feedback loop: `eka feedback new` → `publish` (ADR-026), quality bar |
+| Needing context from another project shared as shr (no cloning) | [`eka-shared-knowledge`](eka-shared-knowledge/SKILL.md) | discover → select → consume shared snapshots; trust, freshness, durability |
+| Building a share from this project's knowledge (or a non-EKA codebase) | [`eka-shr-builder`](eka-shr-builder/SKILL.md) / [`eka-shr-non-eka`](eka-shr-non-eka/SKILL.md) | `eka shr build` levels, provenance, per-project identifier |
 
 Example mappings:
 
@@ -50,6 +52,7 @@ Ticket execution              → eka-knowledge-retrieval + eka-knowledge-modifi
 Knowledge review              → eka-knowledge-review
 Command refused               → eka-troubleshooting
 Non-EKA project adoption      → eka-adoption
+Cross-project context (shr)   → eka-shared-knowledge
 EKA shortcoming found         → eka-feedback
 ```
 
