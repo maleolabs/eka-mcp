@@ -349,11 +349,25 @@ func (c *Capability) StatusWithAll(all bool) ([]byte, error) {
 		if p, ok := m["path"].(string); ok && filepath.IsAbs(p) {
 			m["path"] = c.logicalPath(p)
 			if data2, err := json.Marshal(m); err == nil {
-				return data2, nil
+				data = data2
+				if err := json.Unmarshal(data, &m); err != nil {
+					data = data2
+				}
 			}
 		}
 	}
-	return data, nil
+	// Append project-scoped execution state when available.
+	if projs, ok := m["projects"].([]any); ok && len(projs) == 1 {
+		if proj, ok := projs[0].(map[string]any); ok {
+			if pid, ok := proj["project"].(map[string]any)["id"].(string); ok {
+				if exec := c.fetchExecutionState(pid); exec != nil {
+					m["execution"] = exec
+				}
+			}
+		}
+	}
+	outBytes, _ := json.Marshal(m)
+	return outBytes, nil
 }
 
 // scopeStatus mirrors cmd/status.go scopeStatus: when cwd is inside a
@@ -383,6 +397,68 @@ func (c *Capability) scopeStatus(st *runtime.WorkspaceStatus) *runtime.Workspace
 	out := *st
 	out.Projects = []runtime.ProjectStatus{*matched}
 	return &out
+}
+
+// fetchExecutionState returns the project-scoped ses:execution-state
+// snapshot (current/next/scope/mode/items count) for the given
+// projectID, resolved from the canonical store via Knowledge.Search.
+// Returns nil when no ses is found or the store returns an error —
+// callers treat nil as "no execution section".
+func (c *Capability) fetchExecutionState(projectID string) map[string]any {
+	if !c.Exists() || projectID == "" {
+		return nil
+	}
+	units, err := c.rt.Knowledge.Search(runtime.SearchQuery{
+		ProjectID: projectID,
+		Namespace: "eka",
+		Type:      "ses",
+		ID:        "execution-state",
+	})
+	if err != nil || len(units) == 0 {
+		return nil
+	}
+	u := units[len(units)-1]
+	doc, err := machine.NewDocument(u)
+	if err != nil {
+		return nil
+	}
+	b, err := doc.MarshalCompact()
+	if err != nil {
+		return nil
+	}
+	var dm map[string]any
+	if err := json.Unmarshal(b, &dm); err != nil {
+		return nil
+	}
+	content, _ := dm["content"].(map[string]any)
+	if content == nil {
+		return nil
+	}
+	if fields, _ := content["fields"].(map[string]any); fields != nil {
+		content = fields
+	}
+	out := map[string]any{}
+	if v, _ := content["scope"].(string); v != "" {
+		out["scope"] = v
+	}
+	if cur, ok := content["current"].(map[string]any); ok {
+		if item, _ := cur["item"].(string); item != "" {
+			out["current"] = cur
+		}
+	}
+	if v, _ := content["next"].(string); v != "" {
+		out["next"] = v
+	}
+	if v, _ := content["mode"].(string); v != "" {
+		out["mode"] = v
+	}
+	if items, ok := content["items"].([]any); ok {
+		out["items"] = len(items)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // Context builds the Context Object around one subject at one depth
