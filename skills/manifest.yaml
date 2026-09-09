@@ -52,6 +52,12 @@ skills:
   - name: eka-shr-builder
     path: eka-shr-builder/SKILL.md
     role: build shr sharing objects — EKA-to-EKA and audited non-EKA spike, reusable for agents
+  - name: eka-shared-knowledge
+    path: eka-shared-knowledge/SKILL.md
+    role: consume shared knowledge — discover, inspect and apply shr snapshots from other projects without cloning the source
+    resources:
+      - eka-shared-knowledge/references/consumption-levels.md
+      - eka-shared-knowledge/references/durability.md
 
 supporting:
   - path: commands/README.md
