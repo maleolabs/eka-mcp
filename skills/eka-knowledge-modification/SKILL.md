@@ -1,6 +1,6 @@
 ---
 name: eka-knowledge-modification
-description: Use when you need to change existing Engineering Knowledge — advance a work item's state, approve a plan, activate or complete a container, revise a knowledge object, or correct an error. Teaches the immutable/append-only discipline: never mutate canonical objects; changes create new revisions (`eka publish` on a new draft, `eka transition` for state changes) while preserving identity, relationships, state, stratum, traceability, and integrity.
+description: Use when you need to change existing Engineering Knowledge — advance a work item's state, approve a plan, activate or complete a container, revise a knowledge object, correct an error, retire mistaken knowledge, or unlink a ticket edge. Teaches the immutable/append-only discipline: never hard-delete canonical objects; changes create new revisions (`eka publish` on a new draft, `eka transition` for state changes, `eka retire`/`eka unrelate` for sanctioned removal) while preserving identity, relationships, state, stratum, traceability, and integrity.
 ---
 
 # Knowledge Modification
@@ -16,6 +16,8 @@ Engineering Knowledge is **immutable and append-only**. There is no edit path fo
 | **State change** (work item, plan, container) | `eka transition` | publishes a new immutable payload for the line with the new state + appended change-log entry; the reference moves forward |
 | **Content/knowledge revision** (new content, correction, new relationship set) | new draft on the same line → `eka publish` | a new draft of `<type>:<id>` publishes as the next instance version (max + 1), a new immutable object alongside the old ones |
 | **Assignment edge change** (work item → member) | `eka assign` / `eka reassign` / `eka unassign` | the single `assigned-to` edge is set, moved, or removed in place — same instance version, no churn (a published payload is re-pointed, a draft's relationships block is mutated) |
+| **Soft-delete published CKO** (salah lahir/duplikat/typo) | `eka retire` | new instance highest+1 with existence-state `retired`/`archived`, content frozen — history retained, never purged |
+| **Ticket edge removal** (cabut 1 edge derives-from ticket) | `eka unrelate` | same-version re-point: removes one ticket `derives-from` edge in place, no instance churn |
 | Legacy docs tree | edit the authoring file → `eka validate` → `eka sync` (docs-mode re-seed) | the authoring adapter's revision path; the compiled CKO replaces the old one in the store |
 
 Assignment edges are the narrow third path: neither a transition nor a revision — the explicit assignment commands rewrite the work item's single `assigned-to` edge (single-assignee, ADR-029) with no instance churn. Only work items (`sto-`/`ts-`/`bug-`/`td-`/`ch-`/`spk-`) are assignable, the member must be a resolvable `mbr-` line of the same repository, and refusals are deterministic (see [eka-engineering-workflow](../eka-engineering-workflow/SKILL.md)). Assignment never creates container membership — tickets remain the sole membership contract. The eka-mcp server exposes no assignment tools yet: CLI only today.
@@ -91,6 +93,40 @@ eka sync pull --from-docs  # re-seed: compile the authoring into the canonical s
 
 The compiled CKO for the line is replaced; older payloads remain in the store as history. Note the semantic difference: the docs tree is an authoring adapter — changing it changes the compiled knowledge; the runtime store itself is still never touched directly.
 
+## Path 4 — Retire / archive (`eka retire`)
+
+Soft-delete untuk CKO published yang salah lahir, duplikat, atau typo — bukan hard delete. Retire menerbitkan instance baru highest+1 dengan existence-state `retired` (default) atau `archived` (`--as`), content dibekukan dari instance aktif terakhir.
+
+```sh
+eka retire <target> --reason "..." [--by ...] [--force] [--dry-run] [--json] [--as retired|archived] [--cascade=cmt]
+```
+
+- **Target adalah line published**: `<type>:<id>` atau `<ns>/<type>:<id>`. Draft ditolak (pakai `eka discard` untuk draft); line unknown ditolak; line yang sudah retired bersifat idempoten (exit 0, tulis apa-apa).
+- **Gates**: downstream masih aktif memblokir — instance `depends-on`/`derives-from`/`validates`/`supersedes`/`amends` yang masih active ditolak dengan sorted list yang harus di-retire/direvisi dulu; `ctr-` active dan `plan-` approved/immutable dilindungi (protected); `--reason` minimal 10 karakter; non-TTY wajib `--force` (`--force` hanya konfirmasi interaktif — tidak mem-bypass gate lain); `--dry-run` read-only menampilkan dampak tanpa menulis; `--json` emits schema `eka-retire-v1`.
+- **Ticket retire**: karena R4/R7 melarang state pada `tkt-`, retire ticket menulis marker retirement di content (bukan state). Fail-closed: ticket yang di-retire tetap blocker all-done sampai di-unlink. `--dry-run` menampilkan membership + gateImpact.
+- Tidak ada hard delete / purge di EKA — `eka discard` tetap draft-only.
+
+## Path 5 — Ticket unlink (`eka unrelate`)
+
+Cabut 1 edge `derives-from` pada ticket (`tkt-`) — same-version re-point, tanpa instance churn:
+
+```sh
+eka unrelate <tkt-line> <edge-target> [--force] [--json]
+```
+
+- **Gate R8**: sisakan minimal 1 `ctr-` resolve — unlink edge terakhir yang masih resolve ditolak; `--json` emits schema `eka-unrelate-v1`.
+- **Container lock**: ticket pada container `completed` terkunci (locked); ticket pada container `active` ditolak kecuali ticket sudah retired.
+- Untuk melepas ticket yang di-retire dari gate all-done (fail-closed), unlink adalah jalurnya — bukan cancel, bukan delete.
+
+### Unlink vs retire vs supersede vs cancel
+
+| Aksi | Apa yang terjadi | Kapan dipakai |
+|---|---|---|
+| `unrelate` | cabut 1 edge ticket → container; ticket tetap ada | ticket salah pasang ke container; melepas ticket retired dari gate all-done |
+| `retire` | soft-delete 1 line (instance baru `retired`/`archived`, content frozen) | salah lahir / duplikat / typo pada CKO published |
+| supersede/amend (revisi Path 2) | koreksi isi lewat instance baru yang menggantikan/melengkapi | isi salah tapi artifact-nya sah dan harus tetap hidup |
+| `cancel` (transition) | state work item → `canceled` | pekerjaan dibatalkan, bukan knowledge-nya yang salah |
+
 ## What modification must preserve
 
 | Invariant | How |
@@ -110,7 +146,7 @@ The compiled CKO for the line is replaced; older payloads remain in the store as
 - **Never** change higher-stratum knowledge to justify a lower-stratum implementation — a conflict resolves downward (the lower stratum changes).
 - **Never** regress state silently; if a correction requires regression, it is a deliberate, documented act with its own change-log entries.
 - **Never** run a full `eka sync` / `eka sync pull` mid-execution — the pull side can re-point references to older instances (silent regression); use `eka sync push` during active work and verify with `eka get` after any pull.
-- **Never** delete knowledge: superseded instances stay as history (retained payloads are history, not garbage).
+- **Never** hard-delete knowledge: there is no purge path — the sanctioned path for salah lahir/duplikat/typo is `eka retire` (soft-delete, history retained); `eka discard` is draft-only. Superseded and retired instances stay as history (retained payloads are history, not garbage).
 
 ## Real example (Feather Reference Project)
 
