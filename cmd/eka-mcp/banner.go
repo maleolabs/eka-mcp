@@ -74,28 +74,27 @@ func collectBannerState(cap *eka.Capability) (bannerState, error) {
 	return st, nil
 }
 
-// bannerStyle is the local presentation style — the eka CLI visual
-// language reimplemented LOCALLY in eka-mcp without importing eka-cli.
-// Colors are emitted only when colorEnabled is true (TTY + NO_COLOR
-// unset + TERM != dumb); otherwise bytes are plain UTF-8.
+// bannerStyle is the local presentation style — now a thin wrapper over
+// the shared command theme (theme.go), which mirrors the eka CLI visual
+// language: the same 2-space global margin, palette and section blocks,
+// so both binaries read as one product. Colors are emitted only when
+// colorEnabled is true (TTY + NO_COLOR unset + TERM != dumb); otherwise
+// bytes are plain UTF-8.
 type bannerStyle struct {
 	Color bool
 	W     io.Writer
 }
 
 const (
-	colorInfo   = "38;5;75"
-	colorDim    = "38;5;245"
-	colorAccent = colorInfo
+	colorInfo   = themeInfo
+	colorDim    = themeDim
+	colorAccent = themeAccent
 
-	treeLast = "└──"
+	treeLast = themeTreeLast
 )
 
 func (s *bannerStyle) paint(code, text string) string {
-	if !s.Color {
-		return text
-	}
-	return "\x1b[" + code + "m" + text + "\x1b[0m"
+	return (&theme{Color: s.Color}).paint(code, text)
 }
 func (s *bannerStyle) info(text string) string   { return s.paint(colorInfo, text) }
 func (s *bannerStyle) dim(text string) string    { return s.paint(colorDim, text) }
@@ -113,17 +112,19 @@ func isStderrTTY(w io.Writer) bool {
 
 // renderBanner writes the unicode banner in the eka CLI visual language:
 // section headers, tree glyphs └──, aligned key-value rows. It is a pure
-// function of st and s.Color — deterministic for identical state.
+// function of st and s.Color — deterministic for identical state. Output
+// flows through the theme margin writer (2-space global margin).
 func renderBanner(s *bannerStyle, st bannerState) {
-	w := s.W
+	t := &theme{Color: s.Color, W: newThemeMarginWriter(s.W)}
+	w := t.W
 	// Top title: blank line separation then accent heading.
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, s.accent("EKA MCP"))
-	fmt.Fprintln(w, s.dim("stdio MCP server — EKA AI-agent integration layer"))
+	fmt.Fprintln(w, t.accent("EKA MCP"))
+	fmt.Fprintln(w, t.dim("stdio MCP server — EKA AI-agent integration layer"))
 	fmt.Fprintln(w, "")
 
 	// Runtime section
-	renderSection(s, "Runtime", [][2]string{
+	t.section("Runtime", [][2]string{
 		{"eka-mcp", st.Version},
 		{"pack", fmt.Sprintf("%s v%s (%s)", st.PackName, st.PackVersion, st.PackStatus)},
 		{"protocol", st.Protocol},
@@ -136,7 +137,7 @@ func renderBanner(s *bannerStyle, st bannerState) {
 	if !st.Initialized {
 		initStr = "no — not initialized"
 	}
-	renderSection(s, "Workspace", [][2]string{
+	t.section("Workspace", [][2]string{
 		{"path", st.WorkspacePath},
 		{"initialized", initStr},
 		{"projects", fmt.Sprintf("%d", st.Projects)},
@@ -144,19 +145,19 @@ func renderBanner(s *bannerStyle, st bannerState) {
 	})
 	if !st.Initialized {
 		// Deterministic hint for uninitialized state, never a crash.
-		fmt.Fprintf(w, "%s %s\n", s.dim(treeLast), s.dim("run 'eka project register' to create it"))
+		fmt.Fprintf(w, "%s %s\n", t.dim(themeTreeLast), t.dim("run 'eka project register' to create it"))
 	}
 	fmt.Fprintln(w, "")
 
 	// Capabilities section
-	renderSection(s, "Capabilities", [][2]string{
+	t.section("Capabilities", [][2]string{
 		{"tools", fmt.Sprintf("%d", st.ToolCount)},
 		{"resources", fmt.Sprintf("%d", st.ResourceCount)},
 	})
 	fmt.Fprintln(w, "")
 
 	// Hints section
-	renderSection(s, "Hints", [][2]string{
+	t.section("Hints", [][2]string{
 		{"attach", "eka-mcp configure --target opencode --dir . --json   (or claude, codex)"},
 		{"stop", "press Ctrl-C"},
 	})
@@ -165,25 +166,11 @@ func renderBanner(s *bannerStyle, st bannerState) {
 
 // renderSection prints one section header (accent) followed by aligned
 // key-value rows prefixed with the tree glyph └──. Labels are Info-colored
-// when colors are enabled; the glyph is Dim.
+// when colors are enabled; the glyph is Dim. Kept for compatibility;
+// new code should use theme.section.
 func renderSection(s *bannerStyle, title string, rows [][2]string) {
-	w := s.W
-	fmt.Fprintln(w, s.accent(title))
-	width := 0
-	for _, r := range rows {
-		if len(r[0]) > width {
-			width = len(r[0])
-		}
-	}
-	for _, r := range rows {
-		label := r[0]
-		value := r[1]
-		padded := fmt.Sprintf("%-*s", width, label)
-		glyph := s.dim(treeLast)
-		colored := s.info(padded)
-		// Aligned key-value: "└── label···   value"
-		fmt.Fprintf(w, "%s %s   %s\n", glyph, colored, value)
-	}
+	t := &theme{Color: s.Color, W: newThemeMarginWriter(s.W)}
+	t.section(title, rows)
 }
 
 // bannerColorEnabled decides whether the banner should emit colors: TTY

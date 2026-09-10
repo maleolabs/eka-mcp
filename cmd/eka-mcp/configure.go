@@ -43,15 +43,16 @@ type configureResult struct {
 	Counts    *pack.ActionCounts  `json:"counts,omitempty"`
 }
 
-// runConfigure implements "eka-mcp configure [--target opencode|claude|codex] [--dir <dir>] [--with-skills] [--with-commands] [--with-all] [--dry-run] --json".
+// runConfigure implements "eka-mcp configure [--target opencode|claude|codex] [--dir <dir>] [--with-skills] [--with-commands] [--with-all] [--dry-run] [--json]".
 func runConfigure(args []string, out io.Writer) error {
 	for _, a := range args {
 		if a == "--help" || a == "-h" || a == "help" {
-			fmt.Fprintln(out, "Usage: eka-mcp configure [--target opencode|claude|codex] [--dir <dir>] [--with-skills] [--with-commands] [--with-all] [--dry-run] --json")
+			fmt.Fprintln(out, "Usage: eka-mcp configure [--target opencode|claude|codex] [--dir <dir>] [--with-skills] [--with-commands] [--with-all] [--dry-run] [--json]")
 			fmt.Fprintln(out, "")
 			fmt.Fprintln(out, "Write the MCP client config entry for the target ecosystem (absolute binary path + EKA_HOME when set).")
 			fmt.Fprintln(out, "By default only the MCP config is written; skills and commands are available via MCP resources")
 			fmt.Fprintln(out, "eka://skills/* and eka://templates/* and require --with-skills, --with-commands or --with-all to also install.")
+			fmt.Fprintln(out, "Output is human-readable by default; --json emits the machine report instead.")
 			fmt.Fprintln(out, "")
 			fmt.Fprintln(out, "Install layout (conventional dirs; --dir anchors the tree for project-scoped installs):")
 			fmt.Fprintln(out, "  opencode  <base>/.config/opencode/skills + .../commands (+ DELEGATION.txt sidecar next to the commands)")
@@ -86,9 +87,6 @@ func runConfigure(args []string, out io.Writer) error {
 	// target (spike V3), so command installs refuse outright.
 	if opts.Target == "codex" && (opts.WithCommands || opts.WithAll) {
 		return errors.New(`configure: target "codex" cannot install commands: codex-cli removed the prompts directory (~/.codex/prompts) in 0.117.0; use --with-skills instead — command-capable targets: opencode, claude`)
-	}
-	if !opts.JSON {
-		return errors.New("configure: missing --json")
 	}
 
 	// Resolve workspace dir: --dir or cwd or EKA_HOME fallback.
@@ -143,7 +141,7 @@ func runConfigure(args []string, out io.Writer) error {
 			counts := rep.Counts
 			res.Counts = &counts
 		}
-		return writeJSON(out, res)
+		return renderConfigureResult(out, opts, res)
 	}
 
 	// Write client config (merge, never overwrite other servers).
@@ -182,13 +180,64 @@ func runConfigure(args []string, out io.Writer) error {
 		Changes:   changes,
 		Counts:    counts,
 	}
-	return writeJSON(out, res)
+	return renderConfigureResult(out, opts, res)
 }
 
-// parseConfigureArgs parses configure flags.
+// renderConfigureResult emits the configure outcome: the machine report
+// with --json, the themed human sections by default.
+func renderConfigureResult(out io.Writer, opts configureOptions, res configureResult) error {
+	if opts.JSON {
+		return writeJSON(out, res)
+	}
+	t := newTheme(out)
+	t.blank()
+	t.section("Target", [][2]string{
+		{"name", res.Target},
+		{"config", res.File},
+		{"binary", res.Binary},
+		{"dir", res.Dir},
+	})
+	t.blank()
+	verb := "wrote"
+	if res.DryRun {
+		verb = "would write"
+	}
+	t.section("MCP entry", [][2]string{
+		{"eka", fmt.Sprintf("%s server entry to %s", verb, res.File)},
+	})
+	if len(res.Installed) > 0 || len(res.Changes) > 0 {
+		t.blank()
+		rows := [][2]string{}
+		for _, fam := range []string{"skills", "commands"} {
+			if names, ok := res.Installed[fam]; ok {
+				rows = append(rows, [2]string{fam, fmt.Sprintf("%d", len(names))})
+			}
+		}
+		if res.Counts != nil {
+			rows = append(rows, [2]string{"changes", fmt.Sprintf("%d create, %d overwrite, %d skip", res.Counts.Created, res.Counts.Overwritten, res.Counts.Skipped)})
+		}
+		t.section("Install", rows)
+		for _, ch := range res.Changes {
+			mark := t.dim("-")
+			switch ch.Action {
+			case "create":
+				mark = t.success("+")
+			case "overwrite":
+				mark = t.warning("~")
+			case "skip":
+				mark = t.dim("=")
+			}
+			fmt.Fprintf(t.W, "%s %s %s\n", mark, ch.Action, ch.Path)
+		}
+	}
+	t.blank()
+	return nil
+}
+
+// parseConfigureArgs parses configure flags. --json is optional: with it
+// the machine report is emitted, without it the human sections render.
 func parseConfigureArgs(args []string) (configureOptions, error) {
 	var opts configureOptions
-	seenJSON := false
 	for i := 0; i < len(args); i++ {
 		switch {
 		case args[i] == "--target":
@@ -216,7 +265,6 @@ func parseConfigureArgs(args []string) (configureOptions, error) {
 		case args[i] == "--dry-run":
 			opts.DryRun = true
 		case args[i] == "--json":
-			seenJSON = true
 			opts.JSON = true
 		case args[i] == "--with-skills":
 			opts.WithSkills = true
@@ -227,9 +275,6 @@ func parseConfigureArgs(args []string) (configureOptions, error) {
 		default:
 			return opts, fmt.Errorf("configure: unexpected argument %q", args[i])
 		}
-	}
-	if !seenJSON {
-		return opts, errors.New("configure: missing --json")
 	}
 	return opts, nil
 }

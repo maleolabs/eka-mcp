@@ -243,11 +243,58 @@ type TargetInstallReport struct {
 // (not even directories) and the returned actions describe exactly what a
 // real run would write.
 func InstallForTarget(target, dir string, withSkills, withCommands, dryRun bool) (TargetInstallReport, error) {
+	var skills, commands []string
+	var err error
+	if withSkills {
+		if skills, err = SkillDirs(); err != nil {
+			return TargetInstallReport{}, err
+		}
+	}
+	if withCommands {
+		if commands, err = CommandFiles(); err != nil {
+			return TargetInstallReport{}, err
+		}
+	}
+	return InstallSelection(target, dir, skills, commands, dryRun)
+}
+
+// InstallSelection installs explicit artifact subsets for one target
+// ecosystem — the interactive installer's execution primitive. Names
+// must resolve against SkillDirs()/CommandFiles() (unknown names
+// refuse deterministically); empty lists install nothing (the sidecar
+// is written only when at least one family is non-empty). Planning,
+// classification and writing share InstallForTarget's exact semantics
+// (idempotent, dryRun pure).
+func InstallSelection(target, dir string, skills, commands []string, dryRun bool) (TargetInstallReport, error) {
 	if !contains(InstallTargets, target) {
 		return TargetInstallReport{}, unsupportedTargetError(target)
 	}
-	if withCommands && target == "codex" {
-		return TargetInstallReport{}, fmt.Errorf("pack: target %q has no command directory (codex-cli removed ~/.codex/prompts in 0.117.0); install skills instead (--with-skills) — command-capable targets: opencode, claude", target)
+	if len(commands) > 0 && target == "codex" {
+		return TargetInstallReport{}, fmt.Errorf("pack: target %q has no command directory (codex-cli removed ~/.codex/prompts in 0.117.0); install skills instead — command-capable targets: opencode, claude", target)
+	}
+	knownSkills, err := SkillDirs()
+	if err != nil {
+		return TargetInstallReport{}, err
+	}
+	knownCommands, err := CommandFiles()
+	if err != nil {
+		return TargetInstallReport{}, err
+	}
+	for _, s := range skills {
+		if !contains(knownSkills, s) {
+			return TargetInstallReport{}, fmt.Errorf("pack: unknown skill %q", s)
+		}
+		if err := safeName(s); err != nil {
+			return TargetInstallReport{}, err
+		}
+	}
+	for _, c := range commands {
+		if !contains(knownCommands, c) {
+			return TargetInstallReport{}, fmt.Errorf("pack: unknown command %q", c)
+		}
+		if err := safeName(c); err != nil {
+			return TargetInstallReport{}, err
+		}
 	}
 	base, err := InstallBase(target, dir)
 	if err != nil {
@@ -265,13 +312,9 @@ func InstallForTarget(target, dir string, withSkills, withCommands, dryRun bool)
 	var plan []planEntry
 	files := map[string][]string{}
 
-	if withSkills {
-		dirs, err := SkillDirs()
-		if err != nil {
-			return TargetInstallReport{}, err
-		}
-		files["skills"] = dirs
-		for _, s := range dirs {
+	if len(skills) > 0 {
+		files["skills"] = append([]string(nil), skills...)
+		for _, s := range skills {
 			if err := safeName(s); err != nil {
 				return TargetInstallReport{}, err
 			}
@@ -299,16 +342,9 @@ func InstallForTarget(target, dir string, withSkills, withCommands, dryRun bool)
 		}
 	}
 
-	if withCommands {
-		cmds, err := CommandFiles()
-		if err != nil {
-			return TargetInstallReport{}, err
-		}
-		files["commands"] = cmds
-		for _, c := range cmds {
-			if err := safeName(c); err != nil {
-				return TargetInstallReport{}, err
-			}
+	if len(commands) > 0 {
+		files["commands"] = append([]string(nil), commands...)
+		for _, c := range commands {
 			rendered, err := RenderCommand(target, c)
 			if err != nil {
 				return TargetInstallReport{}, err

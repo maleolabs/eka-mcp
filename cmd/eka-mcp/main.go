@@ -88,10 +88,31 @@ func runManifest(args []string, out io.Writer) error {
 	return writeJSON(out, m)
 }
 
-// runInstall implements "install <kind> --dir <dir> [--dry-run] --json":
-// install an artifact family from the embedded skill pack and print the
-// install result.
+// runInstall implements "install [<kind> --dir <dir> [--dry-run] --json]":
+// with no arguments it opens the interactive multi-step installer on a
+// TTY (piped runs get the inline usage instead); with arguments it
+// installs one artifact family from the embedded skill pack and prints
+// the install result as JSON.
 func runInstall(args []string, out io.Writer) error {
+	for _, a := range args {
+		if a == "--help" || a == "-h" || a == "help" {
+			fmt.Fprintln(out, "Usage: eka-mcp install [<kind> --dir <dir> [--dry-run] --json]")
+			fmt.Fprintln(out, "")
+			fmt.Fprintln(out, "With no arguments (on a terminal) it opens the interactive installer:")
+			fmt.Fprintln(out, "  1. kind (skills/commands, single choice)")
+			fmt.Fprintln(out, "  2. resources checklist (space toggles, all selected by default, installed entries disabled)")
+			fmt.Fprintln(out, "  3. agents (opencode/claude/codex, multi choice)")
+			fmt.Fprintln(out, "  4. scope (global/repo, single choice)")
+			fmt.Fprintln(out, "then a dry-run confirm screen before writing anything.")
+			fmt.Fprintln(out, "")
+			fmt.Fprintln(out, "Inline form installs one artifact family (\"skills\" or \"commands\") into --dir")
+			fmt.Fprintln(out, "and prints the machine report (--json required).")
+			return nil
+		}
+	}
+	if len(args) == 0 {
+		return runInstallInteractive(out)
+	}
 	opts, err := parseInstallArgs(args)
 	if err != nil {
 		return err
