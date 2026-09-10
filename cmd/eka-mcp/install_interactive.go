@@ -62,21 +62,21 @@ type installModel struct {
 	items  []resourceItem
 	cursor int
 
-	agents      []string
-	agentCur    int
-	agentSel    map[string]bool
-	agentDis    map[string]bool // reason-tagged disables
-	agentNote   map[string]string
-	scopes      []string
-	scopeCur    int
-	scope       string
-	scopeDescs  map[string]string
+	agents     []string
+	agentCur   int
+	agentSel   map[string]bool
+	agentDis   map[string]bool // reason-tagged disables
+	agentNote  map[string]string
+	scopes     []string
+	scopeCur   int
+	scope      string
+	scopeDescs map[string]string
 
-	plans    map[string]pack.TargetInstallReport
-	reports  map[string]pack.TargetInstallReport
-	execErr  error
-	aborted  bool
-	hint     string
+	plans   map[string]pack.TargetInstallReport
+	reports map[string]pack.TargetInstallReport
+	execErr error
+	aborted bool
+	hint    string
 }
 
 var installScopes = []string{"global", "repo"}
@@ -421,7 +421,7 @@ func (m installModel) View() string {
 			}
 			row := g + "  " + k
 			if i == m.kindCur {
-				row = t.info(glyphCursor+" "+g+"  "+k)
+				row = t.info(glyphCursor + " " + g + "  " + k)
 			} else {
 				row = "  " + g + "  " + k
 			}
@@ -443,7 +443,7 @@ func (m installModel) View() string {
 			row := g + "  " + it.name
 			switch {
 			case it.disabled:
-				row = t.dim("  "+g+"  "+it.name+"  (installed everywhere)")
+				row = t.dim("  " + g + "  " + it.name + "  (installed everywhere)")
 			case i == m.cursor:
 				row = t.info(glyphCursor+" "+g+"  "+it.name) + dimTag(t, it)
 			default:
@@ -463,7 +463,7 @@ func (m installModel) View() string {
 			}
 			switch {
 			case m.agentDis[a]:
-				line(t.dim("  "+g+"  "+a+"  ("+m.agentNote[a]+")"))
+				line(t.dim("  " + g + "  " + a + "  (" + m.agentNote[a] + ")"))
 			case i == m.agentCur:
 				line(t.info(glyphCursor + " " + g + "  " + a))
 			default:
