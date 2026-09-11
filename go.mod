@@ -5,7 +5,7 @@ go 1.24.0
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/charmbracelet/bubbletea v1.3.10
-	github.com/maleolabs/eka-core v1.10.0
+	github.com/maleolabs/eka-core v1.10.1
 	github.com/mattn/go-isatty v0.0.20
 	gopkg.in/yaml.v3 v3.0.1
 )
