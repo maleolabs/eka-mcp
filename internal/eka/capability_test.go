@@ -382,6 +382,70 @@ func TestDomainNoContentStripsContent(t *testing.T) {
 	t.Logf("domain payload: full %d bytes, stripped %d bytes (saved %d bytes, %.1f%%)", len(full), len(stripped), len(full)-len(stripped), 100*float64(len(full)-len(stripped))/float64(len(full)))
 }
 
+// TestDomainPagedWindows: DomainPaged windows the sorted collection —
+// count stays the TOTAL, units carry the window, pagination names it —
+// while the unbounded Domain default stays byte-identical (no
+// pagination key).
+func TestDomainPagedWindows(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("EKA_HOME", home)
+	for _, id := range []string{"001", "002", "003", "004", "005"} {
+		u := testUnit()
+		u.Identity.ID = id
+		u.CanonicalIdentityForm = "feather/adr:" + id + ":1"
+		seedUnit(t, u)
+	}
+
+	cap, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cap.Close()
+
+	page, err := cap.DomainPaged("feather", "Architecture", false, "", "", "", 2, 1)
+	if err != nil {
+		t.Fatalf("DomainPaged failed: %v", err)
+	}
+	var col map[string]any
+	if err := json.Unmarshal(page, &col); err != nil {
+		t.Fatalf("paged Domain must be JSON: %v", err)
+	}
+	if col["count"] != float64(5) {
+		t.Errorf("paged count = %v, want TOTAL 5", col["count"])
+	}
+	units := col["units"].([]any)
+	if len(units) != 2 {
+		t.Fatalf("paged units len = %d, want 2", len(units))
+	}
+	for i, want := range []string{"feather/adr:002:1", "feather/adr:003:1"} {
+		if units[i].(map[string]any)["canonicalForm"] != want {
+			t.Errorf("paged unit[%d] = %v, want %v (sorted window)", i, units[i].(map[string]any)["canonicalForm"], want)
+		}
+	}
+	pagination, ok := col["pagination"].(map[string]any)
+	if !ok {
+		t.Fatalf("paged collection must carry pagination metadata, got %v", col["pagination"])
+	}
+	if pagination["total"] != float64(5) || pagination["limit"] != float64(2) || pagination["offset"] != float64(1) {
+		t.Errorf("pagination = %v, want total 5 limit 2 offset 1", pagination)
+	}
+	// The unbounded default carries no pagination key.
+	full, err := cap.Domain("feather", "Architecture", false)
+	if err != nil {
+		t.Fatalf("Domain failed: %v", err)
+	}
+	var fullCol map[string]any
+	if err := json.Unmarshal(full, &fullCol); err != nil {
+		t.Fatal(err)
+	}
+	if fullCol["count"] != float64(5) || len(fullCol["units"].([]any)) != 5 {
+		t.Errorf("default Domain must stay unbounded: count %v units %d", fullCol["count"], len(fullCol["units"].([]any)))
+	}
+	if _, has := fullCol["pagination"]; has {
+		t.Error("default Domain must NOT carry pagination metadata")
+	}
+}
+
 // TestStatusJSON: Status returns the eka-core workspace status
 // aggregation as JSON.
 func TestStatusJSON(t *testing.T) {
