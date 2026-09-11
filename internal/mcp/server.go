@@ -25,6 +25,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/maleolabs/eka-mcp"
 )
@@ -124,7 +125,7 @@ var toolDescriptors = []toolDescriptor{
 		Name:        "domain",
 		RiskClass:   RiskRead,
 		Required:    []string{"projectId", "domain"},
-		Description: "Return every unit of one Engineering Domain of a project as a machine collection (schema eka-cko-v2, sorted by canonical form). Supports noContent:true to strip each unit's content payload via machine.Document.StripContent at parity with CLI --no-content (content absent per unit, identity/stateVector/relationships intact) for payload economy. Default false (full payloads). Also supports shr filters --level/--project/--version server-side (parity CLI).",
+		Description: "Return one Engineering Domain of a project as a machine collection (schema eka-cko-v2, sorted by canonical form), one bounded page per call: limit caps the page (default 100, max 500), offset starts the window (default 0); count stays the TOTAL unit count and pagination names the window, so large workspaces (500+ objects) page deterministically instead of timing out. Supports noContent:true to strip each unit's content payload via machine.Document.StripContent at parity with CLI --no-content (content absent per unit, identity/stateVector/relationships intact) for payload economy. Default false (full payloads). Also supports shr filters --level/--project/--version server-side (parity CLI).",
 		Properties: map[string]any{
 			"projectId": map[string]any{"type": "string", "minLength": 1, "description": "The project the knowledge belongs to."},
 			"domain":    map[string]any{"type": "string", "enum": []string{"Architecture", "Planning", "Execution", "Operations", "Knowledge"}, "description": "The canonical Engineering Domain name, e.g. \"Architecture\"."},
@@ -132,6 +133,8 @@ var toolDescriptors = []toolDescriptor{
 			"level":     map[string]any{"type": "string", "enum": []string{"L0", "L1", "L2"}, "description": "Shr only: filter by level L0|L1|L2 — server-side (parity CLI --level)."},
 			"project":   map[string]any{"type": "string", "description": "Shr only: filter by sourceProject per-project identifier."},
 			"version":   map[string]any{"type": "string", "description": "Shr only: filter by sourceVersion semver."},
+			"limit":     map[string]any{"type": "integer", "minimum": 1, "maximum": 500, "description": "Max units per page, sorted by canonical form (default 100, max 500). Page large domains with offset."},
+			"offset":    map[string]any{"type": "integer", "minimum": 0, "description": "Page window start within the sorted domain (default 0)."},
 		},
 	},
 	{
@@ -655,6 +658,11 @@ type Capability interface {
 	// relationships intact).
 	Domain(projectID, domain string, noContent bool) ([]byte, error)
 	DomainWithFilters(projectID, domain string, noContent bool, level, project, version string) ([]byte, error)
+	// DomainPaged is DomainWithFilters with a bounded page window over
+	// the sorted collection (count stays the TOTAL unit count,
+	// pagination names the window): one bounded page per call so large
+	// workspaces never time out on an unbounded payload.
+	DomainPaged(projectID, domain string, noContent bool, level, project, version string, limit, offset int) ([]byte, error)
 	// Status returns the workspace status as JSON.
 	Status() ([]byte, error)
 	StatusWithAll(all bool) ([]byte, error)
@@ -872,12 +880,28 @@ type Server struct {
 	// maxLineSize caps one stdio message line (defaultMaxLineSize).
 	// Tests shrink it to exercise the boundary cheaply.
 	maxLineSize int
+	// toolTimeout bounds one tool dispatch (defaultToolTimeout).
+	// Tests shrink it to exercise the timeout cheaply.
+	toolTimeout time.Duration
 	// diag receives one-line operational diagnostics (parameter-refusal
 	// records). It is NEVER the protocol stream: stdout carries JSON-RPC
 	// traffic only, diagnostics go to stderr (or the injected writer).
 	// A nil diag discards.
 	diag io.Writer
 }
+
+// defaultToolTimeout bounds one tool dispatch so agents get a
+// deterministic timeout error (with retry guidance) instead of a hung
+// transport on large workspaces.
+const defaultToolTimeout = 60 * time.Second
+
+// defaultDomainPageLimit is the bounded domain page size when the
+// caller passes no limit; maxDomainPageLimit is the largest page the
+// domain tool serves per call.
+const (
+	defaultDomainPageLimit = 100
+	maxDomainPageLimit     = 500
+)
 
 // NewServer wires the server around one capability. Diagnostics are
 // written to os.Stderr (never stdout — stdout is the protocol stream).
@@ -889,7 +913,7 @@ func NewServer(cap Capability) *Server {
 // routes operational diagnostics to diag. A nil diag discards. Tests
 // inject a buffer to assert the diagnostic records.
 func NewServerWithDiagnostics(cap Capability, diag io.Writer) *Server {
-	return &Server{cap: cap, maxLineSize: defaultMaxLineSize, diag: diag}
+	return &Server{cap: cap, maxLineSize: defaultMaxLineSize, toolTimeout: defaultToolTimeout, diag: diag}
 }
 
 // request is a JSON-RPC 2.0 request object. ID is kept raw so string,
@@ -1204,9 +1228,36 @@ type toolNotFoundError struct{ name string }
 
 func (e *toolNotFoundError) Error() string { return "tool not found: " + e.name }
 
-// callTool dispatches one named tool call to the capability layer. The
-// returned text is the MCP tool text content.
+// callTool dispatches one named tool call to the capability layer,
+// bounded by the server tool timeout. The returned text is the MCP
+// tool text content. A dispatch that exceeds the timeout reports a
+// deterministic error with retry guidance (narrower scope) instead of
+// hanging the transport.
 func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
+	timeout := s.toolTimeout
+	if timeout <= 0 {
+		timeout = defaultToolTimeout
+	}
+	type outcome struct {
+		text string
+		err  error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		text, err := s.dispatchTool(name, args)
+		done <- outcome{text, err}
+	}()
+	select {
+	case r := <-done:
+		return r.text, r.err
+	case <-time.After(timeout):
+		return "", fmt.Errorf("%s timed out after %s: retry with a narrower scope (domain: limit/offset pages + noContent:true; context: depth local; get: noContent:true)", name, timeout)
+	}
+}
+
+// dispatchTool dispatches one named tool call to the capability layer.
+// The returned text is the MCP tool text content.
+func (s *Server) dispatchTool(name string, args json.RawMessage) (string, error) {
 	switch name {
 	case "context":
 		var p struct {
@@ -1299,17 +1350,23 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 			Level     string `json:"level"`
 			Project   string `json:"project"`
 			Version   string `json:"version"`
+			Limit     int    `json:"limit"`
+			Offset    int    `json:"offset"`
 		}
 		if err := s.decodeToolArgs("domain", args, &p); err != nil {
 			return "", err
 		}
-		var data []byte
-		var err error
-		if p.Level != "" || p.Project != "" || p.Version != "" {
-			data, err = s.cap.DomainWithFilters(p.ProjectID, p.Domain, p.NoContent, p.Level, p.Project, p.Version)
-		} else {
-			data, err = s.cap.Domain(p.ProjectID, p.Domain, p.NoContent)
+		limit := p.Limit
+		if limit == 0 {
+			limit = defaultDomainPageLimit
 		}
+		if limit < 1 || limit > maxDomainPageLimit {
+			return "", fmt.Errorf("domain requires \"limit\" 1..%d (got %d): page large domains with limit/offset", maxDomainPageLimit, p.Limit)
+		}
+		if p.Offset < 0 {
+			return "", fmt.Errorf("domain requires \"offset\" >= 0 (got %d)", p.Offset)
+		}
+		data, err := s.cap.DomainPaged(p.ProjectID, p.Domain, p.NoContent, p.Level, p.Project, p.Version, limit, p.Offset)
 		if err != nil {
 			return "", err
 		}

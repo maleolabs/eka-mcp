@@ -878,6 +878,9 @@ func (f *failingFeedbackCapability) Domain(p, d string, noContent bool) ([]byte,
 func (f *failingFeedbackCapability) DomainWithFilters(p, d string, noContent bool, level, project, version string) ([]byte, error) {
 	return nil, nil
 }
+func (f *failingFeedbackCapability) DomainPaged(p, d string, noContent bool, level, project, version string, limit, offset int) ([]byte, error) {
+	return f.DomainWithFilters(p, d, noContent, level, project, version)
+}
 func (f *failingFeedbackCapability) Status() ([]byte, error) {
 	return f.StatusWithAll(false)
 }
@@ -943,6 +946,9 @@ func (f *failingAssignmentCapability) Domain(p, d string, noContent bool) ([]byt
 }
 func (f *failingAssignmentCapability) DomainWithFilters(p, d string, noContent bool, level, project, version string) ([]byte, error) {
 	return nil, nil
+}
+func (f *failingAssignmentCapability) DomainPaged(p, d string, noContent bool, level, project, version string, limit, offset int) ([]byte, error) {
+	return f.DomainWithFilters(p, d, noContent, level, project, version)
 }
 func (f *failingAssignmentCapability) Status() ([]byte, error) {
 	return f.StatusWithAll(false)
@@ -1012,6 +1018,9 @@ func (f *failingSyncPushCapability) Domain(p, d string, noContent bool) ([]byte,
 }
 func (f *failingSyncPushCapability) DomainWithFilters(p, d string, noContent bool, level, project, version string) ([]byte, error) {
 	return nil, nil
+}
+func (f *failingSyncPushCapability) DomainPaged(p, d string, noContent bool, level, project, version string, limit, offset int) ([]byte, error) {
+	return f.DomainWithFilters(p, d, noContent, level, project, version)
 }
 func (f *failingSyncPushCapability) Status() ([]byte, error) {
 	return f.StatusWithAll(false)

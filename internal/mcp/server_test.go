@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/maleolabs/eka-core/conformance"
 	pack "github.com/maleolabs/eka-mcp"
@@ -91,6 +92,9 @@ func (f *fakeCapability) Domain(projectID, domain string, noContent bool) ([]byt
 	return f.DomainWithFilters(projectID, domain, noContent, "", "", "")
 }
 func (f *fakeCapability) DomainWithFilters(projectID, domain string, noContent bool, level, project, version string) ([]byte, error) {
+	return f.DomainPaged(projectID, domain, noContent, level, project, version, 0, 0)
+}
+func (f *fakeCapability) DomainPaged(projectID, domain string, noContent bool, level, project, version string, limit, offset int) ([]byte, error) {
 	if f.domainErr != nil {
 		return nil, f.domainErr
 	}
@@ -689,6 +693,108 @@ func TestToolsCallDomainNoContent(t *testing.T) {
 	if out["result"].(map[string]any)["isError"] != true {
 		t.Error("domain noContent wrong type must be isError=true")
 	}
+}
+
+// TestToolsCallDomainPagination: limit/offset page the domain;
+// out-of-range values refuse deterministically.
+func TestToolsCallDomainPagination(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	domainText := func(msg string) (map[string]any, bool) {
+		t.Helper()
+		out := mustHandle(t, s, msg)
+		res := out["result"].(map[string]any)
+		if res["isError"] == true {
+			return res, true
+		}
+		var col map[string]any
+		text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+		if err := json.Unmarshal([]byte(text), &col); err != nil {
+			t.Fatalf("domain must be JSON: %v", err)
+		}
+		return col, false
+	}
+	// Explicit page passes through.
+	if _, isErr := domainText(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"domain","arguments":{"projectId":"feather","domain":"Architecture","limit":10,"offset":5}}}`); isErr {
+		t.Error("domain limit/offset must be accepted")
+	}
+	// Out of range refuses (limit:0 means absent → bounded default).
+	for _, args := range []string{
+		`"limit":501`, `"limit":-3`, `"offset":-1`,
+	} {
+		res, isErr := domainText(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"domain","arguments":{"projectId":"feather","domain":"Architecture",` + args + `}}}`)
+		if !isErr {
+			t.Errorf("domain %s must be isError=true", args)
+			continue
+		}
+		text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+		if !strings.Contains(text, "limit") && !strings.Contains(text, "offset") {
+			t.Errorf("domain %s error must name the offending bound, got %q", args, text)
+		}
+	}
+}
+
+// TestToolsCallTimeout: a hung capability reports the deterministic
+// timeout error (with retry guidance) instead of hanging the transport.
+func TestToolsCallTimeout(t *testing.T) {
+	s := newTestServer(&blockingCapability{release: make(chan struct{})})
+	s.toolTimeout = 20 * time.Millisecond
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"context","arguments":{"subject":"feather/adr:001"}}}`)
+	res := out["result"].(map[string]any)
+	if res["isError"] != true {
+		t.Fatal("timed-out call must be isError=true")
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	for _, want := range []string{"timed out", "noContent", "limit/offset"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("timeout error must mention %q, got %q", want, text)
+		}
+	}
+}
+
+// blockingCapability hangs in Context until release closes (never in
+// this test) so the server timeout fires deterministically.
+type blockingCapability struct {
+	Capability
+	release chan struct{}
+}
+
+func (b *blockingCapability) Context(subject, projectID, depth string) ([]byte, error) {
+	<-b.release
+	return nil, nil
+}
+
+// TestToolsListAdvertisesDomainPagination: domain must advertise the
+// limit/offset page bounds (optional, bounded defaults).
+func TestToolsListAdvertisesDomainPagination(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	tools := out["result"].(map[string]any)["tools"].([]any)
+	for _, tl := range tools {
+		tm := tl.(map[string]any)
+		if tm["name"] != "domain" {
+			continue
+		}
+		schema := tm["inputSchema"].(map[string]any)
+		props := schema["properties"].(map[string]any)
+		for _, want := range []string{"limit", "offset"} {
+			prop, ok := props[want].(map[string]any)
+			if !ok {
+				t.Fatalf("tool domain must advertise %q", want)
+			}
+			if prop["type"] != "integer" {
+				t.Errorf("tool domain %s type = %v, want integer", want, prop["type"])
+			}
+		}
+		if req, has := schema["required"]; has {
+			for _, r := range req.([]any) {
+				if r.(string) == "limit" || r.(string) == "offset" {
+					t.Errorf("tool domain must NOT require %q (bounded defaults)", r.(string))
+				}
+			}
+		}
+		return
+	}
+	t.Fatal("tool domain not found in tools/list")
 }
 
 // TestToolsListAdvertisesNoContent: get and domain must advertise

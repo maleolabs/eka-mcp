@@ -204,6 +204,9 @@ func (f *failingStatusCapability) Domain(projectID, domain string, noContent boo
 func (f *failingStatusCapability) DomainWithFilters(projectID, domain string, noContent bool, level, project, version string) ([]byte, error) {
 	return nil, errors.New("unreachable")
 }
+func (f *failingStatusCapability) DomainPaged(p, d string, noContent bool, level, project, version string, limit, offset int) ([]byte, error) {
+	return f.DomainWithFilters(p, d, noContent, level, project, version)
+}
 
 func (f *failingStatusCapability) Status() ([]byte, error) {
 	return f.StatusWithAll(false)

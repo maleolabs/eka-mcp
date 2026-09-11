@@ -177,6 +177,18 @@ func (c *Capability) Domain(projectID, domain string, noContent bool) ([]byte, e
 	return c.DomainWithFilters(projectID, domain, noContent, "", "", "")
 }
 func (c *Capability) DomainWithFilters(projectID, domain string, noContent bool, level, project, version string) ([]byte, error) {
+	return c.DomainPaged(projectID, domain, noContent, level, project, version, 0, 0)
+}
+
+// DomainPaged is DomainWithFilters with a bounded page window applied to
+// the sorted collection via machine.Collection.Page: Count stays the
+// TOTAL unit count and the pagination metadata names the window, so
+// agents page large workspaces (500+ objects) deterministically instead
+// of timing out on one unbounded payload. limit<=0 windows to the end
+// of the list from offset (the unbounded default); the server dispatch
+// validates the public 1..maxDomainPageLimit range and supplies the
+// bounded default.
+func (c *Capability) DomainPaged(projectID, domain string, noContent bool, level, project, version string, limit, offset int) ([]byte, error) {
 	if !c.Exists() {
 		return nil, fmt.Errorf("eka: workspace not initialized")
 	}
@@ -198,6 +210,9 @@ func (c *Capability) DomainWithFilters(projectID, domain string, noContent bool,
 	col, err := machine.NewCollection(domain, units)
 	if err != nil {
 		return nil, err
+	}
+	if limit > 0 || offset > 0 {
+		col.Page(offset, limit)
 	}
 	if noContent {
 		for _, d := range col.Units {
