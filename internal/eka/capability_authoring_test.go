@@ -596,7 +596,7 @@ func TestPublishLegalTransitions_Plan(t *testing.T) {
 	if !ok {
 		t.Fatalf("publish legalTransitions = %v, want map", res["legalTransitions"])
 	}
-	wantPlanning := []string{"draft", "approved", "immutable"}
+	wantPlanning := []string{"draft", "approved", "immutable", "superseded"}
 	if !equalStringSlices(toStringSlice(lt["planning-state"]), wantPlanning) {
 		t.Errorf("plan legalTransitions[planning-state] = %v, want %v", lt["planning-state"], wantPlanning)
 	}

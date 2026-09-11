@@ -461,8 +461,8 @@ func TestToolsCallNewReturnsLegalTransitions(t *testing.T) {
 	}
 	wantPlan := fakeLegalTransitions("plan")
 	assertLegalTransitions(t, plt, wantPlan)
-	if !equalStringSlices(toStringSlice(plt["planning-state"]), []string{"draft", "approved", "immutable"}) {
-		t.Errorf("publish plan planning-state = %v, want [draft approved immutable]", plt["planning-state"])
+	if !equalStringSlices(toStringSlice(plt["planning-state"]), []string{"draft", "approved", "immutable", "superseded"}) {
+		t.Errorf("publish plan planning-state = %v, want [draft approved immutable superseded]", plt["planning-state"])
 	}
 }
 
