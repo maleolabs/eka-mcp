@@ -81,8 +81,8 @@ Fix the draft (it was kept) and publish again. `eka validate` failures: the repo
 |---|---|---|
 | `transition <from> -> <to> is not in the D1 table; legal transitions from "<from>": <list>` | illegal state jump | follow the D1 table (`planned → todo → in-progress → in-review → done`; `canceled` re-activates to `todo`; `done` exits only to `canceled`) |
 | gate refusal (in-review needs a resolved implementation note; done needs every note resolved — R13) | missing note evidence | `eka note <line> --role implementation`, set `noteState: resolved`, publish |
-| `not registered in the current active container` | the work item has no ticket deriving from the active container | confirm in a terminal or pass `--force` (never bypasses gates); over MCP the refusal says it: retry with `confirmed: true`; preferably fix the container registration |
-| container activation/completion refusals | exactly-one-active rule, depends-on plan not approved, or items not done/canceled | complete the active container first; approve the plan; finish the items |
+| `not registered in the current active container` | the work item has no ticket deriving from ANY active container | confirm in a terminal or pass `--force` (never bypasses gates); over MCP the refusal says it: retry with `confirmed: true`; preferably fix the container registration. With several active containers (multi-repo parallel execution), registration in ANY active container confirms |
+| container activation/completion refusals | one-active-per-source_repo rule (another container active in the SAME source_repo), shared plan-closure across repos, depends-on plan not approved, or items not done/canceled | same-repo: complete the blocking container first. Cross-repo: the refusal names the shared plan/edge — the activating container's transitive depends-on/derives-from plan closure must be disjoint from every other active container's (dec:parallel-container-execution); disjoint the plans or wait. Approve the plan; finish the items |
 | plan cannot go `immutable` | immutability is the container lock, not a direct transition | activate the container that locks the plan |
 
 ### G. Note refusals
