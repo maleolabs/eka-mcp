@@ -45,6 +45,10 @@ The ticket wires the membership: `eka view execution` and `eka view ticket` deri
 
 The `workItems` content key of a `ctr-` artifact is prose — never parsed for membership.
 
+## Container activation (parallel execution)
+
+Containers activate under the **one-active-container-per-source_repo** rule (dec:parallel-container-execution): multiple containers may be active simultaneously — one per repository (source_repo) — provided their transitive `depends-on`/`derives-from` **plan closures are disjoint** (a shared plan/decision node refuses the activation naming the shared line). A second activation in the SAME source_repo keeps the exact-one-active refusal; cross-repo activation with a shared closure node refuses with the shared plan/edge. Plan retirement gates only on active containers deriving from THAT plan, and the work-item active-container confirmation resolves against ANY active container. Multi-active is a valid state — `eka view execution` renders one board per active container plus a containers summary.
+
 ## Assignment (work item → member)
 
 Human ownership of work is the **assigned-to** relationship (ADR-029 / `req:team-collaboration` §4.3): a work item points at its assigned member (`mbr-` line). Assignment is relationship-only (ADR-013) and **single-assignee** — a work item carries at most one assigned-to edge. The member line is the typed target: an `mbr-` artifact (operating token, Execution domain, content-state + existence-state, `purpose`/`content` sections — see [`templates/drafts/mbr-template.json`](templates/drafts/mbr-template.json)).
