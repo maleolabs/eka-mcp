@@ -283,10 +283,11 @@ var toolDescriptors = []toolDescriptor{
 		Name:        "discard",
 		RiskClass:   RiskLocalWrite,
 		Required:    []string{"target"},
-		Description: "Delete one draft file without publishing (schema eka-discard-result-v1). The draft is gone; the identity is free for a new draft.",
+		Description: "Delete one draft file permanently (schema eka-discard-result-v1). The deletion is irreversible — the draft is gone and the identity is free for a new draft. The call is refused without confirmed:true: the refusal names the target, writes nothing, and tells the caller to retry deliberately.",
 		Properties: map[string]any{
-			"target":  map[string]any{"type": "string", "minLength": 1, "description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\"."},
-			"project": map[string]any{"type": "string", "description": "Optional project scope (default: the cwd repository's project)."},
+			"target":    map[string]any{"type": "string", "minLength": 1, "description": "Draft target: \"<ns>/<type>:<id>\" or \"<type>:<id>\"."},
+			"project":   map[string]any{"type": "string", "description": "Optional project scope (default: the cwd repository's project)."},
+			"confirmed": map[string]any{"type": "boolean", "description": "Pre-authorize the destructive delete. Without it the call is refused with a retry instruction, so a delete is always deliberate."},
 		},
 	},
 	{
@@ -1095,12 +1096,19 @@ func (s *Server) handleToolsList(req request) []byte {
 			"description": d.Description,
 			"inputSchema": schema,
 		}
-		// Surface risk class and annotations for approval policy.
+		// Surface risk class and annotations for approval policy. The
+		// annotation keys are the MCP specification's (`readOnlyHint`,
+		// `destructiveHint`, `idempotentHint`, `openWorldHint`), not bare
+		// adjectives: a client that reads the standard keys ignores
+		// non-standard ones, so a misspelled hint silently disables the
+		// approval prompt it was meant to drive. `riskClass` is carried
+		// alongside as this server's own richer classification.
 		entry["annotations"] = map[string]any{
-			"riskClass":   d.RiskClass,
-			"readOnly":    d.RiskClass == RiskRead,
-			"destructive": d.RiskClass == RiskCanonicalWrite || d.RiskClass == RiskExternal,
-			"openWorld":   d.RiskClass == RiskExternal,
+			"riskClass":       d.RiskClass,
+			"readOnlyHint":    d.RiskClass == RiskRead,
+			"destructiveHint": d.RiskClass == RiskCanonicalWrite || d.RiskClass == RiskExternal,
+			"idempotentHint":  d.RiskClass == RiskRead,
+			"openWorldHint":   d.RiskClass == RiskExternal,
 		}
 		tools = append(tools, entry)
 	}
@@ -1162,11 +1170,75 @@ type refusalFidelity interface {
 	RefusalConfirmation() bool
 }
 
+// refusalAffordance is the optional refinement of refusalFidelity for a
+// refusal that needs its own retry instruction. It is a separate interface
+// rather than another method on refusalFidelity so every existing refusal
+// carrier keeps compiling and falls back to the shared wording.
+type refusalAffordance interface {
+	// RefusalAffordance returns the retry instruction specific to this
+	// refusal ("" falls back to confirmationAffordance).
+	RefusalAffordance() string
+}
+
 // confirmationAffordance is the exact retry instruction surfaced on a
 // confirming transition refusal (sto:mcp-error-fidelity AC #3): the
 // capability layer supports Confirmed=true, so an agent must be told
 // the refusal is retryable instead of being left with a dead end.
 const confirmationAffordance = "retry with confirmed:true to proceed anyway (asserts the work item may leave the current active container)"
+
+// discardAffordance is the retry instruction for a refused discard. The
+// shared constant above names a work item leaving its container, which is
+// true for transition and misleading here: an agent reading it on a discard
+// refusal would conclude the wrong thing about what it is authorising.
+const discardAffordance = "retry with confirmed:true to proceed anyway (authorises permanent deletion of the draft)"
+
+// discardConfirmationGate is the boundary-side confirmation gate of the
+// irreversible discard tool: it satisfies refusalFidelity so the retry
+// affordance reaches the caller through the same third content block as
+// a transition refusal, while the headline stays a sanitized one-liner.
+// The gate is decided in dispatchTool BEFORE the capability layer is
+// reached, so a refused discard writes nothing at all.
+type discardConfirmationGate struct {
+	// target is the requested draft target, echoed in the headline so
+	// the caller knows exactly which deletion was refused.
+	target string
+}
+
+// Error renders the sanitized headline of a refused discard.
+func (e *discardConfirmationGate) Error() string {
+	return "discard of " + e.target + " refused: permanent deletion requires confirmed:true"
+}
+
+// RefusalReport implements refusalFidelity ("" — the gate carries no
+// conformance report).
+func (e *discardConfirmationGate) RefusalReport() string { return "" }
+
+// RefusalWarning implements refusalFidelity: what the confirmed delete
+// actually destroys, stated before the caller pre-authorizes it.
+func (e *discardConfirmationGate) RefusalWarning() string {
+	return "discard deletes the draft file permanently; the identity becomes reusable immediately, so a re-scaffold of the same id silently replaces the authored content"
+}
+
+// RefusalConfirmation implements refusalFidelity: the caller may retry
+// with confirmed:true.
+func (e *discardConfirmationGate) RefusalConfirmation() bool { return true }
+
+// RefusalAffordance implements the optional per-refusal retry instruction so
+// the caller is told what confirming actually authorises. An interface-typed
+// nil check keeps other refusal carriers on the shared transition wording.
+func (e *discardConfirmationGate) RefusalAffordance() string { return discardAffordance }
+
+// refusalRetryInstruction returns the retry instruction for one confirming
+// refusal: the refusal's own wording when it supplies one, the shared
+// transition wording otherwise.
+func refusalRetryInstruction(fidelity refusalFidelity) string {
+	if custom, ok := fidelity.(refusalAffordance); ok {
+		if text := custom.RefusalAffordance(); text != "" {
+			return text
+		}
+	}
+	return confirmationAffordance
+}
 
 // toolFailureResult builds the isError:true tool result for one
 // execution failure. Content block 0 is ALWAYS the sanitized headline —
@@ -1214,7 +1286,7 @@ func (s *Server) toolFailureResult(err error) map[string]any {
 				if b.Len() > 0 {
 					b.WriteByte('\n')
 				}
-				b.WriteString(confirmationAffordance)
+				b.WriteString(refusalRetryInstruction(fidelity))
 			}
 			content = append(content, map[string]any{"type": "text", "text": b.String()})
 		}
@@ -1693,11 +1765,19 @@ func (s *Server) dispatchTool(name string, args json.RawMessage) (string, error)
 		return string(data), nil
 	case "discard":
 		var p struct {
-			Target  string `json:"target"`
-			Project string `json:"project"`
+			Target    string `json:"target"`
+			Project   string `json:"project"`
+			Confirmed bool   `json:"confirmed"`
 		}
 		if err := s.decodeToolArgs("discard", args, &p); err != nil {
 			return "", err
+		}
+		// Discard is irreversible (the draft file is destroyed and the
+		// identity is immediately reusable), so it is gated here and not
+		// only in the capability layer: an unconfirmed call is refused
+		// before s.cap.Discard is reached, i.e. it writes nothing.
+		if !p.Confirmed {
+			return "", &discardConfirmationGate{target: p.Target}
 		}
 		data, err := s.cap.Discard(p.Target, p.Project)
 		if err != nil {

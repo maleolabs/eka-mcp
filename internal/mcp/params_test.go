@@ -288,6 +288,22 @@ func TestRequiredFieldContractSchemaMatchesEnforcement(t *testing.T) {
 			}
 			args[f] = "x"
 		}
+		// discard additionally gates on the opt-in (non-required) confirmed
+		// flag at dispatch: without it the call is refused before the
+		// capability layer. This test pins the parameter layer only.
+		if name == "discard" {
+			raw, err := json.Marshal(map[string]any{"target": "x", "confirmed": true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"`+name+`","arguments":`+string(raw)+`}}`)
+			res := out["result"].(map[string]any)
+			if res["isError"] != false {
+				text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+				t.Errorf("%s with all required fields must pass the parameter layer, refused with: %s", name, text)
+			}
+			continue
+		}
 		raw, err := json.Marshal(args)
 		if err != nil {
 			t.Fatal(err)

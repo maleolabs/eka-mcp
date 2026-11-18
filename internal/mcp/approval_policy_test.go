@@ -118,7 +118,9 @@ func TestToolsListStrictSchemasAndAnnotations(t *testing.T) {
 				}
 			}
 		}
-		// Annotations must carry risk class and readOnly/destructive/openWorld.
+		// Annotations must carry risk class and the MCP specification's
+		// hint keys. A client reads the standard names; a non-standard
+		// spelling silently disables the approval prompt it drives.
 		ann, ok := tm["annotations"].(map[string]any)
 		if !ok {
 			t.Errorf("tool %q missing annotations", d.Name)
@@ -127,8 +129,20 @@ func TestToolsListStrictSchemasAndAnnotations(t *testing.T) {
 		if ann["riskClass"] != d.RiskClass {
 			t.Errorf("tool %q annotation riskClass=%v want %q", d.Name, ann["riskClass"], d.RiskClass)
 		}
-		if ann["readOnly"] != (d.RiskClass == RiskRead) {
-			t.Errorf("tool %q readOnly annotation mismatch", d.Name)
+		if ann["readOnlyHint"] != (d.RiskClass == RiskRead) {
+			t.Errorf("tool %q readOnlyHint annotation mismatch", d.Name)
+		}
+		if ann["destructiveHint"] != (d.RiskClass == RiskCanonicalWrite || d.RiskClass == RiskExternal) {
+			t.Errorf("tool %q destructiveHint annotation mismatch", d.Name)
+		}
+		if ann["openWorldHint"] != (d.RiskClass == RiskExternal) {
+			t.Errorf("tool %q openWorldHint annotation mismatch", d.Name)
+		}
+		// The bare adjectives were never standard and must not come back.
+		for _, stale := range []string{"readOnly", "destructive", "openWorld"} {
+			if _, present := ann[stale]; present {
+				t.Errorf("tool %q carries non-standard annotation key %q", d.Name, stale)
+			}
 		}
 	}
 	// Pin enums and bounds for strict schemas.

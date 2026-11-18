@@ -32,6 +32,7 @@ type fakeCapability struct {
 	gotCode       []CodeContextRequest
 	gotDiscover   []CodeDiscoverRequest
 	gotGet        []CodeGetRequest
+	gotDiscard    []string
 }
 
 func (f *fakeCapability) CodeContext(req CodeContextRequest) ([]byte, error) {
@@ -189,6 +190,7 @@ func (f *fakeCapability) IntegrityCheck() ([]byte, error) {
 }
 
 func (f *fakeCapability) Discard(target, project string) ([]byte, error) {
+	f.gotDiscard = append(f.gotDiscard, target)
 	return []byte(`{"schema":"eka-discard-result-v1","target":` + mustQuote(target) + `,"note":""}`), nil
 }
 
@@ -1408,3 +1410,121 @@ func TestServeFinalLineWithoutNewline(t *testing.T) {
 		t.Errorf("final line without newline must be processed, got %q", out.String())
 	}
 }
+
+// TestDiscardRequiresConfirmation: an unconfirmed discard is refused at
+// the boundary with a retry instruction, and the refusal writes nothing —
+// the capability layer's Discard is never reached.
+func TestDiscardRequiresConfirmation(t *testing.T) {
+	cap := &fakeCapability{statusJSON: `{}`}
+	s := newTestServer(cap)
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"discard","arguments":{"target":"feather/adr:001"}}}`)
+	res := mustResult(t, out)
+	if res["isError"] != true {
+		t.Fatalf("unconfirmed discard must be refused, got isError=%v", res["isError"])
+	}
+	texts := mustFailureContent(t, out)
+	if !strings.Contains(texts[0], "confirmed:true") {
+		t.Errorf("refusal headline %q must name confirmed:true", texts[0])
+	}
+	if !strings.Contains(texts[0], "feather/adr:001") {
+		t.Errorf("refusal headline %q must name the refused target", texts[0])
+	}
+	// The refusal error itself satisfies refusalFidelity.
+	var err error = &discardConfirmationGate{target: "feather/adr:001"}
+	var fidelity refusalFidelity
+	if !errors.As(err, &fidelity) {
+		t.Fatalf("discard refusal %T must satisfy refusalFidelity", err)
+	}
+	if !fidelity.RefusalConfirmation() {
+		t.Error("RefusalConfirmation() = false, want true (retryable with confirmed:true)")
+	}
+	// Refusal writes nothing: the capability layer was never invoked.
+	if len(cap.gotDiscard) != 0 {
+		t.Errorf("capability Discard called %d time(s) on the refusal path, want 0", len(cap.gotDiscard))
+	}
+}
+
+// TestDiscardWithConfirmationDeletes: confirmed:true reaches the
+// capability layer and returns the eka-discard-result-v1 payload.
+func TestDiscardWithConfirmationDeletes(t *testing.T) {
+	cap := &fakeCapability{statusJSON: `{}`}
+	s := newTestServer(cap)
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"discard","arguments":{"target":"feather/adr:001","confirmed":true}}}`)
+	res := mustResult(t, out)
+	if res["isError"] != false {
+		t.Fatalf("confirmed discard must succeed, got %v", res["content"])
+	}
+	if len(cap.gotDiscard) != 1 || cap.gotDiscard[0] != "feather/adr:001" {
+		t.Fatalf("capability Discard calls = %v, want exactly [feather/adr:001]", cap.gotDiscard)
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "eka-discard-result-v1") {
+		t.Errorf("discard result %q must carry schema eka-discard-result-v1", text)
+	}
+}
+
+// TestDiscardDescriptorDeclaresConfirmed: the discard descriptor
+// advertises the opt-in confirmed boolean but keeps it out of Required.
+func TestDiscardDescriptorDeclaresConfirmed(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	tools := mustResult(t, out)["tools"].([]any)
+	var discard map[string]any
+	for _, tl := range tools {
+		tm := tl.(map[string]any)
+		if tm["name"] == "discard" {
+			discard = tm
+		}
+	}
+	if discard == nil {
+		t.Fatal("tools/list must advertise discard")
+	}
+	schema := discard["inputSchema"].(map[string]any)
+	props := schema["properties"].(map[string]any)
+	prop, ok := props["confirmed"].(map[string]any)
+	if !ok {
+		t.Fatalf("discard properties has no confirmed entry: %v", props)
+	}
+	if prop["type"] != "boolean" {
+		t.Errorf("confirmed type = %v, want boolean", prop["type"])
+	}
+	if req, has := schema["required"]; has {
+		for _, r := range req.([]any) {
+			if r == "confirmed" {
+				t.Error("confirmed must NOT be required (opt-in per call)")
+			}
+		}
+	}
+	desc, _ := discard["description"].(string)
+	if !strings.Contains(desc, "eka-discard-result-v1") {
+		t.Errorf("discard description %q must keep the schema identifier eka-discard-result-v1", desc)
+	}
+	if !strings.Contains(desc, "confirmed:true") {
+		t.Errorf("discard description %q must state the confirmed:true requirement", desc)
+	}
+}
+
+// TestDiscardRefusalNamesItsOwnAffordance pins that a refused discard tells
+// the caller what confirming authorises. The shared transition wording names
+// a work item leaving its container, which is true for transition and
+// misleading on an irreversible delete: an agent reading it would authorise
+// the wrong thing.
+func TestDiscardRefusalNamesItsOwnAffordance(t *testing.T) {
+	err := &discardConfirmationGate{target: "eka/bug:x"}
+	if got := refusalRetryInstruction(err); got != discardAffordance {
+		t.Errorf("discard refusal affordance = %q, want %q", got, discardAffordance)
+	}
+	// Every other refusal keeps the transition wording.
+	var other refusalFidelity = plainRefusalForTest{}
+	if got := refusalRetryInstruction(other); got != confirmationAffordance {
+		t.Errorf("plain refusal affordance = %q, want the shared %q", got, confirmationAffordance)
+	}
+}
+
+// plainRefusalForTest is a minimal refusalFidelity with no custom affordance.
+type plainRefusalForTest struct{}
+
+func (plainRefusalForTest) Error() string             { return "refused" }
+func (plainRefusalForTest) RefusalReport() string     { return "" }
+func (plainRefusalForTest) RefusalWarning() string    { return "" }
+func (plainRefusalForTest) RefusalConfirmation() bool { return true }
