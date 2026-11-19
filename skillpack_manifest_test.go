@@ -15,6 +15,37 @@ const skillsManifest = "skills/manifest.yaml"
 // 'requiresEka: ">= 1.16.0"'.
 var requiresEkaPattern = regexp.MustCompile(`requiresEka:\s*">=\s*([0-9]+\.[0-9]+\.[0-9]+)"`)
 
+// projectVersionPattern matches the release version anvil.yaml declares, e.g.
+// '    version: 1.15.2'. Only the project block carries a bare three-component
+// version, so the indentation anchor is what keeps this unambiguous.
+var projectVersionPattern = regexp.MustCompile(`(?m)^\s+version:\s*"?([0-9]+\.[0-9]+\.[0-9]+)"?\s*$`)
+
+// TestPackVersionMatchesProjectVersion fails when the version the binary
+// reports and the version the release pipeline tags disagree.
+//
+// The release identity lives in three places, and each answers a different
+// question: anvil.yaml is what the release workflow validates the tag against
+// (so it decides what a release IS), Version in pack.go is what the running
+// server reports over MCP, and skills/manifest.yaml requiresEka is what the
+// pack promises about the CLI it ships inside. The last two are covered by the
+// tests above; the first was not, so a half-done release (core tagged, plugin
+// version left at the previous value) reported one version while CI shipped
+// another and nothing failed. This test closes that axis: the three copies are
+// now all locked to a checked source.
+func TestPackVersionMatchesProjectVersion(t *testing.T) {
+	raw, err := os.ReadFile("anvil.yaml")
+	if err != nil {
+		t.Fatalf("anvil.yaml is unreadable: %v", err)
+	}
+	m := projectVersionPattern.FindStringSubmatch(string(raw))
+	if m == nil {
+		t.Fatal("anvil.yaml no longer declares the project version as 'version: X.Y.Z'")
+	}
+	if released := m[1]; strings.TrimPrefix(Version, "v") != released {
+		t.Errorf("pack.go reports version %s, anvil.yaml releases %s: the release workflow tags one version and the binary claims another", Version, released)
+	}
+}
+
 // TestSkillPackRequiresEkaNotBeyondRelease fails when the pack advertises a
 // CLI requirement its own release does not satisfy.
 //
