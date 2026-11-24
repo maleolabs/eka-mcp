@@ -120,9 +120,10 @@ func TestConformanceCapabilitiesOnlyToolsAndResources(t *testing.T) {
 	}
 }
 
-// TestConformanceToolsListExact (spike point 4a): tools/list returns
-// exactly the 23-tool surface in the acceptance order (draft_read + deprecated view alias + sync_push + assign trio + feedback trio + draft_update + publish batch + code_context),
-// each with a valid JSON Schema inputSchema.
+// TestConformanceToolsListExact (spike point 4a): tools/list returns exactly
+// the six grouped handles (sto:retrieval-surface-budget), each with a valid
+// JSON Schema inputSchema carrying the required op discriminator and the
+// nested args object. Flat member names are dispatch aliases only.
 func TestConformanceToolsListExact(t *testing.T) {
 	s := conformanceServer()
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
@@ -131,9 +132,9 @@ func TestConformanceToolsListExact(t *testing.T) {
 	if !ok {
 		t.Fatalf("tools = %v, want an array", res["tools"])
 	}
-	want := []string{"context", "code_context", "code_discover", "code_get", "get", "domain", "status", "validate", "new", "draft_update", "publish", "publishBatch", "transition", "note", "draft_read", "draft_list", "integrity_check", "discard", "sync_push", "assign", "reassign", "unassign", "feedback_new", "feedback_list", "feedback_publish"}
+	want := []string{"knowledge_read", "knowledge_write", "code", "workspace", "ops", "feedback"}
 	if len(tools) != len(want) {
-		t.Fatalf("tools = %v, want exactly %v", tools, want)
+		t.Fatalf("tools = %v, want exactly the six groups %v", tools, want)
 	}
 	for i, tl := range tools {
 		tm, ok := tl.(map[string]any)
@@ -150,15 +151,21 @@ func TestConformanceToolsListExact(t *testing.T) {
 		if schema["type"] != "object" {
 			t.Errorf("tool %v inputSchema.type = %v, want object", tm["name"], schema["type"])
 		}
-		if schema["properties"] == nil {
-			t.Errorf("tool %v inputSchema must carry properties", tm["name"])
+		props, ok := schema["properties"].(map[string]any)
+		if !ok || props["op"] == nil || props["args"] == nil {
+			t.Errorf("tool %v inputSchema must carry op and args properties", tm["name"])
+		}
+		req, _ := schema["required"].([]any)
+		if len(req) != 1 || req[0] != "op" {
+			t.Errorf("tool %v required = %v, want [op]", tm["name"], req)
 		}
 	}
-	// Deprecated alias `view` must NOT be advertised as primary.
-	for _, tl := range tools {
-		tm := tl.(map[string]any)
-		if tm["name"] == "view" {
-			t.Errorf("tool view must not be advertised (deprecated alias, dispatch only)")
+	// No flat member name may be advertised (they are aliases).
+	for _, d := range memberToolDescriptors {
+		for _, tl := range tools {
+			if tl.(map[string]any)["name"] == d.Name {
+				t.Errorf("flat alias %q must not be advertised", d.Name)
+			}
 		}
 	}
 }
@@ -478,31 +485,19 @@ func TestConformanceStdioFraming(t *testing.T) {
 // same engine as `eka sync push`, and refuses pull/fromDocs deterministically.
 func TestConformanceSyncPushTool(t *testing.T) {
 	s := conformanceServer()
-	// tools/list must carry sync_push with required properties.
-	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
-	res := mustResult(t, out)
-	tools := res["tools"].([]any)
-	found := false
-	for _, tl := range tools {
-		tm := tl.(map[string]any)
-		if tm["name"] == "sync_push" {
-			found = true
-			schema := tm["inputSchema"].(map[string]any)
-			props := schema["properties"].(map[string]any)
-			if props["repoPath"] == nil || props["adopt"] == nil || props["override"] == nil {
-				t.Errorf("sync_push inputSchema must carry repoPath, adopt, override, got %v", props)
-			}
-			desc := tm["description"].(string)
-			if !strings.Contains(desc, "eka-sync-push-result-v1") && !strings.Contains(desc, "eka sync push") {
-				t.Errorf("sync_push description = %q, want eka-sync-push-result-v1 and eka sync push mention", desc)
-			}
-			if !strings.Contains(desc, "pull") {
-				t.Errorf("sync_push description = %q, want pull refusal note", desc)
-			}
-		}
+	// sync_push is discoverable through the workspace group: its properties
+	// are advertised in the nested args schema and its description verbatim in
+	// the group description.
+	props := memberArgsProps(t, s, "sync_push")
+	if props["repoPath"] == nil || props["adopt"] == nil || props["override"] == nil {
+		t.Errorf("sync_push inputSchema must carry repoPath, adopt, override, got %v", props)
 	}
-	if !found {
-		t.Fatal("tools/list is missing sync_push")
+	desc := memberGroupDescription(t, s, "sync_push")
+	if !strings.Contains(desc, "eka-sync-push-result-v1") && !strings.Contains(desc, "eka sync push") {
+		t.Errorf("sync_push description = %q, want eka-sync-push-result-v1 and eka sync push mention", desc)
+	}
+	if !strings.Contains(desc, "pull") {
+		t.Errorf("sync_push description = %q, want pull refusal note", desc)
 	}
 
 	// tools/call sync_push succeeds with deterministic byte-identical output for identical state.
@@ -525,7 +520,7 @@ func TestConformanceSyncPushTool(t *testing.T) {
 	}
 
 	// sync_push with repoPath explicitly succeeds.
-	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sync_push","arguments":{"repoPath":"."}}}`)
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sync_push","arguments":{"repoPath":"."}}}`)
 	if mustResult(t, out)["isError"] != false {
 		t.Errorf("sync_push with repoPath must succeed")
 	}
@@ -571,25 +566,27 @@ func TestConformanceSyncPushTool(t *testing.T) {
 // expose the same engine as CLI with deterministic refusals and agent identity.
 func TestConformanceAssignmentTools(t *testing.T) {
 	s := conformanceServer()
-	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
-	res := mustResult(t, out)
-	tools := res["tools"].([]any)
-	byName := map[string]map[string]any{}
-	for _, tl := range tools {
-		tm := tl.(map[string]any)
-		byName[tm["name"].(string)] = tm
+	// assignment tools are discoverable through the workspace group: their
+	// properties live in the nested args schema, their descriptions verbatim
+	// in the group description.
+	props := memberArgsProps(t, s, "assign")
+	required := func(name, field string) bool {
+		d := descriptorByName(name)
+		if d == nil {
+			return false
+		}
+		for _, r := range d.Required {
+			if r == field {
+				return true
+			}
+		}
+		return false
 	}
 	for _, name := range []string{"assign", "reassign", "unassign"} {
-		tm, ok := byName[name]
-		if !ok {
-			t.Fatalf("tools/list is missing %s", name)
-		}
-		schema := tm["inputSchema"].(map[string]any)
-		props := schema["properties"].(map[string]any)
 		if props["target"] == nil {
-			t.Errorf("%s inputSchema must carry target, got %v", name, props)
+			t.Errorf("%s inputSchema must carry target", name)
 		}
-		desc := tm["description"].(string)
+		desc := memberGroupDescription(t, s, name)
 		if !strings.Contains(desc, "eka-assignment-v1") {
 			t.Errorf("%s description = %q, want eka-assignment-v1", name, desc)
 		}
@@ -599,37 +596,15 @@ func TestConformanceAssignmentTools(t *testing.T) {
 	}
 	// assign/reassign require to, unassign does not
 	for _, name := range []string{"assign", "reassign"} {
-		tm := byName[name]
-		schema := tm["inputSchema"].(map[string]any)
-		props := schema["properties"].(map[string]any)
 		if props["to"] == nil {
-			t.Errorf("%s inputSchema must carry to, got %v", name, props)
+			t.Errorf("%s inputSchema must carry to", name)
 		}
-		req, _ := schema["required"].([]any)
-		hasTarget, hasTo := false, false
-		for _, r := range req {
-			if r == "target" {
-				hasTarget = true
-			}
-			if r == "to" {
-				hasTo = true
-			}
-		}
-		if !hasTarget || !hasTo {
-			t.Errorf("%s required = %v, want target and to", name, req)
+		if !required(name, "target") || !required(name, "to") {
+			t.Errorf("%s required must carry target and to", name)
 		}
 	}
-	tm := byName["unassign"]
-	schema := tm["inputSchema"].(map[string]any)
-	req, _ := schema["required"].([]any)
-	hasTarget := false
-	for _, r := range req {
-		if r == "target" {
-			hasTarget = true
-		}
-	}
-	if !hasTarget {
-		t.Errorf("unassign required = %v, want target", req)
+	if !required("unassign", "target") {
+		t.Errorf("unassign required must carry target")
 	}
 
 	// tools/call assign succeeds with deterministic byte-identical output and agent identity
@@ -686,7 +661,7 @@ func TestConformanceAssignmentTools(t *testing.T) {
 	// Capability-level refusal (member does not resolve, non-work-item) surfaces as isError with sanitized text
 	cap := &failingAssignmentCapability{err: errors.New("assign refused: member acme/mbr:alice does not resolve; available members of the repository: ")}
 	s2 := newTestServer(cap)
-	out = mustHandle(t, s2, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1","to":"mbr:alice"}}}`)
+	out := mustHandle(t, s2, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1","to":"mbr:alice"}}}`)
 	res2 := mustResult(t, out)
 	if res2["isError"] != true {
 		t.Errorf("assign capability refusal must be isError=true, got %v", res2)
@@ -700,24 +675,15 @@ func TestConformanceAssignmentTools(t *testing.T) {
 // TestConformanceFeedbackTools (ts:mcp-feedback-tool AC #1-5): feedback_new/list/publish mirror CLI, list-call semantics, refusals, no CKO, token invariants.
 func TestConformanceFeedbackTools(t *testing.T) {
 	s := conformanceServer()
-	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
-	res := mustResult(t, out)
-	tools := res["tools"].([]any)
-	byName := map[string]map[string]any{}
-	for _, tl := range tools {
-		tm := tl.(map[string]any)
-		byName[tm["name"].(string)] = tm
-	}
+	// feedback tools are discoverable through the feedback group: their
+	// properties are advertised in the nested args schema, their descriptions
+	// verbatim in the group description.
 	for _, name := range []string{"feedback_new", "feedback_list", "feedback_publish"} {
-		tm, ok := byName[name]
-		if !ok {
-			t.Fatalf("tools/list is missing %s", name)
+		props := memberArgsProps(t, s, name)
+		if props == nil {
+			t.Fatalf("feedback group must advertise %s args", name)
 		}
-		schema := tm["inputSchema"].(map[string]any)
-		if schema["type"] != "object" {
-			t.Errorf("%s inputSchema.type = %v, want object", name, schema["type"])
-		}
-		desc := tm["description"].(string)
+		desc := memberGroupDescription(t, s, name)
 		if name == "feedback_new" && !strings.Contains(desc, "eka-feedback-new-v1") {
 			t.Errorf("feedback_new description = %q, want eka-feedback-new-v1", desc)
 		}
@@ -775,7 +741,7 @@ func TestConformanceFeedbackTools(t *testing.T) {
 		t.Errorf("feedback_new result must carry id and path, got %v", doc)
 	}
 	// feedback_list success
-	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"feedback_list","arguments":{}}}`)
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"feedback_list","arguments":{}}}`)
 	resList := mustResult(t, out)
 	if resList["isError"] != false {
 		t.Errorf("feedback_list isError = %v, want false", resList["isError"])

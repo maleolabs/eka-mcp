@@ -104,9 +104,24 @@ the MCP server over stdio (JSON-RPC 2.0, newline-delimited). It reports MCP
 protocol version `2024-11-05` and advertises the `tools` and `resources`
 capabilities.
 
-The server exposes 25 tools (including one deprecated alias) and six resource families over the EKA capability
-layer (guidance remains resource content, operations remain tools):
-layer:
+The server advertises six grouped tool handles (plus six resource families) over
+the EKA capability layer (guidance remains resource content, operations remain
+tools). Each handle takes `{"op":"<operation>","args":{...}}` and forwards to the
+identical operation below — omit `args` for operations that take none. The flat
+operation names stay dispatchable as aliases for existing clients but are no
+longer advertised.
+
+| Group | Operations |
+|---|---|
+| `knowledge_read` | `context`, `get`, `domain`, `status`, `validate`, `draft_read`, `draft_list` |
+| `knowledge_write` | `new`, `draft_update`, `publish`, `publishBatch`, `transition`, `note`, `discard` |
+| `code` | `code_context`, `code_discover`, `code_get` |
+| `workspace` | `sync_push`, `assign`, `reassign`, `unassign` |
+| `ops` | `integrity_check` |
+| `feedback` | `feedback_new`, `feedback_list`, `feedback_publish` |
+
+The table below lists every operation, with the verbatim capability text surfaced
+inside its group's description:
 
 | Tool / resource | Description |
 |---|---|
