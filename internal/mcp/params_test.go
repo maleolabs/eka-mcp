@@ -267,6 +267,12 @@ func TestRequiredFieldContractSchemaMatchesEnforcement(t *testing.T) {
 	// Enforcement side: all declared fields present passes the
 	// parameter layer (the fake capability succeeds for every tool).
 	for name, fields := range toolRequiredFields {
+		// Advertised group handles carry the op discriminator, not a member
+		// arg set; their forwarding contract is pinned by
+		// TestSurfaceGroupOpRefusals / TestSurfaceGroupOpEqualsFlatAlias.
+		if _, isGroup := groupByName(name); isGroup {
+			continue
+		}
 		// draft_update additionally requires an object "content" beyond the
 		// string-field contract (toolRequiredFields is string-only), so the
 		// generic string map would miss it; provide a minimal content object.

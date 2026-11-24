@@ -57,11 +57,15 @@ type toolDescriptor struct {
 	Deprecated  bool
 }
 
-// toolDescriptors is THE authoritative tool catalog — the fixed
-// deterministic order the server advertises and dispatches. Strict schemas
-// use required+types+enums+bounds and additionalProperties:false. Risk
-// classes: read | local-write | canonical-write | external.
-var toolDescriptors = []toolDescriptor{
+// memberToolDescriptors is the flat capability catalog: every handler the
+// dispatcher serves under its original name. After sto:retrieval-surface-
+// budget (M4) these names are dispatchable ALIASES of the grouped surface;
+// the descriptors stay the single source for a member's risk class,
+// required fields and schema properties, and the group schemas are derived
+// from them so the two cannot drift. Strict schemas use
+// required+types+enums+bounds and additionalProperties:false. Risk classes:
+// read | local-write | canonical-write | external.
+var memberToolDescriptors = []toolDescriptor{
 	{
 		Name:        "context",
 		RiskClass:   RiskRead,
@@ -371,8 +375,129 @@ var toolDescriptors = []toolDescriptor{
 	},
 }
 
-// toolNames is the advertised tool order (non-deprecated only). Deprecated
-// alias view is dispatched but not advertised as primary.
+// groupSpec pins one ADVERTISED group handle and its member capabilities in
+// advertisement order (sto:retrieval-surface-budget). The member list is the
+// forwarding table: dispatchGroup resolves {"op":<member>} and calls the
+// identical flat handler, so a group and its flat alias return byte-identical
+// content for the same args.
+type groupSpec struct {
+	Name    string
+	Members []string
+}
+
+var groupSpecs = []groupSpec{
+	{Name: "knowledge_read", Members: []string{"context", "get", "domain", "status", "validate", "draft_read", "draft_list"}},
+	{Name: "knowledge_write", Members: []string{"new", "draft_update", "publish", "publishBatch", "transition", "note", "discard"}},
+	{Name: "code", Members: []string{"code_context", "code_discover", "code_get"}},
+	{Name: "workspace", Members: []string{"sync_push", "assign", "reassign", "unassign"}},
+	{Name: "ops", Members: []string{"integrity_check"}},
+	{Name: "feedback", Members: []string{"feedback_new", "feedback_list", "feedback_publish"}},
+}
+
+// groupByName resolves one advertised group handle.
+func groupByName(name string) (groupSpec, bool) {
+	for _, g := range groupSpecs {
+		if g.Name == name {
+			return g, true
+		}
+	}
+	return groupSpec{}, false
+}
+
+// riskRank orders risk classes weakest to strictest. A group spans the union
+// of its members' trust boundaries, so it advertises the strictest member
+// risk (read < local-write < canonical-write < external): a client that gates
+// on the group annotation is never under-warned. ENFORCEMENT stays member
+// level (each flat handler keeps its own canonical/external gate), so a
+// local-write op inside a canonical-write group is not over-gated and the
+// group op behaves exactly like its flat alias.
+var riskRank = map[string]int{
+	RiskRead:           0,
+	RiskLocalWrite:     1,
+	RiskCanonicalWrite: 2,
+	RiskExternal:       3,
+}
+
+// strictestRisk returns the strictest class of the given set.
+func strictestRisk(classes []string) string {
+	strictest := RiskRead
+	for _, c := range classes {
+		if riskRank[c] > riskRank[strictest] {
+			strictest = c
+		}
+	}
+	return strictest
+}
+
+// buildGroupDescriptors derives the six advertised group handles from
+// groupSpecs and memberToolDescriptors, so the group schema and the verbatim
+// member descriptions cannot drift:
+//   - Description embeds each member's Description VERBATIM under its op name
+//     (discovery does not regress when an agent sees only the group);
+//   - Properties.op is the required discriminator enum of the member names;
+//   - Properties.args is a JSON object whose properties are the union of the
+//     members' own Properties (first member in group order wins a shared
+//     name), so the advertised nested schema exposes every member argument;
+//   - RiskClass is the strictest member risk (see riskRank).
+func buildGroupDescriptors() []toolDescriptor {
+	byName := make(map[string]toolDescriptor, len(memberToolDescriptors))
+	for _, d := range memberToolDescriptors {
+		byName[d.Name] = d
+	}
+	out := make([]toolDescriptor, 0, len(groupSpecs))
+	for _, g := range groupSpecs {
+		opEnum := make([]string, 0, len(g.Members))
+		risks := make([]string, 0, len(g.Members))
+		argsProps := map[string]any{}
+		var desc strings.Builder
+		desc.WriteString("Grouped capability handle. Call with {\"op\":\"<operation>\",\"args\":{...}} (omit args when the operation takes none); an unknown op is refused deterministically. Operations, with their verbatim capability descriptions:")
+		for _, name := range g.Members {
+			d := byName[name]
+			opEnum = append(opEnum, name)
+			risks = append(risks, d.RiskClass)
+			for k, v := range d.Properties {
+				if _, seen := argsProps[k]; !seen {
+					argsProps[k] = v
+				}
+			}
+			desc.WriteString("\n- \"")
+			desc.WriteString(name)
+			desc.WriteString("\": ")
+			desc.WriteString(d.Description)
+		}
+		out = append(out, toolDescriptor{
+			Name:        g.Name,
+			Description: desc.String(),
+			RiskClass:   strictestRisk(risks),
+			Required:    []string{"op"},
+			Properties: map[string]any{
+				"op":   map[string]any{"type": "string", "enum": opEnum, "description": "Operation to run: one of the group's member capabilities (listed in the description)."},
+				"args": map[string]any{"type": "object", "description": "Arguments forwarded unchanged to the selected operation (the member tool's own arguments). Omit for operations with no arguments.", "properties": argsProps},
+			},
+		})
+	}
+	return out
+}
+
+// groupDescriptors is the advertised surface: the six group handles.
+var groupDescriptors = buildGroupDescriptors()
+
+// toolDescriptors is THE authoritative tool catalog: the flat member
+// descriptors (kept as Deprecated dispatch ALIASES) followed by the advertised
+// groups. Advertisement derives from Deprecated=false only, so tools/list is
+// exactly the six groups while every flat name keeps RiskClassOf,
+// toolRequiredFields and schema parity for alias dispatch.
+var toolDescriptors = func() []toolDescriptor {
+	out := make([]toolDescriptor, len(memberToolDescriptors), len(memberToolDescriptors)+len(groupDescriptors))
+	copy(out, memberToolDescriptors)
+	for i := range out {
+		out[i].Deprecated = true
+	}
+	return append(out, groupDescriptors...)
+}()
+
+// toolNames is the advertised tool order (non-deprecated only). The flat
+// member names are dispatched aliases but not advertised as primary.
 var toolNames = func() []string {
 	out := make([]string, 0, len(toolDescriptors))
 	for _, d := range toolDescriptors {
@@ -386,8 +511,11 @@ var toolNames = func() []string {
 // ToolCount returns the number of advertised tools (deprecated alias excluded).
 func ToolCount() int { return len(toolNames) }
 
-// AdvertisedToolCount is the count including deprecated alias (for banner compat check).
-func AdvertisedToolCount() int { return len(toolDescriptors) }
+// AdvertisedToolCount is the number of tools tools/list actually advertises:
+// the grouped surface. The flat member names are dispatchable aliases but
+// unadvertised, so they are not counted (they still live in toolDescriptors
+// for RiskClassOf/toolRequiredFields parity).
+func AdvertisedToolCount() int { return len(toolNames) }
 
 // ResourceCount returns the total number of resources the server exposes:
 // eka://status + eka://manifest + eka://bootstrap (3) plus every

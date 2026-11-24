@@ -89,8 +89,18 @@ func TestToolsListStrictSchemasAndAnnotations(t *testing.T) {
 	if _, has := byName["view"]; has {
 		t.Errorf("view must not be advertised (deprecated alias)")
 	}
-	if _, has := byName["publishBatch"]; !has {
-		t.Errorf("publishBatch must be advertised (split contract)")
+	// publishBatch stays discoverable as a knowledge_write op (flat name is an
+	// alias now; the split contract is pinned in TestToolsListPublishSplitStrict).
+	kwProps := byName["knowledge_write"]["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	opEnum, _ := kwProps["op"].(map[string]any)["enum"].([]any)
+	hasBatch := false
+	for _, e := range opEnum {
+		if e == "publishBatch" {
+			hasBatch = true
+		}
+	}
+	if !hasBatch {
+		t.Errorf("knowledge_write op enum must advertise publishBatch (split contract)")
 	}
 	// Every schema must be strict: type object, additionalProperties false, required subset of properties, enums/bounds.
 	for _, d := range toolDescriptors {
@@ -145,18 +155,17 @@ func TestToolsListStrictSchemasAndAnnotations(t *testing.T) {
 			}
 		}
 	}
-	// Pin enums and bounds for strict schemas.
+	// Pin enums and bounds for strict member schemas. The members are
+	// advertised inside their group's nested args object.
 	// context depth enum
-	if tm := byName["context"]; tm != nil {
-		props := tm["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	if props := memberArgsProps(t, s, "context"); props != nil {
 		depth := props["depth"].(map[string]any)
 		if depth["enum"] == nil {
 			t.Errorf("context depth must have enum")
 		}
 	}
 	// code_context: depth enum, level bounds
-	if tm := byName["code_context"]; tm != nil {
-		props := tm["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	if props := memberArgsProps(t, s, "code_context"); props != nil {
 		if props["depth"].(map[string]any)["enum"] == nil {
 			t.Errorf("code_context depth must have enum")
 		}
@@ -169,8 +178,7 @@ func TestToolsListStrictSchemasAndAnnotations(t *testing.T) {
 		}
 	}
 	// code_discover limit 1-64
-	if tm := byName["code_discover"]; tm != nil {
-		props := tm["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	if props := memberArgsProps(t, s, "code_discover"); props != nil {
 		lim := props["limit"].(map[string]any)
 		if lim["minimum"] != float64(1) && lim["minimum"] != 1 {
 			t.Errorf("code_discover limit minimum must be 1")
@@ -183,16 +191,14 @@ func TestToolsListStrictSchemasAndAnnotations(t *testing.T) {
 		}
 	}
 	// domain enum
-	if tm := byName["domain"]; tm != nil {
-		props := tm["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	if props := memberArgsProps(t, s, "domain"); props != nil {
 		dom := props["domain"].(map[string]any)
 		if dom["enum"] == nil {
 			t.Errorf("domain must have enum")
 		}
 	}
 	// feedback_new enums
-	if tm := byName["feedback_new"]; tm != nil {
-		props := tm["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	if props := memberArgsProps(t, s, "feedback_new"); props != nil {
 		typ := props["type"].(map[string]any)
 		if typ["enum"] == nil {
 			t.Errorf("feedback_new type must have enum")
@@ -204,8 +210,7 @@ func TestToolsListStrictSchemasAndAnnotations(t *testing.T) {
 		}
 	}
 	// note role enum
-	if tm := byName["note"]; tm != nil {
-		props := tm["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	if props := memberArgsProps(t, s, "note"); props != nil {
 		role := props["role"].(map[string]any)
 		if role["enum"] == nil {
 			t.Errorf("note role must have enum")
@@ -215,48 +220,37 @@ func TestToolsListStrictSchemasAndAnnotations(t *testing.T) {
 
 func TestToolsListPublishSplitStrict(t *testing.T) {
 	s := newTestServer(&fakeCapability{statusJSON: `{}`})
-	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
-	tools := out["result"].(map[string]any)["tools"].([]any)
-	byName := map[string]map[string]any{}
-	for _, tl := range tools {
-		tm := tl.(map[string]any)
-		byName[tm["name"].(string)] = tm
-	}
-	pub := byName["publish"]
-	batch := byName["publishBatch"]
+	// The split contract lives in the authoritative member descriptors and
+	// stays discoverable through the knowledge_write op enum (the flat names
+	// are aliases now).
+	pub := descriptorByName("publish")
+	batch := descriptorByName("publishBatch")
 	if pub == nil || batch == nil {
-		t.Fatalf("publish and publishBatch must both be advertised")
+		t.Fatalf("publish and publishBatch descriptors must both exist")
 	}
-	pubSchema := pub["inputSchema"].(map[string]any)
-	batchSchema := batch["inputSchema"].(map[string]any)
-	// publish must require target, must not have all/pending.
-	if req, _ := pubSchema["required"].([]any); len(req) == 0 || req[0] != "target" {
-		t.Errorf("publish required=%v want [target]", req)
+	if len(pub.Required) == 0 || pub.Required[0] != "target" {
+		t.Errorf("publish required=%v want [target]", pub.Required)
 	}
-	props := pubSchema["properties"].(map[string]any)
-	if _, has := props["all"]; has {
-		t.Errorf("publish must not have all (use publishBatch)")
-	}
-	if _, has := props["pending"]; has {
-		t.Errorf("publish must not have pending (use publishBatch)")
-	}
-	if props["instanceVersion"] == nil {
-		t.Errorf("publish must have instanceVersion")
-	}
-	// publishBatch must NOT require target.
-	if req, has := batchSchema["required"]; has && len(req.([]any)) > 0 {
-		for _, r := range req.([]any) {
-			if r.(string) == "target" {
-				t.Errorf("publishBatch must not require target")
-			}
+	for _, forbidden := range []string{"all", "pending"} {
+		if _, has := pub.Properties[forbidden]; has {
+			t.Errorf("publish must not have %s (use publishBatch)", forbidden)
 		}
 	}
-	bprops := batchSchema["properties"].(map[string]any)
-	if _, has := bprops["target"]; has {
-		t.Errorf("publishBatch must not have target")
+	if pub.Properties["instanceVersion"] == nil {
+		t.Errorf("publish must have instanceVersion")
 	}
-	if _, has := bprops["instanceVersion"]; has {
-		t.Errorf("publishBatch must not have instanceVersion")
+	for _, forbidden := range []string{"target", "instanceVersion"} {
+		if _, has := batch.Properties[forbidden]; has {
+			t.Errorf("publishBatch must not have %s", forbidden)
+		}
+	}
+	opEnum := advertisedTools(t, s)["knowledge_write"]["inputSchema"].(map[string]any)["properties"].(map[string]any)["op"].(map[string]any)["enum"].([]any)
+	seen := map[string]bool{}
+	for _, e := range opEnum {
+		seen[e.(string)] = true
+	}
+	if !seen["publish"] || !seen["publishBatch"] {
+		t.Errorf("knowledge_write op enum must carry publish and publishBatch, got %v", opEnum)
 	}
 }
 

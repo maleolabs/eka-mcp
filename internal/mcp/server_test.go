@@ -350,7 +350,8 @@ func TestToolsList(t *testing.T) {
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	res := out["result"].(map[string]any)
 	tools := res["tools"].([]any)
-	want := []string{"context", "code_context", "code_discover", "code_get", "get", "domain", "status", "validate", "new", "draft_update", "publish", "publishBatch", "transition", "note", "draft_read", "draft_list", "integrity_check", "discard", "sync_push", "assign", "reassign", "unassign", "feedback_new", "feedback_list", "feedback_publish"}
+	// Advertised surface is the six grouped handles (sto:retrieval-surface-budget).
+	want := []string{"knowledge_read", "knowledge_write", "code", "workspace", "ops", "feedback"}
 	got := make([]string, 0, len(tools))
 	for _, tl := range tools {
 		tm := tl.(map[string]any)
@@ -360,34 +361,24 @@ func TestToolsList(t *testing.T) {
 		}
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("tools = %v, want %v", got, want)
+		t.Errorf("tools = %v, want the six groups %v", got, want)
 	}
-	// Deprecated alias `view` must NOT be advertised as primary — tools/list excludes it.
-	for _, tl := range tools {
-		tm := tl.(map[string]any)
-		if tm["name"] == "view" {
-			t.Errorf("tool view must not be advertised in tools/list (deprecated alias only for dispatch)")
-		}
-		if tm["name"] == "draft_read" {
-			desc, _ := tm["description"].(string)
-			if strings.Contains(strings.ToLower(desc), "deprecated") {
-				t.Errorf("tool draft_read must not be marked deprecated, got %q", desc)
+	// Flat member names are dispatch aliases — not advertised.
+	for _, flat := range []string{"context", "view", "draft_read", "publish", "publishBatch", "discard"} {
+		for _, tl := range tools {
+			if tl.(map[string]any)["name"] == flat {
+				t.Errorf("flat alias %q must not be advertised in tools/list", flat)
 			}
 		}
 	}
-	// Also assert publish/publishBatch split.
-	foundPublish, foundBatch := false, false
-	for _, tl := range tools {
-		tm := tl.(map[string]any)
-		if tm["name"] == "publish" {
-			foundPublish = true
-		}
-		if tm["name"] == "publishBatch" {
-			foundBatch = true
-		}
+	// publish and publishBatch remain discoverable as knowledge_write ops.
+	props := memberArgsProps(t, s, "publish")
+	if props == nil {
+		t.Fatal("knowledge_write must advertise its nested args")
 	}
-	if !foundPublish || !foundBatch {
-		t.Errorf("tools/list must carry both publish and publishBatch (split contract), got publish=%v batch=%v", foundPublish, foundBatch)
+	desc := memberGroupDescription(t, s, "publish")
+	if !strings.Contains(desc, `"publish":`) || !strings.Contains(desc, `"publishBatch":`) {
+		t.Errorf("knowledge_write description must name publish and publishBatch ops")
 	}
 }
 
@@ -769,34 +760,27 @@ func (b *blockingCapability) Context(subject, projectID, depth string) ([]byte, 
 // limit/offset page bounds (optional, bounded defaults).
 func TestToolsListAdvertisesDomainPagination(t *testing.T) {
 	s := newTestServer(&fakeCapability{statusJSON: `{}`})
-	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
-	tools := out["result"].(map[string]any)["tools"].([]any)
-	for _, tl := range tools {
-		tm := tl.(map[string]any)
-		if tm["name"] != "domain" {
-			continue
+	// The member schema now lives in the knowledge_read group's nested args.
+	props := memberArgsProps(t, s, "domain")
+	for _, want := range []string{"limit", "offset"} {
+		prop, ok := props[want].(map[string]any)
+		if !ok {
+			t.Fatalf("domain must advertise %q", want)
 		}
-		schema := tm["inputSchema"].(map[string]any)
-		props := schema["properties"].(map[string]any)
-		for _, want := range []string{"limit", "offset"} {
-			prop, ok := props[want].(map[string]any)
-			if !ok {
-				t.Fatalf("tool domain must advertise %q", want)
-			}
-			if prop["type"] != "integer" {
-				t.Errorf("tool domain %s type = %v, want integer", want, prop["type"])
-			}
+		if prop["type"] != "integer" {
+			t.Errorf("domain %s type = %v, want integer", want, prop["type"])
 		}
-		if req, has := schema["required"]; has {
-			for _, r := range req.([]any) {
-				if r.(string) == "limit" || r.(string) == "offset" {
-					t.Errorf("tool domain must NOT require %q (bounded defaults)", r.(string))
-				}
-			}
-		}
-		return
 	}
-	t.Fatal("tool domain not found in tools/list")
+	// The group envelope requires only op; bounded pagination stays optional.
+	entry := advertisedTools(t, s)["knowledge_read"]
+	schema := entry["inputSchema"].(map[string]any)
+	if req, has := schema["required"]; has {
+		for _, r := range req.([]any) {
+			if r.(string) == "limit" || r.(string) == "offset" {
+				t.Errorf("domain must NOT require %q (bounded defaults)", r.(string))
+			}
+		}
+	}
 }
 
 // TestToolsListAdvertisesNoContent: get and domain must advertise
@@ -804,48 +788,36 @@ func TestToolsListAdvertisesDomainPagination(t *testing.T) {
 // deterministic (form / projectId+domain).
 func TestToolsListAdvertisesNoContent(t *testing.T) {
 	s := newTestServer(&fakeCapability{statusJSON: `{}`})
-	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
-	tools := out["result"].(map[string]any)["tools"].([]any)
 	for _, want := range []string{"get", "domain"} {
-		found := false
-		for _, tl := range tools {
-			tm := tl.(map[string]any)
-			if tm["name"] != want {
-				continue
-			}
-			found = true
-			schema := tm["inputSchema"].(map[string]any)
-			props := schema["properties"].(map[string]any)
-			nc, ok := props["noContent"]
-			if !ok {
-				t.Fatalf("tool %s must advertise noContent", want)
-			}
-			ncMap := nc.(map[string]any)
-			if ncMap["type"] != "boolean" {
-				t.Errorf("tool %s noContent type = %v, want boolean", want, ncMap["type"])
-			}
-			desc := ncMap["description"].(string)
-			if !strings.Contains(desc, "StripContent") || !strings.Contains(desc, "--no-content") {
-				t.Errorf("tool %s noContent description = %q, must mention StripContent and --no-content parity", want, desc)
-			}
-			if !strings.Contains(strings.ToLower(desc), "default false") {
-				t.Errorf("tool %s noContent description must mention Default false (full payloads), got %q", want, desc)
-			}
-			toolDesc := tm["description"].(string)
-			if !strings.Contains(toolDesc, "noContent:true") || !strings.Contains(toolDesc, "StripContent") {
-				t.Errorf("tool %s description = %q, must mention noContent:true + StripContent", want, toolDesc)
-			}
-			// Required must NOT include noContent (optional, idempotent default).
-			if req, has := schema["required"]; has {
-				for _, r := range req.([]any) {
-					if r.(string) == "noContent" {
-						t.Errorf("tool %s must NOT require noContent (default unchanged)", want)
-					}
+		props := memberArgsProps(t, s, want)
+		nc, ok := props["noContent"]
+		if !ok {
+			t.Fatalf("%s must advertise noContent", want)
+		}
+		ncMap := nc.(map[string]any)
+		if ncMap["type"] != "boolean" {
+			t.Errorf("%s noContent type = %v, want boolean", want, ncMap["type"])
+		}
+		desc := ncMap["description"].(string)
+		if !strings.Contains(desc, "StripContent") || !strings.Contains(desc, "--no-content") {
+			t.Errorf("%s noContent description = %q, must mention StripContent and --no-content parity", want, desc)
+		}
+		if !strings.Contains(strings.ToLower(desc), "default false") {
+			t.Errorf("%s noContent description must mention Default false (full payloads), got %q", want, desc)
+		}
+		groupDesc := memberGroupDescription(t, s, want)
+		if !strings.Contains(groupDesc, "noContent:true") || !strings.Contains(groupDesc, "StripContent") {
+			t.Errorf("%s group description = %q, must mention noContent:true + StripContent", want, groupDesc)
+		}
+		// Required must NOT include noContent (optional, idempotent default).
+		entry := advertisedTools(t, s)["knowledge_read"]
+		schema := entry["inputSchema"].(map[string]any)
+		if req, has := schema["required"]; has {
+			for _, r := range req.([]any) {
+				if r.(string) == "noContent" {
+					t.Errorf("%s must NOT require noContent (default unchanged)", want)
 				}
 			}
-		}
-		if !found {
-			t.Fatalf("tool %s not found in tools/list", want)
 		}
 	}
 }
@@ -1467,20 +1439,7 @@ func TestDiscardWithConfirmationDeletes(t *testing.T) {
 // advertises the opt-in confirmed boolean but keeps it out of Required.
 func TestDiscardDescriptorDeclaresConfirmed(t *testing.T) {
 	s := newTestServer(&fakeCapability{statusJSON: `{}`})
-	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
-	tools := mustResult(t, out)["tools"].([]any)
-	var discard map[string]any
-	for _, tl := range tools {
-		tm := tl.(map[string]any)
-		if tm["name"] == "discard" {
-			discard = tm
-		}
-	}
-	if discard == nil {
-		t.Fatal("tools/list must advertise discard")
-	}
-	schema := discard["inputSchema"].(map[string]any)
-	props := schema["properties"].(map[string]any)
+	props := memberArgsProps(t, s, "discard")
 	prop, ok := props["confirmed"].(map[string]any)
 	if !ok {
 		t.Fatalf("discard properties has no confirmed entry: %v", props)
@@ -1488,6 +1447,8 @@ func TestDiscardDescriptorDeclaresConfirmed(t *testing.T) {
 	if prop["type"] != "boolean" {
 		t.Errorf("confirmed type = %v, want boolean", prop["type"])
 	}
+	entry := advertisedTools(t, s)["knowledge_write"]
+	schema := entry["inputSchema"].(map[string]any)
 	if req, has := schema["required"]; has {
 		for _, r := range req.([]any) {
 			if r == "confirmed" {
@@ -1495,7 +1456,7 @@ func TestDiscardDescriptorDeclaresConfirmed(t *testing.T) {
 			}
 		}
 	}
-	desc, _ := discard["description"].(string)
+	desc := memberGroupDescription(t, s, "discard")
 	if !strings.Contains(desc, "eka-discard-result-v1") {
 		t.Errorf("discard description %q must keep the schema identifier eka-discard-result-v1", desc)
 	}

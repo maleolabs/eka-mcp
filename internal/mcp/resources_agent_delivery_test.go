@@ -260,13 +260,19 @@ func TestGuidanceRemainsResourceContentAndOperationsRemainTools(t *testing.T) {
 	// Tools/list must contain operations, but must NOT contain guidance fetchers as tools.
 	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	tools := map[string]bool{}
+	ops := map[string]bool{}
 	for _, tl := range mustResult(t, out)["tools"].([]any) {
-		tools[tl.(map[string]any)["name"].(string)] = true
+		tm := tl.(map[string]any)
+		tools[tm["name"].(string)] = true
+		props := tm["inputSchema"].(map[string]any)["properties"].(map[string]any)
+		for _, e := range props["op"].(map[string]any)["enum"].([]any) {
+			ops[e.(string)] = true
+		}
 	}
-	// Operations remain tools.
+	// Operations remain dispatchable, advertised as group op members.
 	for _, op := range []string{"context", "get", "domain", "status", "validate", "new", "publish", "transition", "draft_read"} {
-		if !tools[op] {
-			t.Errorf("tools/list must still contain operation %q", op)
+		if !ops[op] {
+			t.Errorf("tools/list must still carry operation %q (as a group op)", op)
 		}
 	}
 	// Guidance fetchers must NOT be tools.

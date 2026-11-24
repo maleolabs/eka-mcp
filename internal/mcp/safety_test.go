@@ -143,26 +143,14 @@ func TestDraftUpdateOptimisticConcurrencyValidation(t *testing.T) {
 		t.Errorf("valid concurrency guards must pass validation, got %v", res)
 	}
 
-	// Tools list must expose the new concurrency fields.
-	outList := mustHandle(t, s, `{"jsonrpc":"2.0","id":10,"method":"tools/list"}`)
-	tools := outList["result"].(map[string]any)["tools"].([]any)
-	var found bool
-	for _, tl := range tools {
-		m := tl.(map[string]any)
-		if m["name"] == "draft_update" {
-			schema := m["inputSchema"].(map[string]any)
-			props := schema["properties"].(map[string]any)
-			if _, has := props["expectedRevision"]; !has {
-				t.Error("draft_update schema must expose expectedRevision")
-			}
-			if _, has := props["expectedHash"]; !has {
-				t.Error("draft_update schema must expose expectedHash")
-			}
-			found = true
-		}
+	// Tools list must expose the new concurrency fields (draft_update is
+	// advertised inside the knowledge_write group's nested args).
+	props := memberArgsProps(t, s, "draft_update")
+	if _, has := props["expectedRevision"]; !has {
+		t.Error("draft_update schema must expose expectedRevision")
 	}
-	if !found {
-		t.Error("draft_update not found in tools/list")
+	if _, has := props["expectedHash"]; !has {
+		t.Error("draft_update schema must expose expectedHash")
 	}
 	_ = json.Valid
 }
