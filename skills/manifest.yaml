@@ -6,11 +6,11 @@
 
 pack:
   name: eka-ai-skill-pack
-  version: 0.3.1
-  status: experimental
-  requiresEka: ">= 0.6.0"
+  version: 1.0.4
+  status: stable
+  requiresEka: ">= 1.16.0"
   anchorDecision: "reference/decisions/adr-022-ai-skill-pack.md"
-  installCommand: "eka install skills|commands (pack embedded in the eka binary since ADR-023)"
+  installCommand: "eka-mcp configure --target opencode|claude|codex [--with-skills|--with-commands|--with-all] --json (pack-distribution vehicle per ADR-030; eka-cli exposes no install surface)"
 
 skills:
   - name: eka-router
@@ -49,6 +49,15 @@ skills:
   - name: eka-feedback
     path: eka-feedback/SKILL.md
     role: report EKA shortcomings — write + publish feedback (ADR-026)
+  - name: eka-shr-builder
+    path: eka-shr-builder/SKILL.md
+    role: build shr sharing objects — EKA-to-EKA and audited non-EKA spike, reusable for agents
+  - name: eka-shared-knowledge
+    path: eka-shared-knowledge/SKILL.md
+    role: consume shared knowledge — discover, inspect and apply shr snapshots from other projects without cloning the source
+    resources:
+      - eka-shared-knowledge/references/consumption-levels.md
+      - eka-shared-knowledge/references/durability.md
 
 supporting:
   - path: commands/README.md
@@ -57,6 +66,8 @@ supporting:
     role: planning discussion command (idea → discuss → propose → validate → approved → publish; no code)
   - path: commands/eka-execute.md
     role: autonomous execution command (approved planning, EKA state machine, checkpoint + resume)
+  - path: commands/eka-share.md
+    role: share command — reusable prompt to build and publish shr sharing objects (EKA and audited non-EKA) for agents
   - path: docs/installation.md
     role: installation and discovery
   - path: docs/workflow.md

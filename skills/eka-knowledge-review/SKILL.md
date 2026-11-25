@@ -104,3 +104,10 @@ eka note feather/sto:publish-post --role review --domain execution
 ## Next
 
 - The full loop context → [eka-engineering-workflow](../eka-engineering-workflow/SKILL.md) · [the AI Workflow](../docs/workflow.md)
+
+## Per-reviewer trail (phase 2)
+
+- One `cmt-` note per reviewer, grouped by `author` (kind `agent`/`worker`/`user` — never impersonate).
+- Verdict is advisory (`approve`/`changes-requested`), rendered as badge with `note-state` mark (`open`/`resolved`/`dismissed`).
+- Only `resolved` releases the `done` gate — `dismissed` does not (no dismiss command).
+- Verdict composition: list of per-note verdicts, never single aggregate.

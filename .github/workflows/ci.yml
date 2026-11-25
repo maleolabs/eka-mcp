@@ -1,0 +1,38 @@
+# EKA MCP CI — runs the canonical quality gates through the anvil CLI.
+#
+# The pipeline definition lives in .anvil/pipelines/ci.yaml (format,
+# vet, unit tests, windows cross-compile); this workflow only triggers
+# the execution. Anvil is installed from its GitHub Release asset registry
+# via the curl installer, matching the EKA installer pattern.
+#
+# eka-mcp has no install scripts (unlike eka-cli), so the installer e2e
+# jobs of eka-cli's CI do not apply; the release asset contract is
+# exercised at tag time by the Release workflow.
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Anvil
+        run: curl -fsSL https://github.com/maleolabs/anvil/releases/latest/download/install.sh | sh
+
+      - name: Run CI pipeline
+        run: anvil pipeline ci

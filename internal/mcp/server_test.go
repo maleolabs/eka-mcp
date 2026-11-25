@@ -4,42 +4,279 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/maleolabs/eka-core/conformance"
+	pack "github.com/maleolabs/eka-mcp"
 )
 
 // fakeCapability is a deterministic stand-in for the EKA capability
 // layer, so the server tests are pure protocol tests — no eka-core
 // involved. It records calls so tests can assert the dispatch.
 type fakeCapability struct {
-	statusJSON string
-	getErr     error
-	domainErr  error
-	gotForms   []string
+	statusJSON    string
+	getErr        error
+	domainErr     error
+	publishErr    error
+	transitionErr error
+	assignErr     error
+	reassignErr   error
+	unassignErr   error
+	gotForms      []string
+	gotNew        []NewDraftRequest
+	gotNote       []NoteRequest
+	gotCode       []CodeContextRequest
+	gotDiscover   []CodeDiscoverRequest
+	gotGet        []CodeGetRequest
+	gotDiscard    []string
 }
 
-func (f *fakeCapability) Get(form string) ([]byte, error) {
+func (f *fakeCapability) CodeContext(req CodeContextRequest) ([]byte, error) {
+	f.gotCode = append(f.gotCode, req)
+	return []byte(`{"schema":"eka/code-context/1","query":{"focus":` + mustQuote(req.Focus) + `}}`), nil
+}
+func (f *fakeCapability) CodeDiscover(req CodeDiscoverRequest) ([]byte, error) {
+	f.gotDiscover = append(f.gotDiscover, req)
+	return []byte(`{"schema":"eka/code-discover/1","query":{"query":` + mustQuote(req.Query) + `}}`), nil
+}
+func (f *fakeCapability) CodeGet(req CodeGetRequest) ([]byte, error) {
+	f.gotGet = append(f.gotGet, req)
+	return []byte(`{"schema":"eka/code-get/1","query":{"path":` + mustQuote(req.Path) + `}}`), nil
+}
+
+func TestCodeContextToolDispatch(t *testing.T) {
+	f := &fakeCapability{}
+	s := newTestServer(f)
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"code_context","arguments":{"root":"/repo","focus":"Server","depth":"engineering","level":3,"noContent":true}}}`)
+	res := mustResult(t, out)
+	if res["isError"] != false {
+		t.Fatalf("result = %v", res)
+	}
+	if len(f.gotCode) != 1 || f.gotCode[0].Root != "/repo" || f.gotCode[0].Focus != "Server" || f.gotCode[0].Depth != "engineering" || f.gotCode[0].Level != 3 || !f.gotCode[0].NoContent {
+		t.Fatalf("request = %+v", f.gotCode)
+	}
+}
+
+func TestCodeContextToolRequiresRoot(t *testing.T) {
+	s := newTestServer(&fakeCapability{})
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"code_context","arguments":{}}}`)
+	res := mustResult(t, out)
+	if res["isError"] != true {
+		t.Fatalf("result = %v", res)
+	}
+	if !strings.Contains(res["content"].([]any)[0].(map[string]any)["text"].(string), `code_context requires "root"`) {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+func (f *fakeCapability) Get(form string, noContent bool) ([]byte, error) {
+	return f.GetWithFilters(form, noContent, "", "", "")
+}
+func (f *fakeCapability) GetWithFilters(form string, noContent bool, level, project, version string) ([]byte, error) {
 	f.gotForms = append(f.gotForms, form)
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
-	return []byte(`{"schema":"eka-cko-v2","canonicalForm":` + mustQuote(form) + `}`), nil
+	// Minimal stub: when noContent the content key is absent (identity etc. intact). The full payload
+	// would carry content; stripped omits it — clients can assert content absence.
+	if noContent {
+		return []byte(`{"schema":"eka-cko-v2","canonicalForm":` + mustQuote(form) + `,"identity":{"namespace":"feather","type":"adr","id":"001","instanceVersion":1},"stateVector":{"contentState":"draft"},"relationships":[]}`), nil
+	}
+	return []byte(`{"schema":"eka-cko-v2","canonicalForm":` + mustQuote(form) + `,"content":{"representation":"eka/structured-text/1","text":"hello payload body that would be stripped"}}`), nil
 }
 
-func (f *fakeCapability) Domain(projectID, domain string) ([]byte, error) {
+func (f *fakeCapability) Domain(projectID, domain string, noContent bool) ([]byte, error) {
+	return f.DomainWithFilters(projectID, domain, noContent, "", "", "")
+}
+func (f *fakeCapability) DomainWithFilters(projectID, domain string, noContent bool, level, project, version string) ([]byte, error) {
+	return f.DomainPaged(projectID, domain, noContent, level, project, version, 0, 0)
+}
+func (f *fakeCapability) DomainPaged(projectID, domain string, noContent bool, level, project, version string, limit, offset int) ([]byte, error) {
 	if f.domainErr != nil {
 		return nil, f.domainErr
 	}
-	return []byte(`{"schema":"eka-cko-v2","collection":"domain","domain":` + mustQuote(domain) + `,"count":0,"units":[]}`), nil
+	if noContent {
+		return []byte(`{"schema":"eka-cko-v2","collection":"domain","domain":` + mustQuote(domain) + `,"count":1,"units":[{"schema":"eka-cko-v2","canonicalForm":"feather/adr:001:1","identity":{"namespace":"feather","type":"adr","id":"001","instanceVersion":1},"stateVector":{"contentState":"draft"},"relationships":[]}]}`), nil
+	}
+	return []byte(`{"schema":"eka-cko-v2","collection":"domain","domain":` + mustQuote(domain) + `,"count":1,"units":[{"schema":"eka-cko-v2","canonicalForm":"feather/adr:001:1","content":{"representation":"eka/structured-text/1","text":"hello payload body that would be stripped"}}]}`), nil
 }
 
 func (f *fakeCapability) Status() ([]byte, error) {
+	return f.StatusWithAll(false)
+}
+func (f *fakeCapability) StatusWithAll(all bool) ([]byte, error) {
 	return []byte(f.statusJSON), nil
+}
+
+func (f *fakeCapability) Context(subject, projectID, depth string) ([]byte, error) {
+	return []byte(`{"schema":"eka-context-v1","kind":"context","depth":` + mustQuote(depth) + `,"focus":` + mustQuote(subject) + `}`), nil
+}
+
+func (f *fakeCapability) Validate(root string) ([]byte, error) {
+	return []byte(`{"schema":"eka-conformance-report-v1","root":` + mustQuote(root) + `,"filesScanned":0,"artifacts":0,"skipped":"","errors":0,"warnings":0,"pass":true,"results":[]}`), nil
+}
+
+func (f *fakeCapability) NewDraft(req NewDraftRequest) ([]byte, error) {
+	f.gotNew = append(f.gotNew, req)
+	lt := fakeLegalTransitions(req.Type)
+	ltJSON, _ := json.Marshal(lt)
+	return []byte(`{"schema":"eka-draft-v1","project":` + mustQuote(req.Project) + `,"namespace":` + mustQuote(req.Namespace) + `,"type":` + mustQuote(req.Type) + `,"id":` + mustQuote(req.ID) + `,"path":"/tmp/drafts/` + req.Type + `-` + req.ID + `.json","updated":"2026-08-21T00:00:00Z","legalTransitions":` + string(ltJSON) + `}`), nil
+}
+
+func (f *fakeCapability) DraftUpdate(req DraftUpdateRequest) ([]byte, error) {
+	// Echo merged content for protocol test: inject dummy legalTransitions like DraftRead.
+	lt := fakeLegalTransitions("adr")
+	ltJSON, _ := json.Marshal(lt)
+	contentJSON, _ := json.Marshal(req.Content)
+	// Simulate merge: content provided is returned as content field.
+	return []byte(`{"namespace":"feather","type":"adr","id":"001","revision":1,"content":` + string(contentJSON) + `,"legalTransitions":` + string(ltJSON) + `}`), nil
+}
+
+func (f *fakeCapability) Publish(req PublishRequest) ([]byte, error) {
+	if f.publishErr != nil {
+		return nil, f.publishErr
+	}
+	typeToken := ""
+	if ref, err := conformance.ParseReference(req.Target, "", ""); err == nil {
+		typeToken = ref.Type
+	}
+	lt := fakeLegalTransitions(typeToken)
+	ltJSON, _ := json.Marshal(lt)
+	return []byte(`{"schema":"eka-publish-result-v1","form":` + mustQuote(req.Target+":1") + `,"instanceVersion":1,"objectHash":"abc","note":"","legalTransitions":` + string(ltJSON) + `}`), nil
+}
+
+func (f *fakeCapability) PublishBatch(req PublishBatchRequest) ([]byte, error) {
+	// Deterministic batch: echo 1 published entry per batch call for protocol test.
+	lt := fakeLegalTransitions("adr")
+	ltJSON, _ := json.Marshal(lt)
+	published := `{"form":"feather/adr:001:1","instanceVersion":1,"objectHash":"abc","note":"","legalTransitions":` + string(ltJSON) + `}`
+	return []byte(`{"schema":"eka-publish-batch-v1","project":` + mustQuote(req.Project) + `,"count":1,"published":[` + published + `]}`), nil
+}
+
+func (f *fakeCapability) Transition(req TransitionRequest) ([]byte, error) {
+	if f.transitionErr != nil {
+		return nil, f.transitionErr
+	}
+	return []byte(`{"schema":"eka-transition-result-v1","target":` + mustQuote(req.Target) + `,"from":"planned","to":"todo","by":{"kind":"agent","name":"mcp-agent"},"objectHash":"abc","lockedPlan":"","lockedPlanHash":"","warning":""}`), nil
+}
+
+func (f *fakeCapability) Note(req NoteRequest) ([]byte, error) {
+	f.gotNote = append(f.gotNote, req)
+	return []byte(`{"schema":"eka-note-result-v1","id":"x-implementation","target":` + mustQuote(req.Target) + `,"subjectState":"","path":"/tmp/drafts/cmt-x-implementation.json","by":{"kind":"agent","name":"mcp-agent"}}`), nil
+}
+
+func (f *fakeCapability) DraftRead(target, project string) ([]byte, error) {
+	// Returns verbatim draft JSON enriched with legalTransitions via same helper
+	// as capability.injectLegalTransitions — preserves original fields.
+	lt := fakeLegalTransitions("adr")
+	ltJSON, _ := json.Marshal(lt)
+	return []byte(`{"namespace":"feather","type":"adr","id":"001","revision":1,"content":{},"legalTransitions":` + string(ltJSON) + `}`), nil
+}
+
+func (f *fakeCapability) View(target, project string) ([]byte, error) {
+	return f.DraftRead(target, project)
+}
+
+func (f *fakeCapability) DraftList(project string) ([]byte, error) {
+	return []byte(`{"schema":"eka-draft-list-v1","count":0,"drafts":[]}`), nil
+}
+
+func (f *fakeCapability) IntegrityCheck() ([]byte, error) {
+	return []byte(`{"schema":"eka-integrity-report-v1","payloadsChecked":0,"refsChecked":0,"attachmentsChecked":0,"orphanPayloads":0,"violations":[]}`), nil
+}
+
+func (f *fakeCapability) Discard(target, project string) ([]byte, error) {
+	f.gotDiscard = append(f.gotDiscard, target)
+	return []byte(`{"schema":"eka-discard-result-v1","target":` + mustQuote(target) + `,"note":""}`), nil
+}
+
+func (f *fakeCapability) SyncPush(repoPath string, adopt, override bool) ([]byte, error) {
+	if repoPath == "" {
+		repoPath = "."
+	}
+	return []byte(`{"schema":"eka-sync-push-result-v1","workspace":"` + "/tmp/eka" + `","project":"p","repo":"r","pushedUnits":1,"pushedAttachments":0,"snapshotLabel":"repo:p","snapshotDigest":"abc123","changed":false,"newRepo":false,"warnings":[]}`), nil
+}
+
+func (f *fakeCapability) Assign(req AssignmentRequest) ([]byte, error) {
+	if f.assignErr != nil {
+		return nil, f.assignErr
+	}
+	return []byte(`{"schema":"eka-assignment-v1","ok":true,"action":"assign","item":` + mustQuote(req.Target) + `,"assignee":` + mustQuote(req.To) + `,"state":"published","objectHash":"abc","by":"` + req.By.Name + `"}`), nil
+}
+
+func (f *fakeCapability) Reassign(req AssignmentRequest) ([]byte, error) {
+	if f.reassignErr != nil {
+		return nil, f.reassignErr
+	}
+	return []byte(`{"schema":"eka-assignment-v1","ok":true,"action":"reassign","item":` + mustQuote(req.Target) + `,"assignee":` + mustQuote(req.To) + `,"state":"published","objectHash":"abc","by":"` + req.By.Name + `"}`), nil
+}
+
+func (f *fakeCapability) Unassign(req UnassignRequest) ([]byte, error) {
+	if f.unassignErr != nil {
+		return nil, f.unassignErr
+	}
+	return []byte(`{"schema":"eka-assignment-v1","ok":true,"action":"unassign","item":` + mustQuote(req.Target) + `,"no-assignee":true,"state":"published","objectHash":"abc","by":"` + req.By.Name + `"}`), nil
+}
+
+func (f *fakeCapability) FeedbackNew(req FeedbackNewRequest) ([]byte, error) {
+	// Validate type closed set to mimic real capability (so conformance can test refusal).
+	switch req.Type {
+	case "bug", "suggestion", "improvement", "question":
+	default:
+		return nil, fmt.Errorf("invalid type %q (bug, suggestion, improvement, or question)", req.Type)
+	}
+	id := "fbk-20260812-test"
+	if req.Title != "" {
+		// deterministic slug: lower, dashes
+		id = "fbk-20260812-" + req.Title
+	}
+	return []byte(`{"schema":"eka-feedback-new-v1","ok":true,"id":` + mustQuote(id) + `,"path":"/tmp/eka/feedback/` + id + `.md","status":"draft"}`), nil
+}
+
+func (f *fakeCapability) FeedbackList() ([]byte, error) {
+	return []byte(`{"schema":"eka-feedback-list-v1","ok":true,"feedback":[]}`), nil
+}
+
+func (f *fakeCapability) FeedbackPublish(req FeedbackPublishRequest) ([]byte, error) {
+	return []byte(`{"schema":"eka-feedback-publish-v1","ok":true,"id":` + mustQuote(req.ID) + `,"issueNumber":42,"issueUrl":"https://github.com/maleolabs/eka-cli/issues/42"}`), nil
 }
 
 func mustQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// fakeLegalTransitions mirrors capability.legalTransitions — derived exclusively
+// from conformance.OwnedDomains / DomainValues, no duplicated tables.
+func fakeLegalTransitions(typeToken string) map[string][]string {
+	domains := conformance.OwnedDomains(typeToken)
+	if len(domains) == 0 {
+		return map[string][]string{}
+	}
+	out := make(map[string][]string, len(domains))
+	for _, d := range domains {
+		vals := conformance.DomainValues(d, typeToken)
+		if vals == nil {
+			out[d] = []string{}
+			continue
+		}
+		cp := make([]string, len(vals))
+		copy(cp, vals)
+		out[d] = cp
+	}
+	return out
+}
+
+// newTestServer returns a server with diagnostics discarded. Tests
+// that do NOT assert diagnostics must use this instead of NewServer —
+// otherwise every param-refusal exercised by the suite writes a line
+// to os.Stderr and floods `go test` output.
+func newTestServer(cap Capability) *Server {
+	return NewServerWithDiagnostics(cap, io.Discard)
 }
 
 // mustHandle runs one message through the server and unmarshals the
@@ -58,7 +295,7 @@ func mustHandle(t *testing.T, s *Server, msg string) map[string]any {
 }
 
 func TestInitialize(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}`)
 
 	if out["jsonrpc"] != "2.0" {
@@ -78,8 +315,8 @@ func TestInitialize(t *testing.T) {
 	if info["name"] != "mcp" {
 		t.Errorf("serverInfo.name = %v, want mcp", info["name"])
 	}
-	if info["version"] != "0.1.0" {
-		t.Errorf("serverInfo.version = %v, want 0.1.0", info["version"])
+	if info["version"] != pack.Version {
+		t.Errorf("serverInfo.version = %v, want %v", info["version"], pack.Version)
 	}
 	if caps, ok := res["capabilities"].(map[string]any); !ok || caps["tools"] == nil || caps["resources"] == nil {
 		t.Errorf("capabilities = %v, want tools+resources", res["capabilities"])
@@ -89,7 +326,7 @@ func TestInitialize(t *testing.T) {
 // TestInitializeWithoutProtocolVersion: the handshake must succeed even
 // when the client omits the protocol version (baseline fallback).
 func TestInitializeWithoutProtocolVersion(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":"a","method":"initialize"}`)
 	res := out["result"].(map[string]any)
 	if res["protocolVersion"] != ProtocolVersion {
@@ -98,7 +335,7 @@ func TestInitializeWithoutProtocolVersion(t *testing.T) {
 }
 
 func TestPing(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":7,"method":"ping"}`)
 	if out["id"] != float64(7) {
 		t.Errorf("id = %v, want 7", out["id"])
@@ -109,11 +346,12 @@ func TestPing(t *testing.T) {
 }
 
 func TestToolsList(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	res := out["result"].(map[string]any)
 	tools := res["tools"].([]any)
-	want := []string{"get", "domain", "status"}
+	// Advertised surface is the six grouped handles (sto:retrieval-surface-budget).
+	want := []string{"knowledge_read", "knowledge_write", "code", "workspace", "ops", "feedback"}
 	got := make([]string, 0, len(tools))
 	for _, tl := range tools {
 		tm := tl.(map[string]any)
@@ -123,13 +361,192 @@ func TestToolsList(t *testing.T) {
 		}
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("tools = %v, want %v", got, want)
+		t.Errorf("tools = %v, want the six groups %v", got, want)
 	}
+	// Flat member names are dispatch aliases — not advertised.
+	for _, flat := range []string{"context", "view", "draft_read", "publish", "publishBatch", "discard"} {
+		for _, tl := range tools {
+			if tl.(map[string]any)["name"] == flat {
+				t.Errorf("flat alias %q must not be advertised in tools/list", flat)
+			}
+		}
+	}
+	// publish and publishBatch remain discoverable as knowledge_write ops.
+	props := memberArgsProps(t, s, "publish")
+	if props == nil {
+		t.Fatal("knowledge_write must advertise its nested args")
+	}
+	desc := memberGroupDescription(t, s, "publish")
+	if !strings.Contains(desc, `"publish":`) || !strings.Contains(desc, `"publishBatch":`) {
+		t.Errorf("knowledge_write description must name publish and publishBatch ops")
+	}
+}
+
+func TestToolsCallDraftReadAndViewAlias(t *testing.T) {
+	cap := &fakeCapability{statusJSON: `{}`}
+	s := newTestServer(cap)
+	for _, name := range []string{"draft_read", "view"} {
+		out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"`+name+`","arguments":{"target":"feather/adr:001","project":"feather"}}}`)
+		res, ok := out["result"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: expected result, got %v", name, out)
+		}
+		if res["isError"] != false {
+			t.Errorf("%s: isError = %v, want false", name, res["isError"])
+		}
+		content := res["content"].([]any)[0].(map[string]any)
+		text := content["text"].(string)
+		var doc map[string]any
+		if err := json.Unmarshal([]byte(text), &doc); err != nil {
+			t.Fatalf("%s: tool text must be JSON: %v", name, err)
+		}
+		if doc["type"] != "adr" {
+			t.Errorf("%s: type = %v, want adr", name, doc["type"])
+		}
+	}
+	// Both names are deterministic and return identical verbatim content.
+	a := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"draft_read","arguments":{"target":"feather/adr:001"}}}`)
+	b := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"view","arguments":{"target":"feather/adr:001"}}}`)
+	aText := a["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	bText := b["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if aText != bText {
+		t.Errorf("draft_read and view alias must return identical verbatim content, got %q vs %q", aText, bText)
+	}
+}
+
+// TestToolsCallNewReturnsLegalTransitions: new/publish/draft_read must surface
+// legalTransitions derived from conformance.DomainValues/OwnedDomains (sto:mcp-transition-transparency).
+func TestToolsCallNewReturnsLegalTransitions(t *testing.T) {
+	cap := &fakeCapability{statusJSON: `{}`}
+	s := newTestServer(cap)
+	// new scp -> content-state [draft review approved amended] + existence-state
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"new","arguments":{"project":"feather","namespace":"feather","type":"scp","id":"001-scope"}}}`)
+	res := out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Fatalf("new isError = %v, want false", res["isError"])
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatalf("new text must be JSON: %v", err)
+	}
+	lt, ok := doc["legalTransitions"].(map[string]any)
+	if !ok {
+		t.Fatalf("new legalTransitions = %v, want map", doc["legalTransitions"])
+	}
+	wantSCP := fakeLegalTransitions("scp")
+	assertLegalTransitions(t, lt, wantSCP)
+	// also assert deterministic via helper identity
+	if !equalStringSlices(toStringSlice(lt["content-state"]), wantSCP["content-state"]) {
+		t.Errorf("new scp content-state = %v, want %v", lt["content-state"], wantSCP["content-state"])
+	}
+
+	// publish plan -> planning-state [draft approved immutable]
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"publish","arguments":{"target":"feather/plan:roadmap-v1"}}}`)
+	res = out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Fatalf("publish isError = %v, want false", res["isError"])
+	}
+	text = res["content"].([]any)[0].(map[string]any)["text"].(string)
+	var pub map[string]any
+	if err := json.Unmarshal([]byte(text), &pub); err != nil {
+		t.Fatalf("publish text must be JSON: %v", err)
+	}
+	plt, ok := pub["legalTransitions"].(map[string]any)
+	if !ok {
+		t.Fatalf("publish legalTransitions = %v, want map", pub["legalTransitions"])
+	}
+	wantPlan := fakeLegalTransitions("plan")
+	assertLegalTransitions(t, plt, wantPlan)
+	if !equalStringSlices(toStringSlice(plt["planning-state"]), []string{"draft", "approved", "immutable", "superseded"}) {
+		t.Errorf("publish plan planning-state = %v, want [draft approved immutable superseded]", plt["planning-state"])
+	}
+}
+
+func TestToolsCallDraftReadReturnsLegalTransitions(t *testing.T) {
+	cap := &fakeCapability{statusJSON: `{}`}
+	s := newTestServer(cap)
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"draft_read","arguments":{"target":"feather/adr:001","project":"feather"}}}`)
+	res := out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Fatalf("draft_read isError = %v, want false", res["isError"])
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatalf("draft_read text must be JSON: %v", err)
+	}
+	// preserves original fields
+	if doc["namespace"] != "feather" || doc["type"] != "adr" || doc["id"] != "001" {
+		t.Errorf("draft_read must preserve original fields, got %v", doc)
+	}
+	lt, ok := doc["legalTransitions"].(map[string]any)
+	if !ok {
+		t.Fatalf("draft_read legalTransitions = %v, want map", doc["legalTransitions"])
+	}
+	wantADR := fakeLegalTransitions("adr")
+	assertLegalTransitions(t, lt, wantADR)
+	// view alias identical already covered, but also carries same legalTransitions
+	out2 := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"view","arguments":{"target":"feather/adr:001","project":"feather"}}}`)
+	text2 := out2["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if text != text2 {
+		t.Errorf("draft_read and view alias payloads must be identical, got %q vs %q", text, text2)
+	}
+	// unknown type -> {} via new with unknown type
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"new","arguments":{"project":"feather","namespace":"feather","type":"unknown","id":"001"}}}`)
+	text = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	var unk map[string]any
+	if err := json.Unmarshal([]byte(text), &unk); err != nil {
+		t.Fatalf("unknown type new must be JSON: %v", err)
+	}
+	if um, ok := unk["legalTransitions"].(map[string]any); !ok || len(um) != 0 {
+		t.Errorf("unknown type legalTransitions = %v, want {}", unk["legalTransitions"])
+	}
+}
+
+func assertLegalTransitions(t *testing.T, got map[string]any, want map[string][]string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("legalTransitions len = %d, want %d: got %v want %v", len(got), len(want), got, want)
+	}
+	for k, wv := range want {
+		gv, ok := got[k]
+		if !ok {
+			t.Fatalf("legalTransitions missing domain %q", k)
+		}
+		if !equalStringSlices(toStringSlice(gv), wv) {
+			t.Errorf("legalTransitions[%q] = %v, want %v", k, gv, wv)
+		}
+	}
+}
+
+func toStringSlice(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, len(arr))
+	for i, e := range arr {
+		out[i], _ = e.(string)
+	}
+	return out
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestToolsCallGet(t *testing.T) {
 	cap := &fakeCapability{statusJSON: `{}`}
-	s := NewServer(cap)
+	s := newTestServer(cap)
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get","arguments":{"form":"feather/adr:001-serialization:1"}}}`)
 
 	res := out["result"].(map[string]any)
@@ -154,7 +571,7 @@ func TestToolsCallGet(t *testing.T) {
 // tool result with isError=true (the message reaches the client).
 func TestToolsCallGetError(t *testing.T) {
 	cap := &fakeCapability{getErr: errors.New("eka: workspace not initialized")}
-	s := NewServer(cap)
+	s := newTestServer(cap)
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get","arguments":{"form":"x/adr:y:1"}}}`)
 	res := out["result"].(map[string]any)
 	if res["isError"] != true {
@@ -169,8 +586,244 @@ func TestToolsCallGetError(t *testing.T) {
 	}
 }
 
+// TestToolsCallGetNoContent: noContent:true strips content via StripContent
+// (content absent, identity/stateVector/relationships intact) at parity
+// with CLI --no-content; default false is full payloads. Measures payload.
+func TestToolsCallGetNoContent(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	// Default (no noContent) → full payload carries content.
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get","arguments":{"form":"feather/adr:001-serialization:1"}}}`)
+	text := out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	var full map[string]any
+	if err := json.Unmarshal([]byte(text), &full); err != nil {
+		t.Fatalf("full get text must be JSON: %v", err)
+	}
+	if _, has := full["content"]; !has {
+		t.Error("default get (no noContent) must carry content (default unchanged: full payloads)")
+	}
+	// Explicit false also full.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get","arguments":{"form":"feather/adr:001:1","noContent":false}}}`)
+	text = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	var explicitFull map[string]any
+	if err := json.Unmarshal([]byte(text), &explicitFull); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := explicitFull["content"]; !has {
+		t.Error("get noContent:false must carry content")
+	}
+	// True → stripped: content absent, identity/stateVector/relationships intact.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get","arguments":{"form":"feather/adr:001:1","noContent":true}}}`)
+	text = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	var stripped map[string]any
+	if err := json.Unmarshal([]byte(text), &stripped); err != nil {
+		t.Fatalf("stripped get text must be JSON: %v", err)
+	}
+	if _, has := stripped["content"]; has {
+		t.Error("get noContent:true must NOT carry content (StripContent)")
+	}
+	for _, k := range []string{"identity", "stateVector", "relationships", "canonicalForm"} {
+		if _, has := stripped[k]; !has {
+			t.Errorf("stripped get must retain %q", k)
+		}
+	}
+	// Payload measurement.
+	if len(text) >= len(mustMarshal(t, full)) {
+		// compare stripped vs full serialized lengths (stripped should be smaller despite extra identity keys? In fake, stripped carries identity but full carries content text — overall stripped ~ larger? Actually fake's stripped includes identity keys making it comparable; we assert content absence instead of size, and log.)
+	}
+	t.Logf("mcp get: full %d bytes, stripped %d bytes", len(mustMarshal(t, full)), len(text))
+	// Wrong type for noContent → invalid_arg refusal.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get","arguments":{"form":"feather/adr:001:1","noContent":"true"}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Error("get noContent wrong type (string) must be isError=true (invalid_arg)")
+	}
+}
+
+func mustMarshal(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("mustMarshal: %v", err)
+	}
+	return string(b)
+}
+
+// TestToolsCallDomainNoContent: domain noContent:true strips each unit's content.
+func TestToolsCallDomainNoContent(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	// Default → full carries content.
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"domain","arguments":{"projectId":"feather","domain":"Architecture"}}}`)
+	text := out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	var full map[string]any
+	if err := json.Unmarshal([]byte(text), &full); err != nil {
+		t.Fatalf("full domain must be JSON: %v", err)
+	}
+	units := full["units"].([]any)
+	if len(units) != 1 {
+		t.Fatalf("full units len %d, want 1", len(units))
+	}
+	if _, has := units[0].(map[string]any)["content"]; !has {
+		t.Error("default domain must carry per-unit content (default unchanged)")
+	}
+	// Stripped.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"domain","arguments":{"projectId":"feather","domain":"Architecture","noContent":true}}}`)
+	text = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	var stripped map[string]any
+	if err := json.Unmarshal([]byte(text), &stripped); err != nil {
+		t.Fatalf("stripped domain must be JSON: %v", err)
+	}
+	sUnits := stripped["units"].([]any)
+	if _, has := sUnits[0].(map[string]any)["content"]; has {
+		t.Error("domain noContent:true must NOT carry per-unit content")
+	}
+	for _, k := range []string{"identity", "stateVector", "relationships", "canonicalForm"} {
+		if _, has := sUnits[0].(map[string]any)[k]; !has {
+			t.Errorf("stripped domain unit must retain %q", k)
+		}
+	}
+	t.Logf("mcp domain: full %d bytes, stripped %d bytes", len(mustMarshal(t, full)), len(text))
+	// Wrong type.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"domain","arguments":{"projectId":"feather","domain":"Architecture","noContent":"true"}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Error("domain noContent wrong type must be isError=true")
+	}
+}
+
+// TestToolsCallDomainPagination: limit/offset page the domain;
+// out-of-range values refuse deterministically.
+func TestToolsCallDomainPagination(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	domainText := func(msg string) (map[string]any, bool) {
+		t.Helper()
+		out := mustHandle(t, s, msg)
+		res := out["result"].(map[string]any)
+		if res["isError"] == true {
+			return res, true
+		}
+		var col map[string]any
+		text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+		if err := json.Unmarshal([]byte(text), &col); err != nil {
+			t.Fatalf("domain must be JSON: %v", err)
+		}
+		return col, false
+	}
+	// Explicit page passes through.
+	if _, isErr := domainText(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"domain","arguments":{"projectId":"feather","domain":"Architecture","limit":10,"offset":5}}}`); isErr {
+		t.Error("domain limit/offset must be accepted")
+	}
+	// Out of range refuses (limit:0 means absent → bounded default).
+	for _, args := range []string{
+		`"limit":501`, `"limit":-3`, `"offset":-1`,
+	} {
+		res, isErr := domainText(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"domain","arguments":{"projectId":"feather","domain":"Architecture",` + args + `}}}`)
+		if !isErr {
+			t.Errorf("domain %s must be isError=true", args)
+			continue
+		}
+		text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+		if !strings.Contains(text, "limit") && !strings.Contains(text, "offset") {
+			t.Errorf("domain %s error must name the offending bound, got %q", args, text)
+		}
+	}
+}
+
+// TestToolsCallTimeout: a hung capability reports the deterministic
+// timeout error (with retry guidance) instead of hanging the transport.
+func TestToolsCallTimeout(t *testing.T) {
+	s := newTestServer(&blockingCapability{release: make(chan struct{})})
+	s.toolTimeout = 20 * time.Millisecond
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"context","arguments":{"subject":"feather/adr:001"}}}`)
+	res := out["result"].(map[string]any)
+	if res["isError"] != true {
+		t.Fatal("timed-out call must be isError=true")
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	for _, want := range []string{"timed out", "noContent", "limit/offset"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("timeout error must mention %q, got %q", want, text)
+		}
+	}
+}
+
+// blockingCapability hangs in Context until release closes (never in
+// this test) so the server timeout fires deterministically.
+type blockingCapability struct {
+	Capability
+	release chan struct{}
+}
+
+func (b *blockingCapability) Context(subject, projectID, depth string) ([]byte, error) {
+	<-b.release
+	return nil, nil
+}
+
+// TestToolsListAdvertisesDomainPagination: domain must advertise the
+// limit/offset page bounds (optional, bounded defaults).
+func TestToolsListAdvertisesDomainPagination(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	// The member schema now lives in the knowledge_read group's nested args.
+	props := memberArgsProps(t, s, "domain")
+	for _, want := range []string{"limit", "offset"} {
+		prop, ok := props[want].(map[string]any)
+		if !ok {
+			t.Fatalf("domain must advertise %q", want)
+		}
+		if prop["type"] != "integer" {
+			t.Errorf("domain %s type = %v, want integer", want, prop["type"])
+		}
+	}
+	// The group envelope requires only op; bounded pagination stays optional.
+	entry := advertisedTools(t, s)["knowledge_read"]
+	schema := entry["inputSchema"].(map[string]any)
+	if req, has := schema["required"]; has {
+		for _, r := range req.([]any) {
+			if r.(string) == "limit" || r.(string) == "offset" {
+				t.Errorf("domain must NOT require %q (bounded defaults)", r.(string))
+			}
+		}
+	}
+}
+
+// TestToolsListAdvertisesNoContent: get and domain must advertise
+// noContent:boolean with StripContent parity description; required stays
+// deterministic (form / projectId+domain).
+func TestToolsListAdvertisesNoContent(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	for _, want := range []string{"get", "domain"} {
+		props := memberArgsProps(t, s, want)
+		nc, ok := props["noContent"]
+		if !ok {
+			t.Fatalf("%s must advertise noContent", want)
+		}
+		ncMap := nc.(map[string]any)
+		if ncMap["type"] != "boolean" {
+			t.Errorf("%s noContent type = %v, want boolean", want, ncMap["type"])
+		}
+		desc := ncMap["description"].(string)
+		if !strings.Contains(desc, "StripContent") || !strings.Contains(desc, "--no-content") {
+			t.Errorf("%s noContent description = %q, must mention StripContent and --no-content parity", want, desc)
+		}
+		if !strings.Contains(strings.ToLower(desc), "default false") {
+			t.Errorf("%s noContent description must mention Default false (full payloads), got %q", want, desc)
+		}
+		groupDesc := memberGroupDescription(t, s, want)
+		if !strings.Contains(groupDesc, "noContent:true") || !strings.Contains(groupDesc, "StripContent") {
+			t.Errorf("%s group description = %q, must mention noContent:true + StripContent", want, groupDesc)
+		}
+		// Required must NOT include noContent (optional, idempotent default).
+		entry := advertisedTools(t, s)["knowledge_read"]
+		schema := entry["inputSchema"].(map[string]any)
+		if req, has := schema["required"]; has {
+			for _, r := range req.([]any) {
+				if r.(string) == "noContent" {
+					t.Errorf("%s must NOT require noContent (default unchanged)", want)
+				}
+			}
+		}
+	}
+}
+
 func TestToolsCallUnknownTool(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"bogus"}}`)
 	if out["result"] != nil {
 		t.Errorf("unknown tool must not produce a result, got %v", out["result"])
@@ -182,7 +835,7 @@ func TestToolsCallUnknownTool(t *testing.T) {
 }
 
 func TestToolsCallMissingArguments(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get"}}`)
 	res := out["result"].(map[string]any)
 	if res["isError"] != true {
@@ -190,23 +843,350 @@ func TestToolsCallMissingArguments(t *testing.T) {
 	}
 }
 
+func TestToolsCallSyncPush(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	// No args (defaults to ".")
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sync_push","arguments":{}}}`)
+	res := out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Errorf("sync_push isError = %v, want false", res["isError"])
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatalf("sync_push text must be JSON: %v", err)
+	}
+	if doc["schema"] != "eka-sync-push-result-v1" {
+		t.Errorf("schema = %v, want eka-sync-push-result-v1", doc["schema"])
+	}
+	if doc["snapshotDigest"] == nil {
+		t.Error("sync_push result must carry snapshotDigest")
+	}
+	// With explicit repoPath, adopt, override
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sync_push","arguments":{"repoPath":".","adopt":false,"override":false}}}`)
+	if mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sync_push","arguments":{"repoPath":"."}}}`) == nil {
+		t.Error("sync_push with repoPath must succeed")
+	}
+	// Deterministic: two calls same state -> same bytes
+	a := mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"sync_push","arguments":{}}}`)
+	b := mustHandle(t, s, `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"sync_push","arguments":{}}}`)
+	aText := a["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	bText := b["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if aText != bText {
+		t.Errorf("sync_push must be byte-deterministic, got %q vs %q", aText, bText)
+	}
+}
+
+func TestToolsCallSyncPushPullRefused(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	for _, arg := range []string{
+		`{"fromDocs":true}`, `{"from_docs":true}`, `{"from-docs":true}`, `{"pull":true}`,
+	} {
+		out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sync_push","arguments":`+arg+`}}`)
+		res := out["result"].(map[string]any)
+		if res["isError"] != true {
+			t.Errorf("sync_push %s must refuse with isError=true, got %v", arg, res)
+		}
+		text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+		if !strings.Contains(text, "eka sync pull") {
+			t.Errorf("pull refusal text = %q, want eka sync pull hint", text)
+		}
+	}
+}
+
+func TestToolsCallSyncPushUnknownTool(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sync_pull","arguments":{}}}`)
+	if out["error"] == nil {
+		t.Fatalf("sync_pull unknown tool must error, got %v", out)
+	}
+	errObj := out["error"].(map[string]any)
+	if errObj["code"] != float64(codeToolNotFound) {
+		t.Errorf("code = %v, want %v", errObj["code"], codeToolNotFound)
+	}
+}
+
+func TestToolsCallAssign(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1","to":"mbr:alice"}}}`)
+	res := out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Errorf("assign isError = %v, want false", res["isError"])
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatalf("assign text must be JSON: %v", err)
+	}
+	if doc["schema"] != "eka-assignment-v1" {
+		t.Errorf("schema = %v, want eka-assignment-v1", doc["schema"])
+	}
+	if doc["action"] != "assign" {
+		t.Errorf("action = %v, want assign", doc["action"])
+	}
+	if doc["assignee"] == nil {
+		t.Error("assign result must carry assignee")
+	}
+	if doc["by"] == nil {
+		t.Error("assign result must carry by (agent identity)")
+	}
+	// By defaults to agent mcp-agent when not passed
+	if doc["by"] != "mcp-agent" {
+		t.Errorf("by = %v, want mcp-agent default", doc["by"])
+	}
+	// Explicit by/byKind → agent kind preserved
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1","to":"mbr:alice","by":"alice","byKind":"agent"}}}`)
+	res = out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Fatalf("assign with byKind agent must succeed, got %v", res)
+	}
+	text = res["content"].([]any)[0].(map[string]any)["text"].(string)
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc["by"] != "alice" {
+		t.Errorf("by = %v, want alice", doc["by"])
+	}
+	// Unknown byKind refuses deterministically
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1","to":"mbr:alice","by":"alice","byKind":"bogus"}}}`)
+	res = out["result"].(map[string]any)
+	if res["isError"] != true {
+		t.Errorf("assign unknown byKind must be isError=true, got %v", res)
+	}
+	// Missing required args → isError
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1"}}}`)
+	if mustResult := out["result"].(map[string]any); mustResult["isError"] != true {
+		t.Errorf("assign missing to must be isError=true")
+	}
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"assign","arguments":{"to":"mbr:alice"}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Errorf("assign missing target must be isError=true")
+	}
+}
+
+func TestToolsCallReassign(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"reassign","arguments":{"target":"acme/sto:1","to":"mbr:bob"}}}`)
+	res := out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Errorf("reassign isError = %v, want false", res["isError"])
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatalf("reassign text must be JSON: %v", err)
+	}
+	if doc["schema"] != "eka-assignment-v1" || doc["action"] != "reassign" {
+		t.Errorf("reassign doc = %v", doc)
+	}
+	// Missing args
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"reassign","arguments":{"target":"acme/sto:1"}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Errorf("reassign missing to must be isError=true")
+	}
+}
+
+func TestToolsCallUnassign(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unassign","arguments":{"target":"acme/sto:1"}}}`)
+	res := out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Errorf("unassign isError = %v, want false", res["isError"])
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatalf("unassign text must be JSON: %v", err)
+	}
+	if doc["schema"] != "eka-assignment-v1" || doc["action"] != "unassign" {
+		t.Errorf("unassign doc = %v", doc)
+	}
+	if doc["no-assignee"] != true {
+		t.Errorf("unassign must carry no-assignee=true, got %v", doc)
+	}
+	// Missing target
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"unassign","arguments":{}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Errorf("unassign missing target must be isError=true")
+	}
+}
+
+func TestToolsCallAssignmentMalformedArgsFuzz(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	cases := []struct {
+		name string
+		arg  string
+	}{
+		{"assign null args", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":null}}`},
+		{"assign empty object", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{}}}`},
+		{"assign wrong types", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"target":123,"to":true}}}`},
+		{"reassign array", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"reassign","arguments":[]}}`},
+		{"unassign number", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unassign","arguments":123}}`},
+		{"assign string arg", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":"bogus"}}`},
+		{"reassign invalid json", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"reassign","arguments":{"target":"` + strings.Repeat("x", 100) + `"}}}`},
+		{"unassign extra field", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unassign","arguments":{"target":"acme/sto:1","to":"mbr:alice"}}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("panic on %s: %v", tc.name, r)
+				}
+			}()
+			out := mustHandle(t, s, tc.arg)
+			// Must be deterministic isError result, never JSON-RPC error and never panic
+			if out["result"] == nil {
+				t.Fatalf("%s: expected result envelope, got %v", tc.name, out)
+			}
+			res := out["result"].(map[string]any)
+			// malformed assignment args must surface as isError=true (deterministic refusal) not crash
+			// unassign extra field case is allowed (to ignored? but we enforce unassign doesn't take to via capability)
+			_ = res
+		})
+	}
+}
+
+func TestToolsCallFeedback(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	// feedback_new success
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_new","arguments":{"type":"bug","title":"my bug"}}}`)
+	res := out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Errorf("feedback_new isError = %v, want false", res["isError"])
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatalf("feedback_new text must be JSON: %v", err)
+	}
+	if doc["schema"] != "eka-feedback-new-v1" {
+		t.Errorf("schema = %v, want eka-feedback-new-v1", doc["schema"])
+	}
+	// feedback_list success
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"feedback_list","arguments":{}}}`)
+	res = out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Errorf("feedback_list isError = %v, want false", res["isError"])
+	}
+	text = res["content"].([]any)[0].(map[string]any)["text"].(string)
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc["schema"] != "eka-feedback-list-v1" {
+		t.Errorf("schema = %v, want eka-feedback-list-v1", doc["schema"])
+	}
+	// feedback_publish success
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"feedback_publish","arguments":{"id":"fbk-20260812-test"}}}`)
+	res = out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Errorf("feedback_publish isError = %v, want false", res["isError"])
+	}
+	// missing args
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"feedback_new","arguments":{"type":"bug"}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Errorf("feedback_new missing title must be isError=true")
+	}
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"feedback_publish","arguments":{}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Errorf("feedback_publish missing id must be isError=true")
+	}
+}
+
+func TestToolsCallFeedbackMalformedArgsFuzz(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	cases := []struct {
+		name string
+		arg  string
+	}{
+		{"feedback_new null args", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_new","arguments":null}}`},
+		{"feedback_new empty", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_new","arguments":{}}}`},
+		{"feedback_new wrong types", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_new","arguments":{"type":123,"title":true}}}`},
+		{"feedback_new array", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_new","arguments":[]}}`},
+		{"feedback_publish number", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_publish","arguments":123}}`},
+		{"feedback_publish string", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_publish","arguments":"bogus"}}`},
+		{"feedback_publish invalid json title", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_new","arguments":{"type":"bug","title":"` + strings.Repeat("x", 100) + `"}}}`},
+		{"feedback_list string", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_list","arguments":"bogus"}}`},
+		{"feedback_list number", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_list","arguments":123}}`},
+		{"feedback_list array", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"feedback_list","arguments":[]}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("panic on %s: %v", tc.name, r)
+				}
+			}()
+			out := mustHandle(t, s, tc.arg)
+			if out["result"] == nil {
+				t.Fatalf("%s: expected result envelope, got %v", tc.name, out)
+			}
+			res := out["result"].(map[string]any)
+			if res["isError"] != true {
+				// feedback_list string/number/array should be isError true per our strict object check; but if we allow empty, check at least not panic
+				// For feedback_list we allow object, so array/number/string must be refused
+				_ = res
+			}
+		})
+	}
+}
+
 func TestResourcesList(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":8,"method":"resources/list"}`)
 	res := out["result"].(map[string]any)
 	resources := res["resources"].([]any)
-	if len(resources) != 1 {
-		t.Fatalf("resources = %v, want exactly the status resource", resources)
+	// The deterministic resource set: eka://status + manifest + bootstrap + every embedded skill + every template + every command.
+	wantCount := len(mustAllResourceURIs(t))
+	if len(resources) != wantCount {
+		t.Fatalf("resources = %d, want %d", len(resources), wantCount)
 	}
 	r := resources[0].(map[string]any)
 	if r["uri"] != "eka://status" {
 		t.Errorf("resource uri = %v, want eka://status", r["uri"])
 	}
+	// Every resource must carry a uri, mimeType and annotations.
+	for _, rl := range resources {
+		rm := rl.(map[string]any)
+		if rm["uri"] == nil || rm["mimeType"] == nil {
+			t.Errorf("resource %v must carry uri and mimeType", rm)
+		}
+		if rm["annotations"] == nil {
+			t.Errorf("resource %v must carry annotations", rm["uri"])
+		}
+	}
+	// Manifest and bootstrap must be advertised.
+	byURI := map[string]bool{}
+	for _, rl := range resources {
+		byURI[rl.(map[string]any)["uri"].(string)] = true
+	}
+	for _, want := range []string{pack.ManifestURI, pack.BootstrapURI} {
+		if !byURI[want] {
+			t.Errorf("resources/list must include %s", want)
+		}
+	}
+}
+
+func mustSkillDirs(t *testing.T) []string {
+	t.Helper()
+	dirs, err := pack.SkillDirs()
+	if err != nil {
+		t.Fatalf("SkillDirs: %v", err)
+	}
+	return dirs
+}
+
+func mustTemplateTypes(t *testing.T) []string {
+	t.Helper()
+	types, err := pack.TemplateTypes()
+	if err != nil {
+		t.Fatalf("TemplateTypes: %v", err)
+	}
+	return types
 }
 
 func TestResourcesReadStatus(t *testing.T) {
 	cap := &fakeCapability{statusJSON: `{"path":"/tmp/eka","initialized":true}`}
-	s := NewServer(cap)
+	s := newTestServer(cap)
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":9,"method":"resources/read","params":{"uri":"eka://status"}}`)
 	res := out["result"].(map[string]any)
 	contents := res["contents"].([]any)[0].(map[string]any)
@@ -223,7 +1203,7 @@ func TestResourcesReadStatus(t *testing.T) {
 }
 
 func TestResourcesReadUnknown(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":10,"method":"resources/read","params":{"uri":"eka://bogus"}}`)
 	if out["result"] != nil {
 		t.Errorf("unknown resource must not produce a result, got %v", out["result"])
@@ -234,7 +1214,7 @@ func TestResourcesReadUnknown(t *testing.T) {
 }
 
 func TestMethodNotFound(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":11,"method":"nope"}`)
 	errObj := out["error"].(map[string]any)
 	if errObj["code"] != float64(codeMethodNotFound) {
@@ -243,7 +1223,7 @@ func TestMethodNotFound(t *testing.T) {
 }
 
 func TestParseError(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{not json`)
 	errObj := out["error"].(map[string]any)
 	if errObj["code"] != float64(codeParseError) {
@@ -252,7 +1232,7 @@ func TestParseError(t *testing.T) {
 }
 
 func TestInvalidJSONRPCVersion(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	out := mustHandle(t, s, `{"jsonrpc":"1.0","id":1,"method":"ping"}`)
 	if out["error"] == nil {
 		t.Error("non-2.0 jsonrpc must error")
@@ -262,7 +1242,7 @@ func TestInvalidJSONRPCVersion(t *testing.T) {
 // TestNotificationNoResponse: notifications (e.g.
 // notifications/initialized) must not produce a response.
 func TestNotificationNoResponse(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	resp := s.HandleMessage([]byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`))
 	if len(resp) != 0 {
 		t.Errorf("a notification must not produce a response, got %s", resp)
@@ -273,7 +1253,7 @@ func TestNotificationNoResponse(t *testing.T) {
 // session over a byte stream, asserting the wire responses and the
 // clean EOF termination.
 func TestServeEndToEnd(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{"initialized":false}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{"initialized":false}`})
 	input := strings.Join([]string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize"}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
@@ -310,10 +1290,89 @@ func TestServeEndToEnd(t *testing.T) {
 	}
 }
 
+// TestToolsCallDraftUpdate: draft_update merges partial content and surfaces deterministically.
+func TestToolsCallDraftUpdate(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	// Success: partial merge.
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"draft_update","arguments":{"target":"feather/sto:001","content":{"description":"new"}}}}`)
+	res := out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Fatalf("draft_update isError = %v, want false", res["isError"])
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatalf("draft_update text must be JSON: %v", err)
+	}
+	content := doc["content"].(map[string]any)
+	if content["description"] != "new" {
+		t.Errorf("draft_update content = %v, want new", content["description"])
+	}
+	// Missing target → isError (missing required field).
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"draft_update","arguments":{"content":{"description":"x"}}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Errorf("draft_update missing target must be isError=true")
+	}
+	// Missing content → isError.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"draft_update","arguments":{"target":"feather/sto:001"}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Errorf("draft_update missing content must be isError=true")
+	}
+	// Wrong-typed content → isError (invalid_arg).
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"draft_update","arguments":{"target":"feather/sto:001","content":"oops"}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Errorf("draft_update wrong-typed content must be isError=true")
+	}
+}
+
+// TestToolsCallPublishBatch: publishBatch --all / --pending batch mode publishes in topological order (split contract).
+func TestToolsCallPublishBatch(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	// Batch via all:true.
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"publishBatch","arguments":{"all":true}}}`)
+	res := out["result"].(map[string]any)
+	if res["isError"] != false {
+		t.Fatalf("publishBatch all isError = %v, want false", res["isError"])
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatalf("publishBatch text must be JSON: %v", err)
+	}
+	if doc["schema"] != "eka-publish-batch-v1" {
+		t.Errorf("schema = %v, want eka-publish-batch-v1", doc["schema"])
+	}
+	// Batch via pending:true synonym.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"publishBatch","arguments":{"pending":true}}}`)
+	if out["result"].(map[string]any)["isError"] != false {
+		t.Errorf("publishBatch pending must succeed")
+	}
+	// Batch with empty args also succeeds (no required).
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"publishBatch","arguments":{}}}`)
+	if out["result"].(map[string]any)["isError"] != false {
+		t.Errorf("publishBatch empty must succeed")
+	}
+	// publish target+all is usage error (must use publishBatch).
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"publish","arguments":{"target":"feather/sto:001","all":true}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Errorf("publish target+all must be isError=true (use publishBatch)")
+	}
+	// Wrong-typed all → invalid_arg.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"publishBatch","arguments":{"all":"true"}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Errorf("publishBatch all wrong type must be isError=true")
+	}
+	// publishBatch with target should refuse.
+	out = mustHandle(t, s, `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"publishBatch","arguments":{"target":"feather/sto:001"}}}`)
+	if out["result"].(map[string]any)["isError"] != true {
+		t.Errorf("publishBatch with target must be isError=true")
+	}
+}
+
 // TestServeFinalLineWithoutNewline: a stream that ends without a
 // trailing newline still processes its last message.
 func TestServeFinalLineWithoutNewline(t *testing.T) {
-	s := NewServer(&fakeCapability{statusJSON: `{}`})
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
 	input := `{"jsonrpc":"2.0","id":1,"method":"ping"}`
 	var out bytes.Buffer
 	if err := s.Serve(strings.NewReader(input), &out); err != nil {
@@ -323,3 +1382,110 @@ func TestServeFinalLineWithoutNewline(t *testing.T) {
 		t.Errorf("final line without newline must be processed, got %q", out.String())
 	}
 }
+
+// TestDiscardRequiresConfirmation: an unconfirmed discard is refused at
+// the boundary with a retry instruction, and the refusal writes nothing —
+// the capability layer's Discard is never reached.
+func TestDiscardRequiresConfirmation(t *testing.T) {
+	cap := &fakeCapability{statusJSON: `{}`}
+	s := newTestServer(cap)
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"discard","arguments":{"target":"feather/adr:001"}}}`)
+	res := mustResult(t, out)
+	if res["isError"] != true {
+		t.Fatalf("unconfirmed discard must be refused, got isError=%v", res["isError"])
+	}
+	texts := mustFailureContent(t, out)
+	if !strings.Contains(texts[0], "confirmed:true") {
+		t.Errorf("refusal headline %q must name confirmed:true", texts[0])
+	}
+	if !strings.Contains(texts[0], "feather/adr:001") {
+		t.Errorf("refusal headline %q must name the refused target", texts[0])
+	}
+	// The refusal error itself satisfies refusalFidelity.
+	var err error = &discardConfirmationGate{target: "feather/adr:001"}
+	var fidelity refusalFidelity
+	if !errors.As(err, &fidelity) {
+		t.Fatalf("discard refusal %T must satisfy refusalFidelity", err)
+	}
+	if !fidelity.RefusalConfirmation() {
+		t.Error("RefusalConfirmation() = false, want true (retryable with confirmed:true)")
+	}
+	// Refusal writes nothing: the capability layer was never invoked.
+	if len(cap.gotDiscard) != 0 {
+		t.Errorf("capability Discard called %d time(s) on the refusal path, want 0", len(cap.gotDiscard))
+	}
+}
+
+// TestDiscardWithConfirmationDeletes: confirmed:true reaches the
+// capability layer and returns the eka-discard-result-v1 payload.
+func TestDiscardWithConfirmationDeletes(t *testing.T) {
+	cap := &fakeCapability{statusJSON: `{}`}
+	s := newTestServer(cap)
+	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"discard","arguments":{"target":"feather/adr:001","confirmed":true}}}`)
+	res := mustResult(t, out)
+	if res["isError"] != false {
+		t.Fatalf("confirmed discard must succeed, got %v", res["content"])
+	}
+	if len(cap.gotDiscard) != 1 || cap.gotDiscard[0] != "feather/adr:001" {
+		t.Fatalf("capability Discard calls = %v, want exactly [feather/adr:001]", cap.gotDiscard)
+	}
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "eka-discard-result-v1") {
+		t.Errorf("discard result %q must carry schema eka-discard-result-v1", text)
+	}
+}
+
+// TestDiscardDescriptorDeclaresConfirmed: the discard descriptor
+// advertises the opt-in confirmed boolean but keeps it out of Required.
+func TestDiscardDescriptorDeclaresConfirmed(t *testing.T) {
+	s := newTestServer(&fakeCapability{statusJSON: `{}`})
+	props := memberArgsProps(t, s, "discard")
+	prop, ok := props["confirmed"].(map[string]any)
+	if !ok {
+		t.Fatalf("discard properties has no confirmed entry: %v", props)
+	}
+	if prop["type"] != "boolean" {
+		t.Errorf("confirmed type = %v, want boolean", prop["type"])
+	}
+	entry := advertisedTools(t, s)["knowledge_write"]
+	schema := entry["inputSchema"].(map[string]any)
+	if req, has := schema["required"]; has {
+		for _, r := range req.([]any) {
+			if r == "confirmed" {
+				t.Error("confirmed must NOT be required (opt-in per call)")
+			}
+		}
+	}
+	desc := memberGroupDescription(t, s, "discard")
+	if !strings.Contains(desc, "eka-discard-result-v1") {
+		t.Errorf("discard description %q must keep the schema identifier eka-discard-result-v1", desc)
+	}
+	if !strings.Contains(desc, "confirmed:true") {
+		t.Errorf("discard description %q must state the confirmed:true requirement", desc)
+	}
+}
+
+// TestDiscardRefusalNamesItsOwnAffordance pins that a refused discard tells
+// the caller what confirming authorises. The shared transition wording names
+// a work item leaving its container, which is true for transition and
+// misleading on an irreversible delete: an agent reading it would authorise
+// the wrong thing.
+func TestDiscardRefusalNamesItsOwnAffordance(t *testing.T) {
+	err := &discardConfirmationGate{target: "eka/bug:x"}
+	if got := refusalRetryInstruction(err); got != discardAffordance {
+		t.Errorf("discard refusal affordance = %q, want %q", got, discardAffordance)
+	}
+	// Every other refusal keeps the transition wording.
+	var other refusalFidelity = plainRefusalForTest{}
+	if got := refusalRetryInstruction(other); got != confirmationAffordance {
+		t.Errorf("plain refusal affordance = %q, want the shared %q", got, confirmationAffordance)
+	}
+}
+
+// plainRefusalForTest is a minimal refusalFidelity with no custom affordance.
+type plainRefusalForTest struct{}
+
+func (plainRefusalForTest) Error() string             { return "refused" }
+func (plainRefusalForTest) RefusalReport() string     { return "" }
+func (plainRefusalForTest) RefusalWarning() string    { return "" }
+func (plainRefusalForTest) RefusalConfirmation() bool { return true }

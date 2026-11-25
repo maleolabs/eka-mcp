@@ -10,9 +10,8 @@ into one executable:
 3. **CLI plugin** — an `eka-cli` plugin that installs the skill pack into an
    agent configuration directory.
 
-It is a consumer of both [`eka-core`](https://github.com/maleolabs/eka-core)
-(the Runtime) and [`eka-cli`](https://github.com/maleolabs/eka-cli) (the plugin
-contract).
+It is a consumer of [`eka-core`](https://github.com/maleolabs/eka-core) (the
+Runtime and the plugin contract) and an `eka-cli` plugin.
 
 Module path: `github.com/maleolabs/eka-mcp`
 
@@ -40,19 +39,22 @@ eka-mcp implements the eka-cli plugin contract (v1). It is an executable named
 
 **`eka-mcp manifest --json`** — print the plugin self-description. The
 `Manifest` (`contract: "v1"`, `name: "mcp"`, `version`, `description`,
-`artifacts`) is derived from the embedded skill pack, so the manifest always
-reflects what the installer can actually install:
+`artifacts`, plus the extended-contract `capabilities` and `source`) is
+derived from the embedded skill pack, so the manifest always reflects what the
+installer can actually install:
 
 ```json
 {
   "contract": "v1",
   "name": "mcp",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "EKA MCP — the AI-agent integration layer: an MCP server over the EKA Runtime plus the EKA AI Skill Pack installer",
   "artifacts": [
     { "kind": "skills", "entries": ["eka-router", "eka-orientation", "…"] },
     { "kind": "commands", "entries": ["eka-discuss.md", "eka-execute.md"] }
-  ]
+  ],
+  "capabilities": ["install", "mcp"],
+  "source": "github.com/maleolabs/eka-mcp"
 }
 ```
 
@@ -62,6 +64,39 @@ Supported kinds: `skills` (each `eka-*` directory installed as a subtree) and
 `commands` (each command file installed as a single file). `--dry-run` reports
 the plan without touching the filesystem.
 
+**`eka-mcp configure [--target opencode|claude|codex] [--dir <dir>] [--with-skills] [--with-commands] [--with-all] [--dry-run] --json`** —
+per-agent configuration UX (outside the fixed manifest/install contract): writes
+the MCP client config entry for the target ecosystem (absolute binary path +
+`EKA_HOME` when set). By default it **only** writes the MCP client config — skills
+and commands are accessible via MCP resources `eka://skills/*` and
+`eka://templates/*` and are **not** installed unless opted in via `--with-skills`,
+`--with-commands`, or `--with-all` (`--with-all` = both). `--dry-run` prints the
+plan without writing (and reflects only the opted-in installs). Unsupported
+`--target` fails deterministically listing the supported targets. The write merges
+without overwriting other servers' entries and is idempotent. Config-file writes are
+hardened: the merged config is staged in a temporary file and renamed into place
+(atomic replace — the final path component is never written through), a symlinked
+config destination refuses with the link left intact, and an existing config that is
+not valid JSON refuses with a clear error instead of being silently reset (the file
+stays byte-untouched in both refusal cases). Default `--target` is
+`opencode`; `--dir` defaults to the current working directory (workspace root).
+
+Opted-in installs land in the target's conventional directories under an anchor
+(`<base>` = `--dir`, else the user home for opencode/claude and the working
+directory for codex): `opencode` → `<base>/.config/opencode/{skills,commands}`,
+`claude` → `<base>/.claude/{skills,commands}`, `codex` → `<base>/.agents/skills`
+(skills only — codex-cli removed the prompts directory in 0.117.0, so
+`--with-commands`/`--with-all` refuse deterministically). Canonical command
+bodies stay description-only in the pack; frontmatter is rendered per target at
+install time, and the active role→agent delegation table travels alongside as a
+non-.md `DELEGATION.txt` sidecar (next to the installed commands for
+opencode/claude, inside the skills subtree for codex) so legacy command dirs
+never see a phantom `.md` command. `DELEGATION.txt` is a **reserved sidecar
+name**: every install writes/overwrites it, so do not store your own content
+under that name in the install directories. Re-installing overwrites only
+pack-owned files; foreign files are never touched; a symlinked final path
+component refuses (intermediate directory symlinks are followed).
+
 ## The MCP server
 
 Running `eka-mcp serve` (or `eka-mcp --stdio`, or no subcommand at all) starts
@@ -69,18 +104,108 @@ the MCP server over stdio (JSON-RPC 2.0, newline-delimited). It reports MCP
 protocol version `2024-11-05` and advertises the `tools` and `resources`
 capabilities.
 
-The server exposes three tools and one resource over the EKA capability layer:
+The server advertises six grouped tool handles (plus six resource families) over
+the EKA capability layer (guidance remains resource content, operations remain
+tools). Each handle takes `{"op":"<operation>","args":{...}}` and forwards to the
+identical operation below — omit `args` for operations that take none. The flat
+operation names stay dispatchable as aliases for existing clients but are no
+longer advertised.
+
+| Group | Operations |
+|---|---|
+| `knowledge_read` | `context`, `get`, `domain`, `status`, `validate`, `draft_read`, `draft_list` |
+| `knowledge_write` | `new`, `draft_update`, `publish`, `publishBatch`, `transition`, `note`, `discard` |
+| `code` | `code_context`, `code_discover`, `code_get` |
+| `workspace` | `sync_push`, `assign`, `reassign`, `unassign` |
+| `ops` | `integrity_check` |
+| `feedback` | `feedback_new`, `feedback_list`, `feedback_publish` |
+
+The table below lists every operation, with the verbatim capability text surfaced
+inside its group's description:
 
 | Tool / resource | Description |
 |---|---|
+| `context` | Build the deterministic Context Object around one subject (schema `eka-context-v1`). |
 | `get` | Fetch one Canonical Knowledge Object by identity form (canonical `"<ns>/<type>:<id>:<v>"` or qualified line `"<ns>/<type>:<id>"`), returned as a machine document (schema `eka-cko-v2`). |
 | `domain` | Return every unit of one Engineering Domain of a project as a machine collection (schema `eka-cko-v2`, sorted by canonical form). |
-| `status` | Return the aggregated EKA workspace status (path, schema version, projects, canonical store totals). |
+| `status` | Return the aggregated EKA workspace status (path, schema version, projects, canonical store totals). When no workspace is present it returns `{"initialized":false,…}` deterministically. |
+| `validate` | Run the authoring conformance gate over a repository. |
+| `new` | Scaffold one draft (schema `eka-draft-v1`). |
+| `draft_update` | Apply a partial content merge to one pending draft (schema `eka-draft-update-v1`). |
+| `publish` | Publish one draft (schema `eka-publish-result-v1`). |
+| `publishBatch` | Publish every pending draft in topological order (schema `eka-publish-batch-v1`). |
+| `transition` | Move a work item along the transition table (schema `eka-transition-result-v1`). |
+| `note` | Create one `cmt-` note draft (schema `eka-note-result-v1`). |
+| `draft_read` | Return one draft file content verbatim (the v2.0 JSON authoring document) — the editable draft behind a target. |
+| `view` (deprecated alias) | Deprecated alias of `draft_read` — same verbatim draft reader. Flagged deprecated in `tools/list` with migration note to `draft_read`; will be removed in the next minor version (td:mcp-view-naming-fix). |
+| `draft_list` | List the draft backlog. |
+| `integrity_check` | Verify the canonical store. |
+| `discard` | Delete one draft without publishing. |
+| `sync_push` | Push the repository snapshot from the workspace store (schema `eka-sync-push-result-v1`). Same engine as CLI `eka sync push` — deterministic snapshot & digest, same refusal classes; crash-safe atomic swap so a failed push writes nothing partially. Pull / --from-docs is not exposed (silent regression hazard; use CLI `eka sync pull`). |
+| `assign` | Assign a work item to a member (schema `eka-assignment-v1`). Same engine as CLI `eka assign` — same target forms, same validation, same refusal classes (already assigned to different member → deterministic refusal; idempotent on same member). |
+| `reassign` | Move a work item's assignment in one operation (schema `eka-assignment-v1`). Same engine as CLI `eka reassign` — same validation and refusal classes; refusal when not assigned, idempotent on same member. |
+| `code_context` | Build bounded deterministic source context from the local code graph (schema `eka/code-context/1`). |
+| `code_discover` | Discover code candidates deterministically from a natural-language query (schema `eka/code-discover/1`). |
+| `code_get` | Retrieve exact file content by slash path (schema `eka/code-get/1`). |
+| `unassign` | Remove a work item's assigned-to edge (schema `eka-assignment-v1`). Same engine as CLI `eka unassign` — same validation; no-op when already unassigned. |
+| `feedback_new` | Create a feedback draft under `EKA_HOME/feedback` (YAML frontmatter + markdown body, schema `eka-feedback-new-v1`). Same engine as CLI `eka feedback new` — same validation, same per-type scaffold, same `fbk-YYYYMMDD-slug` id, same `0600/0700` permissions. Feedback is meta-information outside the knowledge model (ADR-026) — it never enters the canonical store and never becomes a CKO. |
+| `feedback_list` | List all local feedback under `EKA_HOME/feedback` (schema `eka-feedback-list-v1`) — drafts and published, id descending (newest first, same as CLI `eka feedback list`). Deterministic; first malformed file fails naming the file. |
+| `feedback_publish` | Publish a feedback draft as a GitHub issue on the fixed target repository (schema `eka-feedback-publish-v1`). Same engine as CLI `eka feedback publish` — release-binary token gate, deterministic refusals (missing/invalid token names remediation, never raw HTTP error; token never appears in outputs/errors/logs), idempotent already-published refusal, unknown id refusal. Feedback never enters the canonical store. |
 | `eka://status` (resource) | The same workspace status, as a readable resource (`application/json`). |
+| `eka://skills/<name>` (resource) | The `SKILL.md` of one embedded skill (read-only). |
+| `eka://templates/<type>` (resource) | The v2.0 JSON draft template of one type (read-only). |
+| `eka://manifest` (resource) | Compact pack manifest/index (`eka-pack-manifest-v1`) — sorted skills/templates/commands with versions, no bodies (lazy). |
+| `eka://bootstrap` (resource) | Bootstrap guidance (`text/markdown`) — lazy load order, versioned reads (`@<version>` suffix) and fallback. |
+| `eka://commands/<name>` (resource) | The command guidance markdown of one embedded command (read-only, `text/markdown`), lazy with `@<version>` support. |
+
+Resource loading and fallback:
+
+- Compact index first: read `eka://manifest` for the full `skills`/`templates`/`commands` lists plus `pack`/`plugin` versions (no bodies, <8 KB).
+- Lazy fetch: read only the needed `eka://skills/<name>`, `eka://templates/<type>` or `eka://commands/<name>` (or `eka://bootstrap` for the guide). All pack resources support versioned reads via an `@<version>` suffix (e.g. `eka://skills/eka-router@1.3.2`); unversioned means current.
+- Version fallback: unknown versions refuse `Resource not found (-32002)` naming the available version (`+pack.Version`) and directing to retry the unversioned URI. Only the current version is retained (single-version pack); unversioned is the canonical fallback.
+- Offline/install fallback: when resources are unavailable (old server, no MCP), install locally via `eka-mcp install skills` / `eka-mcp install commands` or `eka-mcp configure --with-all` and read `<install-dir>/<name>/SKILL.md` directly. `eka://manifest` is the source of truth for the entry lists; never synthesize guidance.
+
+Every `resources/list` entry carries MCP `annotations` (`audience`, `priority`) so clients can prioritize bootstrap/manifest (1.0) over skills (0.9), commands (0.8), templates (0.7) and status (0.6). Guidance stays resource content, operations stay tools — tools never return guidance directly.
+
+Human projections (`eka view` / `eka watch` — Kanban, roadmap, dependency tree, etc.) remain **CLI-only** and are not exposed as MCP tools or resources; the MCP `draft_read` tool is a draft-file reader (authoring aid), not a human projection.
 
 The server opens the EKA Runtime **read-only** (`runtime.Open`), so it starts
-cleanly even before a workspace exists — retrieval then reports the
-uninitialized state instead of failing.
+cleanly even before a workspace exists — `initialize` and `tools/list` always
+answer, and retrieval tools report the uninitialized state deterministically
+(`status` returns `initialized:false`; `get`/`domain`/`context` return
+`workspace not initialized`) instead of crashing or leaking stack traces.
+
+### Hardening contract
+
+The server is hardened to production standard, with a deterministic
+conformance suite (`internal/mcp/conformance_test.go`) and fuzz harness
+(`internal/mcp/fuzz_test.go`) asserting the contract:
+
+- **Protocol**: `initialize` echoes the client's announced protocol version
+  (falling back to the `2024-11-05` baseline when none is announced);
+  capabilities advertise exactly `tools` + `resources`.
+- **Batch rejection**: a JSON-RPC batch array is refused deterministically
+  (`-32600`, fixed message) — the server never processes batches.
+- **Bounded read line**: one stdio message line is capped at 64 MiB; an
+  oversized line is refused deterministically and the stream resynchronizes
+  at the next newline.
+- **Error message policy**: every error path returns a fixed, client-safe
+  refusal-class message — no Go internals, no file paths, no store details,
+  no stack traces.
+- **Framing**: newline-delimited responses, flushed after every reply.
+
+### Integration test (real client)
+
+`scripts/integration-opencode.sh` drives a real opencode session against the
+server: it builds the binary, registers it as a stdio MCP server in a
+throwaway opencode project, and asserts that the session calls the `status`
+tool and receives its JSON — proving the handshake, framing and tool dispatch
+work end-to-end with a real client. It uses the credential-free
+`opencode/deepseek-v4-flash-free` model by default:
+
+```sh
+scripts/integration-opencode.sh
+```
 
 ## The skill pack
 
@@ -106,18 +231,107 @@ Commands: `eka-discuss` (planning discussion) and `eka-execute` (autonomous
 execution + resume). The pack also ships reference draft templates for all 26
 token families and a smoke test.
 
+Alongside the pack, the embedded [`mappings/`](mappings) directory ships the
+pre-rendered role→agent delegation tables per ecosystem (`opencode.toml` — the
+default reference mapping, `claude.toml`, `codex.toml`) of
+req:agent-agnostic-skill-pack R4: one closed 9-role vocabulary, declarative
+per-ecosystem resolution (`delegate` to a named agent or explicit `solo`
+degrade).
+
+### Mapping burden
+
+Per-ecosystem adaptation is **declarative, not editorial**: the command bodies
+never name agents, so porting to a new ecosystem means editing (or adding) a
+`mappings/*.toml` table — never a command body. At install time the active
+table is rendered to the plain-text `DELEGATION.txt` sidecar next to the
+installed artifacts, and the bodies resolve their delegation rows from it.
+Bodies and tables cannot drift silently: a build-time consistency test asserts
+that every role cited by the command bodies resolves in every mapping table.
+
 ## Installation
 
 ### As an eka-cli plugin (recommended)
 
 ```sh
 eka plugin install mcp
+eka-mcp configure --target opencode --dir . --json                          # only writes MCP client config (skills/commands via MCP resources)
+eka-mcp configure --target opencode --dir . --with-all --json               # also installs skills + commands (.config/opencode/{skills,commands} under <dir>) + DELEGATION.txt
+eka-mcp configure --target opencode --dir . --with-skills --json            # only skills, --with-commands for commands only
 ```
 
 This installs the official `eka-mcp` plugin from its GitHub release with
-checksum verification, then delegates the skill-pack installation
-(`eka-mcp install skills` / `eka-mcp install commands`) into your agent
-configuration directory.
+checksum verification. The `configure` subcommand is the per-agent setup:
+it writes the MCP client config entry (absolute `eka-mcp` binary path +
+`EKA_HOME` when set) and, only when opted in, delegates the skill/command
+install (`--with-skills` / `--with-commands` / `--with-all`). Without those
+flags no files are copied — skills and templates remain available via MCP
+resources `eka://skills/*` and `eka://templates/*`. Use `--dry-run` to
+preview (paths + create|overwrite|skip, nothing written), `--target
+opencode|claude|codex` to select the ecosystem (default `opencode`).
+
+### Manual MCP client configuration (without the subcommand)
+
+If you skip `eka-mcp configure`, add the entry for `eka` to your agent's
+MCP config by hand. Replace `/absolute/path/to/eka-mcp` with the absolute
+path to the built binary (`which eka-mcp` or `go build -o /path/eka-mcp ./cmd/eka-mcp`),
+and set `EKA_HOME` only when your workspace lives outside `~/.eka`.
+
+**opencode** — `opencode.json` (`mcp` section, workspace-local `opencode.json` or
+`~/.config/opencode/opencode.json`):
+
+```json
+{
+  "mcp": {
+    "eka": {
+      "type": "local",
+      "command": ["/absolute/path/to/eka-mcp"],
+      "enabled": true,
+      "environment": {
+        "EKA_HOME": "/absolute/path/to/workspace-home"
+      }
+    }
+  }
+}
+```
+
+Omit `environment.EKA_HOME` when `EKA_HOME` is unset (the server then uses
+`~/.eka`).
+
+**Claude Code** — `~/.claude.json` (`mcpServers` section):
+
+```json
+{
+  "mcpServers": {
+    "eka": {
+      "command": "/absolute/path/to/eka-mcp",
+      "args": [],
+      "env": {
+        "EKA_HOME": "/absolute/path/to/workspace-home"
+      }
+    }
+  }
+}
+```
+
+**Codex** — `~/.codex` (or `~/.codex/config.json` when `~/.codex` is a directory,
+`mcpServers` section):
+
+```json
+{
+  "mcpServers": {
+    "eka": {
+      "command": "/absolute/path/to/eka-mcp",
+      "args": [],
+      "env": {
+        "EKA_HOME": "/absolute/path/to/workspace-home"
+      }
+    }
+  }
+}
+```
+
+All three merges preserve other servers' entries; re-running `eka-mcp
+configure` is idempotent. Verify with `--dry-run --json`.
 
 ### Standalone binary
 
@@ -129,14 +343,47 @@ go build ./cmd/eka-mcp
 
 Then run `./eka-mcp serve` as your MCP client's stdio server, or use
 `./eka-mcp manifest --json` / `./eka-mcp install <kind> --dir <dir> --json`
-directly.
+/ `./eka-mcp configure --target <target> --dir <dir> --json` directly.
 
 ## Versioning
 
-- **Semantic versioning**, tag-driven. The single version constant
-  (`pack.Version`, currently `0.1.0`) is reported in the plugin manifest, the
+- **Semantic versioning**, tag-driven. The single version variable
+  (`pack.Version`, currently `1.2.0`) is reported in the plugin manifest, the
   `install` result, and the MCP `serverInfo` — one version across all three
   roles, so they never drift.
+- **Release builds stamp the tag.** The release pipeline injects the git tag
+  into `pack.Version` via `-ldflags "-X github.com/maleolabs/eka-mcp.Version=<tag>"`
+  (see `.anvil/pipelines/build.yaml`; `scripts/bump.sh` keeps `anvil.yaml` and
+  `pack.go` in sync before tagging). A running build is therefore identifiable:
+  read `.version` from `eka mcp manifest --json`, or `serverInfo.version` from
+  the MCP `initialize` handshake.
+- **Source builds report the source literal.** A plain
+  `go build ./cmd/eka-mcp` reports the `pack.Version` value in the working
+  tree (never a placeholder like "dev") — compare it against the latest `v*`
+  tag (`git describe --tags`) to tell a dev checkout from a released build.
+
+## Server diagnostics (stderr)
+
+The server writes one-line operational diagnostics to **stderr** — stdout is
+the JSON-RPC protocol stream and never carries diagnostics. Today there is
+one record class, emitted on every argument-shaped tool refusal
+(bug:mcp-new-false-refusal):
+
+```
+eka-mcp param-refusal tool=new args_bytes=4132 cause=missing_field field=project
+```
+
+- `tool` — the MCP tool name.
+- `args_bytes` — the exact byte length of the received `arguments` payload:
+  the discriminator between client-side truncation of a large intended
+  payload and plain parameter omission.
+- `cause` — one of `invalid_json` (arguments are not valid JSON / not an
+  object, e.g. double-encoded), `missing_field`, `empty_field`,
+  `wrong_type`, `invalid_arg`.
+- `field` — the offending required field, when one is named.
+
+Records carry no argument values, only shapes and lengths, so no workspace
+content leaks into logs.
 
 ## Contributing
 

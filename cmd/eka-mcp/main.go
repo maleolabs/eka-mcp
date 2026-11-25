@@ -7,7 +7,7 @@
 //     --json" installs an artifact family from the embedded skill pack.
 //     Both are machine-readable (JSON on stdout), deterministic and
 //     versioned — the CLI talks to this executable through exactly these
-//     two subcommands (see github.com/maleolabs/eka-cli/plugin).
+//     two subcommands (see github.com/maleolabs/eka-core/plugin).
 //
 //  2. The MCP server: "serve" (or no subcommand) runs the MCP server
 //     over stdio (JSON-RPC 2.0, newline-delimited) exposing the EKA
@@ -21,7 +21,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/maleolabs/eka-cli/plugin"
+	"github.com/mattn/go-isatty"
+
+	"github.com/maleolabs/eka-core/plugin"
 	"github.com/maleolabs/eka-mcp"
 	"github.com/maleolabs/eka-mcp/internal/eka"
 	"github.com/maleolabs/eka-mcp/internal/mcp"
@@ -37,6 +39,12 @@ func main() {
 // run dispatches the subcommand. out receives the machine-readable
 // output of the plugin subcommands (the MCP server writes to its own
 // transport streams, not to out).
+//
+// B1 note: eka-cli's deferred registration dispatches `eka mcp` as
+// `eka-mcp serve` with DisableFlagParsing (the plugin owns its flags).
+// Extra args after "serve" are the user's args (e.g. `eka mcp --help`
+// becomes `eka-mcp serve --help`), so "serve" must handle its own
+// --help and not treat it as unknown.
 func run(args []string, out io.Writer) error {
 	if len(args) == 0 {
 		return serve()
@@ -46,12 +54,25 @@ func run(args []string, out io.Writer) error {
 		return runManifest(args[1:], out)
 	case "install":
 		return runInstall(args[1:], out)
+	case "configure":
+		return runConfigure(args[1:], out)
 	case "serve", "--stdio":
 		// "--stdio" is the MCP client convention for "run the server
 		// over stdio"; it is accepted as an alias of "serve".
+		// The plugin owns its flags (B1 DisableFlagParsing), so handle
+		// --help here instead of starting the server.
+		for _, a := range args[1:] {
+			if a == "--help" || a == "-h" || a == "help" {
+				fmt.Fprintln(out, "Usage: eka-mcp serve [--stdio]")
+				fmt.Fprintln(out, "")
+				fmt.Fprintln(out, "Run the EKA MCP server over stdio (JSON-RPC 2.0, newline-delimited).")
+				fmt.Fprintln(out, "The server exposes the EKA Runtime capability layer as MCP tools and resources.")
+				return nil
+			}
+		}
 		return serve()
 	default:
-		return fmt.Errorf("unknown subcommand %q (want manifest, install or serve)", args[0])
+		return fmt.Errorf("unknown subcommand %q (want manifest, install, configure or serve)", args[0])
 	}
 }
 
@@ -60,17 +81,38 @@ func runManifest(args []string, out io.Writer) error {
 	if len(args) != 1 || args[0] != "--json" {
 		return errors.New("usage: eka-mcp manifest --json")
 	}
-	m, err := pack.Manifest()
+	m, err := pack.BuildManifest()
 	if err != nil {
 		return err
 	}
 	return writeJSON(out, m)
 }
 
-// runInstall implements "install <kind> --dir <dir> [--dry-run] --json":
-// install an artifact family from the embedded skill pack and print the
-// install result.
+// runInstall implements "install [<kind> --dir <dir> [--dry-run] --json]":
+// with no arguments it opens the interactive multi-step installer on a
+// TTY (piped runs get the inline usage instead); with arguments it
+// installs one artifact family from the embedded skill pack and prints
+// the install result as JSON.
 func runInstall(args []string, out io.Writer) error {
+	for _, a := range args {
+		if a == "--help" || a == "-h" || a == "help" {
+			fmt.Fprintln(out, "Usage: eka-mcp install [<kind> --dir <dir> [--dry-run] --json]")
+			fmt.Fprintln(out, "")
+			fmt.Fprintln(out, "With no arguments (on a terminal) it opens the interactive installer:")
+			fmt.Fprintln(out, "  1. kind (skills/commands, single choice)")
+			fmt.Fprintln(out, "  2. resources checklist (space toggles, all selected by default, installed entries disabled)")
+			fmt.Fprintln(out, "  3. agents (opencode/claude/codex, multi choice)")
+			fmt.Fprintln(out, "  4. scope (global/repo, single choice)")
+			fmt.Fprintln(out, "then a dry-run confirm screen before writing anything.")
+			fmt.Fprintln(out, "")
+			fmt.Fprintln(out, "Inline form installs one artifact family (\"skills\" or \"commands\") into --dir")
+			fmt.Fprintln(out, "and prints the machine report (--json required).")
+			return nil
+		}
+	}
+	if len(args) == 0 {
+		return runInstallInteractive(out)
+	}
 	opts, err := parseInstallArgs(args)
 	if err != nil {
 		return err
@@ -131,12 +173,64 @@ func writeJSON(out io.Writer, v any) error {
 // EKA Runtime read-only (runtime.Open: it never initializes a
 // workspace), so the server starts cleanly even before a workspace
 // exists — retrieval tools then report the uninitialized state.
+//
+// A startup failure is sanitized before it reaches stderr (which the
+// MCP client captures): the same refusal-class policy as the MCP
+// boundary — no workspace paths, no store details.
+//
+// Interactive notice: the server speaks newline-delimited JSON-RPC over
+// stdio — stdout is the protocol stream and stays silent until a client
+// sends requests. A human running "eka mcp" (or "eka-mcp serve")
+// directly on a terminal would see nothing and reasonably conclude it
+// is stuck, so the unicode banner is printed on STDERR (never stdout:
+// that would corrupt the protocol framing) when stdin is a TTY. Non-TTY
+// runs (a real MCP client, a pipe) print nothing. The banner is
+// state-derived (version, pack manifest, workspace, capabilities) and
+// deterministic — identical state yields identical bytes, no timestamps.
+// Colors are emitted only when stderr is a TTY; otherwise plain bytes.
 func serve() error {
+	isStdinTTY := isatty.IsTerminal(os.Stdin.Fd())
+	// Open the capability first so the banner can be state-derived. The
+	// banner is best-effort: if the workspace cannot be opened, a
+	// deterministic minimal banner is still shown on TTY before the
+	// sanitized error is returned, and non-TTY stays silent.
 	cap, err := eka.Open()
 	if err != nil {
-		return err
+		if isStdinTTY {
+			// Minimal banner without store state, still Deterministic,
+			// never leaks paths (path replaced with <path> via sanitizer
+			// if error contains one, but EKA_HOME is user-controlled and
+			// safe to show as fallback? Use sanitized path or unknown.
+			// For startup failure we show a fallback without workspace
+			// counts — the error itself is sanitized.
+			st := bannerState{
+				Version:   pack.Version,
+				Protocol:  mcp.ProtocolVersion,
+				Transport: "stdio · JSON-RPC 2.0 · newline-delimited",
+			}
+			if info, ierr := pack.ReadPackInfo(); ierr == nil {
+				st.PackName = info.Name
+				st.PackVersion = info.Version
+				st.PackStatus = info.Status
+			} else {
+				st.PackName = pack.Name
+				st.PackVersion = pack.Version
+				st.PackStatus = "stable"
+			}
+			st.WorkspacePath = "<unavailable>"
+			st.ToolCount = mcp.ToolCount()
+			if rc, rerr := mcp.ResourceCount(); rerr == nil {
+				st.ResourceCount = rc
+			}
+			bs := &bannerStyle{Color: bannerColorEnabled(os.Stderr), W: os.Stderr}
+			renderBanner(bs, st)
+		}
+		return fmt.Errorf("cannot open the EKA workspace: %s", mcp.SanitizeError(err))
 	}
 	defer cap.Close()
+	if isStdinTTY {
+		writeBannerIfTTY(os.Stderr, true, cap)
+	}
 	server := mcp.NewServer(cap)
 	return server.Serve(os.Stdin, os.Stdout)
 }

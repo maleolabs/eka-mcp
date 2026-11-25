@@ -1,0 +1,86 @@
+pipeline:
+    name: ci
+    stages:
+        - name: quality
+          tasks:
+            # Canonical format gate: `gofmt -l .` must produce no output.
+            # Fail-closed: any unformatted file fails the pipeline.
+            - name: format
+              command: sh
+              args:
+                - -c
+                - |
+                  UNFORMATTED=$(gofmt -l .)
+                  if [ -n "$UNFORMATTED" ]; then
+                    echo "Unformatted files:"
+                    echo "$UNFORMATTED"
+                    exit 1
+                  fi
+            - name: vet
+              command: go
+              args:
+                - vet
+                - ./...
+            # Cross-compile gate: the release pipeline builds all six
+            # platform binaries only at tag time; this matrix keeps the
+            # whole asset set (build.yaml) compiling on every push/PR.
+            # Compile-only (no CGO, pure Go), so the full matrix stays
+            # fast. Windows targets need the .exe suffix off-tree; GOOS/
+            # GOARCH alone is enough for the compile gate.
+            - name: cross-compile-linux-amd64
+              command: go
+              args:
+                - build
+                - ./cmd/eka-mcp
+              env:
+                GOOS: linux
+                GOARCH: amd64
+            - name: cross-compile-linux-arm64
+              command: go
+              args:
+                - build
+                - ./cmd/eka-mcp
+              env:
+                GOOS: linux
+                GOARCH: arm64
+            - name: cross-compile-darwin-amd64
+              command: go
+              args:
+                - build
+                - ./cmd/eka-mcp
+              env:
+                GOOS: darwin
+                GOARCH: amd64
+            - name: cross-compile-darwin-arm64
+              command: go
+              args:
+                - build
+                - ./cmd/eka-mcp
+              env:
+                GOOS: darwin
+                GOARCH: arm64
+            - name: cross-compile-windows-amd64
+              command: go
+              args:
+                - build
+                - ./cmd/eka-mcp
+              env:
+                GOOS: windows
+                GOARCH: amd64
+            - name: cross-compile-windows-arm64
+              command: go
+              args:
+                - build
+                - ./cmd/eka-mcp
+              env:
+                GOOS: windows
+                GOARCH: arm64
+        - name: test
+          tasks:
+            - name: unit-tests
+              command: go
+              args:
+                - test
+                - -race
+                - -count=1
+                - ./...

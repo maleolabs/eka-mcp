@@ -18,17 +18,18 @@ The Skill Pack is a behavior layer over the **`eka` CLI** — it does not ship i
 
 ## 2. Installing the Skill Pack
 
-The pack is embedded in the `eka` binary since ADR-023 — the **official installation path is a single command**:
+The pack is embedded in the **`eka-mcp` binary**; per ADR-030 the pack-distribution vehicle owns installation, so the official path is the plugin's `configure` surface (`eka install` no longer exists):
 
 ```sh
-eka install skills             # installs the ten eka-* skills (auto-detects agent config dirs)
-eka install commands           # installs the eka-discuss / eka-execute commands
+eka-mcp configure --target opencode --with-skills --json   # installs the eleven eka-* skills
+eka-mcp configure --target opencode --with-all --json      # skills + commands + MCP client config
 ```
 
-- Targets: `opencode` (`~/.config/opencode/{skills,commands}`), `claude` (`~/.claude/{skills,commands}`), `agents` (`~/.agents/skills` — skills only). Without `--target` the command detects the targets whose configuration directory exists; `--target all` installs everywhere.
-- `--dir <path>` installs into an explicit directory (project-scoped: `.opencode/skills`, tests); `--dry-run` prints the plan without writing.
-- Re-running install refreshes the installed files (the report distinguishes `updated` from `unchanged (refresh)` via the `.ekapack.json` state marker) — re-running install after a CLI upgrade is the update path.
-- The installed pack's version equals the binary's pack version by construction — installs can never deliver a pack newer than the CLI that reads it.
+- Targets: `opencode` (`<base>/.config/opencode/{skills,commands}`), `claude` (`<base>/.claude/{skills,commands}`), `codex` (`<base>/.agents/skills` — skills only). Default target is `opencode`.
+- `--dir <path>` anchors an explicit directory (project-scoped installs); `--dry-run` prints the plan (`create|overwrite|skip`) without writing.
+- Without a `--with-*` flag nothing is copied — skills stay reachable as MCP resources (`eka://skills/*`, `eka://templates/*`).
+- Re-running after an upgrade refreshes the installed files, overwriting only pack-owned files; foreign files are never touched.
+- The installed pack's version equals the binary's pack version by construction — installs can never deliver a pack newer than the binary that ships it.
 
 Manual copy remains a valid fallback (e.g. offline or non-binary builds):
 
@@ -79,12 +80,12 @@ Composition rules:
 The pack ships two user-invoked workflows in [`commands/`](../commands/README.md): `/eka-discuss` (planning discussion, no code) and `/eka-execute` (autonomous execution of approved planning with a resume protocol). They are opencode-ready; the bodies are provider-agnostic (Claude Code / Codex adaptation in the commands README).
 
 ```sh
-eka install commands            # official path — embedded in the binary (ADR-023)
+eka-mcp configure --target opencode --with-commands --json   # official path — embedded in the eka-mcp binary (ADR-030)
 # or manually:
 cp skills/commands/eka-discuss.md skills/commands/eka-execute.md ~/.config/opencode/commands/
 ```
 
-The commands reference the pack's skills by name — install the skills alongside them (`eka install skills`).
+The commands reference the pack's skills by name — install the skills alongside them (`--with-skills` / `--with-all`).
 
 ## 6. Uninstall / updates
 

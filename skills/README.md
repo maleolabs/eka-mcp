@@ -1,7 +1,7 @@
 # EKA AI Skill Pack
 
 > The official EKA Skill Pack: modular skill definitions that teach AI coding agents how to work with an EKA-enabled project — what Engineering Knowledge is, how EKA organizes it, how to retrieve it, how to construct context, how to modify it safely, and how to preserve its invariants.
-> Status: **experimental (v0.1)**. Companion to the [Knowledge Runtime Architecture](../reference/runtime-architecture.md) and the [Context Engine](../reference/decisions/adr-021-context-engine.md). Convention zone, not an EKA artifact (no `type`/`id`).
+> Status: **stable (v1.0.0)**. Companion to the [Knowledge Runtime Architecture](../reference/runtime-architecture.md) and the [Context Engine](../reference/decisions/adr-021-context-engine.md). Convention zone, not an EKA artifact (no `type`/`id`).
 > Anchor decision: [ADR-022 — AI Skill Pack](../reference/decisions/adr-022-ai-skill-pack.md).
 
 ## What the Skill Pack is
@@ -39,6 +39,8 @@ Do **not** load every skill for every task. Pick the skill whose description mat
 | Relating EKA to software development work (planning, tickets, delivery) | [`eka-engineering-workflow`](eka-engineering-workflow/SKILL.md) | the canonical-domain spine, methodology independence, the full loop |
 | A command refused, failed, or errored | [`eka-troubleshooting`](eka-troubleshooting/SKILL.md) | refusal classes, exit codes, deterministic fixes |
 | Reporting a shortcoming of EKA itself (bug, suggestion, rough edge) | [`eka-feedback`](eka-feedback/SKILL.md) | the feedback loop: `eka feedback new` → `publish` (ADR-026), quality bar |
+| Needing context from another project shared as shr (no cloning) | [`eka-shared-knowledge`](eka-shared-knowledge/SKILL.md) | discover → select → consume shared snapshots; trust, freshness, durability |
+| Building a share from this project's knowledge (or a non-EKA codebase) | [`eka-shr-builder`](eka-shr-builder/SKILL.md) / [`eka-shr-non-eka`](eka-shr-non-eka/SKILL.md) | `eka shr build` levels, provenance, per-project identifier |
 
 Example mappings:
 
@@ -50,6 +52,7 @@ Ticket execution              → eka-knowledge-retrieval + eka-knowledge-modifi
 Knowledge review              → eka-knowledge-review
 Command refused               → eka-troubleshooting
 Non-EKA project adoption      → eka-adoption
+Cross-project context (shr)   → eka-shared-knowledge
 EKA shortcoming found         → eka-feedback
 ```
 
@@ -92,7 +95,7 @@ The Skill Pack drives the **`eka` CLI** — it is the current execution interfac
 
 - `eka` installed (Go 1.24+; see [Installation](../README.md#installation) and [docs/installation.md](docs/installation.md)).
 - For runtime commands (`eka get`, `eka context`, `eka view`, `eka transition`, …): an **EKA Workspace** (`~/.eka` or `$EKA_HOME`) with the target repository **registered once** (`eka sync` at intake — registration persists; reads and transitions then run directly on the shared store, no per-read sync. Full `eka sync` / `eka sync pull` re-seeds the store from the snapshot/docs tree and can overwrite newer states with older instances — use `eka sync push` during active execution).
-- Since ADR-023 the pack is **embedded in the `eka` binary**: `eka install skills` / `eka install commands` is the official installation path, and the installed pack version always equals the binary's pack version (no drift on the install path; manual copies can still drift — re-running install fixes them).
+- The pack is **embedded in the `eka-mcp` binary**: `eka-mcp configure --with-skills --json` (per ADR-030; `--json` is required) is the official installation path, and the installed pack version always equals the binary's pack version (no drift on the install path; manual copies can still drift — re-running configure restores pack-owned files).
 
 **Command reality check — the skills only reference commands that exist.** The command surface evolves; when uncertain, inspect it:
 

@@ -1,24 +1,37 @@
 // Package eka implements the EKA capability layer of eka-mcp: the thin
 // adapter between the MCP server and the eka-core Runtime.
 //
-// It wraps the runtime services (Resolver, Knowledge, Workspace) and the
-// deterministic machine projections (machine.NewDocument,
-// machine.NewCollection) behind the retrieval surface the MCP server
-// dispatches to. It deliberately reimplements NO EKA domain logic — every
-// call delegates to eka-core; this package only shapes the wire responses.
+// It wraps the runtime services (Resolver, Knowledge, Workspace,
+// Authoring, Integrity) and the deterministic machine projections
+// (machine.NewDocument, machine.NewCollection, contexts.Engine) behind
+// the capability surface the MCP server dispatches to. It deliberately
+// reimplements NO EKA domain logic — every call delegates to eka-core;
+// this package only shapes the wire responses (the deterministic
+// eka-*-v1 schema shapes).
 package eka
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
 
+	"github.com/maleolabs/eka-core/codegraph"
+	"github.com/maleolabs/eka-core/conformance"
+	"github.com/maleolabs/eka-core/contexts"
+	"github.com/maleolabs/eka-core/exchange"
 	"github.com/maleolabs/eka-core/machine"
 	"github.com/maleolabs/eka-core/runtime"
+	"github.com/maleolabs/eka-mcp/internal/mcp"
 )
 
-// Capability is one opened EKA capability: a read-only handle on the
-// EKA Runtime exposing the knowledge-retrieval surface (identity
-// resolution, domain collections, workspace status).
+// Capability is one opened EKA capability: a handle on the EKA Runtime
+// exposing the knowledge-retrieval, context and authoring surfaces.
 type Capability struct {
 	rt *runtime.Runtime
 }
@@ -46,13 +59,71 @@ func (c *Capability) Exists() bool {
 	return c.rt.Exists()
 }
 
+// Path returns the absolute workspace root — also on a detached Runtime
+// (Open on a missing workspace), where it is the home directory that would
+// hold the workspace.
+func (c *Capability) Path() string {
+	return c.rt.Path()
+}
+
+// ProjectCount returns the number of registered projects. On a detached
+// runtime (uninitialized workspace) it returns 0 without error — the
+// banner's deterministic "not initialized" state.
+func (c *Capability) ProjectCount() (int, error) {
+	if !c.Exists() {
+		return 0, nil
+	}
+	projects, err := c.rt.Workspace.Projects()
+	if err != nil {
+		return 0, err
+	}
+	return len(projects), nil
+}
+
+// RepoCount returns the total number of registered repositories across
+// all projects. On a detached runtime it returns 0 without error.
+func (c *Capability) RepoCount() (int, error) {
+	if !c.Exists() {
+		return 0, nil
+	}
+	projects, err := c.rt.Workspace.Projects()
+	if err != nil {
+		return 0, err
+	}
+	total := 0
+	for _, p := range projects {
+		repos, err := c.rt.Workspace.Repos(p.ID)
+		if err != nil {
+			return 0, err
+		}
+		total += len(repos)
+	}
+	return total, nil
+}
+
 // Get resolves one identity form to its current Canonical Knowledge
 // Object and returns the machine document (schema eka-cko-v2, compact
 // form). Accepted forms: canonical "<ns>/<type>:<id>:<v>" or the
 // qualified line form "<ns>/<type>:<id>" (the latest instance of the
 // line). Resolution and parsing are entirely eka-core's
 // (Resolver.Resolve + conformance.ParseReference).
-func (c *Capability) Get(form string) ([]byte, error) {
+//
+// When noContent is true the content payload is stripped via
+// machine.Document.StripContent at parity with CLI --no-content
+// (identity, stateVector, relationships, changeLog etc. intact;
+// "content" absent) for payload economy. Default false preserves the
+// full payloads.
+//
+// When the workspace is not initialized, it returns a deterministic
+// uninitialized error without leaking store paths — the MCP boundary
+// sanitizes any residual path, but the capability already avoids it.
+func (c *Capability) Get(form string, noContent bool) ([]byte, error) {
+	return c.GetWithFilters(form, noContent, "", "", "")
+}
+func (c *Capability) GetWithFilters(form string, noContent bool, level, project, version string) ([]byte, error) {
+	if !c.Exists() {
+		return nil, fmt.Errorf("eka: workspace not initialized")
+	}
 	u, ok, err := c.rt.Resolver.Resolve(form)
 	if err != nil {
 		return nil, err
@@ -60,9 +131,36 @@ func (c *Capability) Get(form string) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("eka: no object resolves from %q", form)
 	}
+	if level != "" {
+		if lvl := shrLevelOf(u); lvl != "" && lvl != level {
+			return nil, fmt.Errorf("eka: %q level %q does not match filter level %q", form, lvl, level)
+		}
+		if lvl := shrLevelOf(u); lvl == "" {
+			return nil, fmt.Errorf("eka: --level filter only applies to shr objects, %q is not a shr", form)
+		}
+	}
+	if project != "" {
+		if proj := shrProjectOf(u); proj != "" && proj != project {
+			return nil, fmt.Errorf("eka: %q project %q does not match filter --project %q", form, proj, project)
+		}
+		if proj := shrProjectOf(u); proj == "" {
+			return nil, fmt.Errorf("eka: --project filter only applies to shr objects, %q is not a shr", form)
+		}
+	}
+	if version != "" {
+		if ver := shrVersionOf(u); ver != "" && ver != version {
+			return nil, fmt.Errorf("eka: %q version %q does not match filter --version %q", form, ver, version)
+		}
+		if ver := shrVersionOf(u); ver == "" {
+			return nil, fmt.Errorf("eka: --version filter only applies to shr objects, %q is not a shr", form)
+		}
+	}
 	doc, err := machine.NewDocument(u)
 	if err != nil {
 		return nil, err
+	}
+	if noContent {
+		doc.StripContent()
 	}
 	return doc.MarshalCompact()
 }
@@ -70,25 +168,1169 @@ func (c *Capability) Get(form string) ([]byte, error) {
 // Domain returns every unit of one Engineering Domain of a project as a
 // machine collection (schema eka-cko-v2, sorted by canonical form,
 // compact form). The search itself is eka-core's (Knowledge.Search);
-// NewCollection provides the deterministic domain projection.
-func (c *Capability) Domain(projectID, domain string) ([]byte, error) {
+// NewCollection provides the deterministic domain projection. When
+// noContent is true each unit's content payload is stripped via
+// machine.Document.StripContent at parity with CLI --no-content
+// (identity, stateVector, relationships etc. intact; "content" absent
+// per unit) for payload economy. Default false preserves full payloads.
+func (c *Capability) Domain(projectID, domain string, noContent bool) ([]byte, error) {
+	return c.DomainWithFilters(projectID, domain, noContent, "", "", "")
+}
+func (c *Capability) DomainWithFilters(projectID, domain string, noContent bool, level, project, version string) ([]byte, error) {
+	return c.DomainPaged(projectID, domain, noContent, level, project, version, 0, 0)
+}
+
+// DomainPaged is DomainWithFilters with a bounded page window applied to
+// the sorted collection via machine.Collection.Page: Count stays the
+// TOTAL unit count and the pagination metadata names the window, so
+// agents page large workspaces (500+ objects) deterministically instead
+// of timing out on one unbounded payload. limit<=0 windows to the end
+// of the list from offset (the unbounded default); the server dispatch
+// validates the public 1..maxDomainPageLimit range and supplies the
+// bounded default.
+func (c *Capability) DomainPaged(projectID, domain string, noContent bool, level, project, version string, limit, offset int) ([]byte, error) {
+	if !c.Exists() {
+		return nil, fmt.Errorf("eka: workspace not initialized")
+	}
 	units, err := c.rt.Knowledge.Search(runtime.SearchQuery{ProjectID: projectID, Domain: domain})
 	if err != nil {
 		return nil, err
+	}
+	// Deterministic dedup latest per line (parity CLI)
+	units = dedupLinesLatest(units)
+	if level != "" {
+		units = filterByShrLevel(units, level)
+	}
+	if project != "" {
+		units = filterByShrProject(units, project)
+	}
+	if version != "" {
+		units = filterByShrVersion(units, version)
 	}
 	col, err := machine.NewCollection(domain, units)
 	if err != nil {
 		return nil, err
 	}
+	if limit > 0 || offset > 0 {
+		col.Page(offset, limit)
+	}
+	if noContent {
+		for _, d := range col.Units {
+			d.StripContent()
+		}
+	}
 	return col.MarshalCompact()
+}
+
+func shrLevelOf(u *exchange.Unit) string {
+	if u.Identity.Type != "shr" {
+		return ""
+	}
+	if len(u.ContentPayload) == 0 {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(u.ContentPayload, &m); err != nil {
+		return ""
+	}
+	if v, ok := m["level"].(string); ok {
+		return strings.ToUpper(strings.TrimSpace(v))
+	}
+	return ""
+}
+func shrProjectOf(u *exchange.Unit) string {
+	if u.Identity.Type != "shr" {
+		return ""
+	}
+	if len(u.ContentPayload) == 0 {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(u.ContentPayload, &m); err != nil {
+		return ""
+	}
+	if v, ok := m["sourceProject"].(string); ok {
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+func shrVersionOf(u *exchange.Unit) string {
+	if u.Identity.Type != "shr" {
+		return ""
+	}
+	if len(u.ContentPayload) == 0 {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(u.ContentPayload, &m); err != nil {
+		return ""
+	}
+	if v, ok := m["sourceVersion"].(string); ok {
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+func filterByShrLevel(units []*exchange.Unit, lvl string) []*exchange.Unit {
+	out := make([]*exchange.Unit, 0, len(units))
+	for _, u := range units {
+		if shrLevelOf(u) == lvl {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+func filterByShrProject(units []*exchange.Unit, proj string) []*exchange.Unit {
+	out := make([]*exchange.Unit, 0, len(units))
+	for _, u := range units {
+		if shrProjectOf(u) == proj {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+func filterByShrVersion(units []*exchange.Unit, ver string) []*exchange.Unit {
+	out := make([]*exchange.Unit, 0, len(units))
+	for _, u := range units {
+		if shrVersionOf(u) == ver {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+func dedupLinesLatest(units []*exchange.Unit) []*exchange.Unit {
+	byKey := make(map[string]*exchange.Unit)
+	for _, u := range units {
+		key := u.Identity.Namespace + "/" + u.Identity.Type + ":" + u.Identity.ID
+		cur, ok := byKey[key]
+		if !ok || u.Identity.InstanceVersion > cur.Identity.InstanceVersion {
+			byKey[key] = u
+		}
+	}
+	out := make([]*exchange.Unit, 0, len(byKey))
+	for _, u := range byKey {
+		out = append(out, u)
+	}
+	// Sort by canonical form for determinism
+	// Use simple string compare
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].CanonicalIdentityForm < out[i].CanonicalIdentityForm {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out
 }
 
 // Status returns the aggregated workspace status as JSON (eka-core's
 // Workspace.Status — the same aggregation `eka status` serves).
+//
+// When the workspace is not initialized (detached runtime, EKA_HOME
+// unset or empty), it returns a deterministic uninitialized shape
+// instead of an error, so the MCP server answers cleanly without a
+// workspace — the initialized flag is the deterministic signal.
+// Auto repo-scoped inside repo unless all=true: mirrors CLI `eka status` behavior.
 func (c *Capability) Status() ([]byte, error) {
+	return c.StatusWithAll(false)
+}
+
+// StatusWithAll returns workspace status with optional global override.
+// When all is false and cwd is inside a registered repo, only that
+// project's status is returned; when all is true, global is forced.
+func (c *Capability) StatusWithAll(all bool) ([]byte, error) {
+	if !c.Exists() {
+		return json.Marshal(map[string]any{
+			"schema":      "eka-status-v1",
+			"initialized": false,
+			"path":        c.logicalPath(c.rt.Path()),
+			"message":     "workspace not initialized: run 'eka project register' to create it",
+			"objects":     0,
+			"payloads":    0,
+			"attachments": 0,
+			"projects":    []any{},
+		})
+	}
 	st, err := c.rt.Workspace.Status()
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(st)
+	if !all {
+		st = c.scopeStatus(st)
+	}
+	data, _ := json.Marshal(st)
+	// Enforce logical path (no absolute leakage) for status payload.
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err == nil {
+		if p, ok := m["path"].(string); ok && filepath.IsAbs(p) {
+			m["path"] = c.logicalPath(p)
+			if data2, err := json.Marshal(m); err == nil {
+				data = data2
+				if err := json.Unmarshal(data, &m); err != nil {
+					data = data2
+				}
+			}
+		}
+	}
+	// Append project-scoped execution state when available.
+	if projs, ok := m["projects"].([]any); ok && len(projs) == 1 {
+		if proj, ok := projs[0].(map[string]any); ok {
+			if pid, ok := proj["project"].(map[string]any)["id"].(string); ok {
+				if exec := c.fetchExecutionState(pid); exec != nil {
+					m["execution"] = exec
+				}
+			}
+		}
+	}
+	outBytes, _ := json.Marshal(m)
+	return outBytes, nil
+}
+
+// scopeStatus mirrors cmd/status.go scopeStatus: when cwd is inside a
+// registered repo path, return only that project's slice.
+func (c *Capability) scopeStatus(st *runtime.WorkspaceStatus) *runtime.WorkspaceStatus {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return st
+	}
+	cwd = filepath.Clean(cwd)
+	var matched *runtime.ProjectStatus
+	matchedLen := -1
+	for i := range st.Projects {
+		for _, rs := range st.Projects[i].Repos {
+			repoPath := filepath.Clean(rs.Repo.Path)
+			if cwd == repoPath || strings.HasPrefix(cwd+string(filepath.Separator), repoPath+string(filepath.Separator)) {
+				if len(repoPath) > matchedLen {
+					matchedLen = len(repoPath)
+					matched = &st.Projects[i]
+				}
+			}
+		}
+	}
+	if matched == nil {
+		return st
+	}
+	out := *st
+	out.Projects = []runtime.ProjectStatus{*matched}
+	return &out
+}
+
+// fetchExecutionState returns the project-scoped ses:execution-state
+// snapshot (current/next/scope/mode/items count) for the given
+// projectID, resolved from the canonical store via Knowledge.Search.
+// Returns nil when no ses is found or the store returns an error —
+// callers treat nil as "no execution section".
+func (c *Capability) fetchExecutionState(projectID string) map[string]any {
+	if !c.Exists() || projectID == "" {
+		return nil
+	}
+	// Namespace comes from the repo record (eka.yaml); each
+	// project publishes its own line under its own namespace,
+	// so a cross-project global resolve would leak state.
+	// ponytail: repos registered before schema v3 carry Namespace "".
+	ns := "eka"
+	if cwd, cerr := os.Getwd(); cerr == nil {
+		if repo, found, ferr := c.rt.Workspace.FindRepo(cwd); ferr == nil && found && repo.ProjectID == projectID && repo.Namespace != "" {
+			ns = repo.Namespace
+		}
+	}
+	units, err := c.rt.Knowledge.Search(runtime.SearchQuery{
+		ProjectID: projectID,
+		Namespace: ns,
+		Type:      "ses",
+		ID:        "execution-state",
+	})
+	if err != nil || len(units) == 0 {
+		return nil
+	}
+	u := units[len(units)-1]
+	doc, err := machine.NewDocument(u)
+	if err != nil {
+		return nil
+	}
+	b, err := doc.MarshalCompact()
+	if err != nil {
+		return nil
+	}
+	var dm map[string]any
+	if err := json.Unmarshal(b, &dm); err != nil {
+		return nil
+	}
+	content, _ := dm["content"].(map[string]any)
+	if content == nil {
+		return nil
+	}
+	if fields, _ := content["fields"].(map[string]any); fields != nil {
+		content = fields
+	}
+	out := map[string]any{}
+	if v, _ := content["scope"].(string); v != "" {
+		out["scope"] = v
+	}
+	if cur, ok := content["current"].(map[string]any); ok {
+		if item, _ := cur["item"].(string); item != "" {
+			out["current"] = cur
+		}
+	}
+	if v, _ := content["next"].(string); v != "" {
+		out["next"] = v
+	}
+	if v, _ := content["mode"].(string); v != "" {
+		out["mode"] = v
+	}
+	if items, ok := content["items"].([]any); ok {
+		out["items"] = len(items)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// Context builds the Context Object around one subject at one depth
+// (schema eka-context-v1, compact form). The depth token is resolved
+// by contexts.ParseDepth (local | dependency | engineering); the
+// construction itself is entirely the Context Engine's.
+func (c *Capability) Context(subject, projectID, depth string) ([]byte, error) {
+	d, ok := contexts.ParseDepth(depth)
+	if !ok {
+		return nil, fmt.Errorf("eka: unknown context depth %q (allowed: local, dependency, engineering)", depth)
+	}
+	if !c.Exists() {
+		return nil, fmt.Errorf("eka: workspace not initialized")
+	}
+	obj, err := contexts.New(c.rt).Build(subject, projectID, d, contexts.Options{})
+	if err != nil {
+		return nil, err
+	}
+	return obj.MarshalCompact()
+}
+
+// CodeContext builds bounded source context from the repository code graph.
+// The graph is derived data; its cache lives outside the repository.
+func (c *Capability) CodeContext(req mcp.CodeContextRequest) ([]byte, error) {
+	if req.Root == "" {
+		return nil, fmt.Errorf("eka: code context root is required")
+	}
+	root, err := filepath.Abs(req.Root)
+	if err != nil {
+		return nil, err
+	}
+	if req.Depth == "" {
+		req.Depth = string(codegraph.DepthDependency)
+	}
+	level := req.Level
+	if level == 0 && req.Focus != "" {
+		level = 2
+	}
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		cacheDir = os.TempDir()
+	}
+	hash := sha256.Sum256([]byte(root))
+	cachePath := filepath.Join(cacheDir, "eka", "codegraph", fmt.Sprintf("%x.json", hash[:]))
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0700); err != nil {
+		return nil, fmt.Errorf("eka: cannot prepare code graph cache: %w", err)
+	}
+	idx, _, err := codegraph.LoadOrBuild(root, cachePath)
+	if err != nil {
+		return nil, err
+	}
+	res, err := codegraph.Serve(idx, codegraph.Request{Focus: req.Focus, Depth: codegraph.Depth(req.Depth), Level: level, NoContent: req.NoContent})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(res)
+}
+
+// CodeDiscover builds deterministic candidates from natural query and scope.
+// Bounded, language-agnostic, no RAG canonical: source always local-index.
+func (c *Capability) CodeDiscover(req mcp.CodeDiscoverRequest) ([]byte, error) {
+	if req.Query == "" {
+		return nil, fmt.Errorf("eka: code discover query is required")
+	}
+	if req.Root == "" {
+		return nil, fmt.Errorf("eka: code discover root is required")
+	}
+	root, err := filepath.Abs(req.Root)
+	if err != nil {
+		return nil, err
+	}
+	limit := req.Limit
+	if limit == 0 {
+		limit = 16
+	}
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		cacheDir = os.TempDir()
+	}
+	hash := sha256.Sum256([]byte(root))
+	cachePath := filepath.Join(cacheDir, "eka", "codegraph", fmt.Sprintf("%x.json", hash[:]))
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0700); err != nil {
+		return nil, fmt.Errorf("eka: cannot prepare code graph cache: %w", err)
+	}
+	idx, _, err := codegraph.LoadOrBuild(root, cachePath)
+	if err != nil {
+		return nil, err
+	}
+	res, err := codegraph.Discover(idx, codegraph.DiscoverRequest{Query: req.Query, Scope: req.Scope, Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(res)
+}
+
+// CodeGet retrieves exact file content deterministically.
+func (c *Capability) CodeGet(req mcp.CodeGetRequest) ([]byte, error) {
+	if req.Root == "" {
+		return nil, fmt.Errorf("eka: code get root is required")
+	}
+	if req.Path == "" {
+		return nil, fmt.Errorf("eka: code get path is required")
+	}
+	root, err := filepath.Abs(req.Root)
+	if err != nil {
+		return nil, err
+	}
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		cacheDir = os.TempDir()
+	}
+	hash := sha256.Sum256([]byte(root))
+	cachePath := filepath.Join(cacheDir, "eka", "codegraph", fmt.Sprintf("%x.json", hash[:]))
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0700); err != nil {
+		return nil, fmt.Errorf("eka: cannot prepare code graph cache: %w", err)
+	}
+	idx, _, err := codegraph.LoadOrBuild(root, cachePath)
+	if err != nil {
+		return nil, err
+	}
+	res, err := codegraph.Get(idx, codegraph.GetRequest{Path: req.Path})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(res)
+}
+
+// Validate runs the authoring conformance gate over the repository
+// rooted at root and returns the machine report (schema
+// eka-conformance-report-v1). The scan is entirely eka-core's
+// (Authoring.Validate); this method only shapes the deterministic
+// report projection.
+func (c *Capability) Validate(root string) ([]byte, error) {
+	report, err := runtime.Authoring.Validate(root)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]conformanceResult, 0, len(report.Results))
+	for _, r := range report.SortedResults() {
+		results = append(results, conformanceResult{
+			File:     r.File,
+			Rule:     r.Rule,
+			Severity: string(r.Severity),
+			Message:  r.Message,
+		})
+	}
+	return json.Marshal(conformanceReport{
+		Schema:       "eka-conformance-report-v1",
+		Root:         report.Root,
+		FilesScanned: report.FilesScanned,
+		Artifacts:    report.Artifacts,
+		Skipped:      report.Skipped,
+		Errors:       report.ErrorCount(),
+		Warnings:     report.WarningCount(),
+		Pass:         report.Pass(),
+		Results:      results,
+	})
+}
+
+// NewDraft scaffolds one draft in the workspace drafts tree (schema
+// eka-draft-v1). The inline content object is staged to a temporary
+// file and merged by eka-core's NewDraft (the agent content path); the
+// change-log authority is the resolved agent identity — never the
+// "Engineering" placeholder.
+func (c *Capability) NewDraft(req mcp.NewDraftRequest) ([]byte, error) {
+	contentFile, err := stageContent(req.Content)
+	if err != nil {
+		return nil, err
+	}
+	if contentFile != "" {
+		defer os.Remove(contentFile)
+	}
+	draft, err := runtime.Authoring.NewDraft(c.rt, runtime.NewDraftRequest{
+		Project:       req.Project,
+		Namespace:     req.Namespace,
+		Type:          req.Type,
+		ID:            req.ID,
+		Dimension:     req.Dimension,
+		Phase:         req.Phase,
+		Domain:        req.Domain,
+		By:            toAuthorIdentity(req.By),
+		Relationships: toRelationships(req.Relationships),
+		ContentFile:   contentFile,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(draftResult{
+		Schema:           "eka-draft-v1",
+		Project:          draft.Project,
+		Namespace:        draft.Namespace,
+		Type:             draft.Type,
+		ID:               draft.ID,
+		Path:             c.logicalPath(draft.Path),
+		Updated:          draft.Updated,
+		LegalTransitions: legalTransitions(draft.Type),
+	})
+}
+
+// Publish publishes one draft as an immutable Canonical Knowledge
+// Object (schema eka-publish-result-v1). All-or-nothing: a failed
+// validation or insert leaves the draft untouched; the draft file is
+// the single-use ticket.
+func (c *Capability) Publish(req mcp.PublishRequest) ([]byte, error) {
+	res, err := runtime.Authoring.Publish(c.rt, req.Target, runtime.PublishOptions{
+		Project:         req.Project,
+		InstanceVersion: req.InstanceVersion,
+	})
+	if err != nil {
+		// A *runtime.PublishError carries the full CKO validation
+		// report — wrap it so the MCP boundary embeds the report
+		// instead of dropping it (sto:mcp-error-fidelity).
+		return nil, wrapToolRefusal(err)
+	}
+	// legalTransitions derived exclusively from the single source of
+	// truth (conformance.DomainValues / OwnedDomains) — no duplicated
+	// tables. The type token is parsed from the target identity form;
+	// fallback is the form prefix of the publish result.
+	typeToken := ""
+	if ref, err := conformance.ParseReference(req.Target, "", ""); err == nil {
+		typeToken = ref.Type
+	} else if ref, err := conformance.ParseReference(res.Form, "", ""); err == nil {
+		typeToken = ref.Type
+	}
+	return json.Marshal(publishResult{
+		Schema:           "eka-publish-result-v1",
+		Form:             res.Form,
+		InstanceVersion:  res.InstanceVersion,
+		ObjectHash:       res.ObjectHash,
+		Note:             res.Note,
+		LegalTransitions: legalTransitions(typeToken),
+	})
+}
+
+// Transition performs one transition (schema eka-transition-result-v1).
+// The D1 table, the R13 note gates and the active-container
+// confirmation are enforced by eka-core's Authoring.Transition — a
+// refused transition publishes nothing.
+func (c *Capability) Transition(req mcp.TransitionRequest) ([]byte, error) {
+	res, err := runtime.Authoring.Transition(c.rt, runtime.TransitionRequest{
+		RepoPath:  req.RepoPath,
+		Target:    req.Target,
+		To:        req.To,
+		Forward:   req.Forward,
+		Backward:  req.Backward,
+		By:        req.By.Name,
+		ByKind:    req.By.Kind,
+		Confirmed: req.Confirmed,
+	})
+	if err != nil {
+		// A *runtime.TransitionRefusal carries the active-container
+		// warning and the confirmation affordance — wrap it so the
+		// MCP boundary surfaces the retry-with-confirmed path
+		// (sto:mcp-error-fidelity).
+		return nil, wrapToolRefusal(err)
+	}
+	return json.Marshal(transitionResult{
+		Schema:         "eka-transition-result-v1",
+		Target:         res.Target,
+		From:           res.From,
+		To:             res.To,
+		By:             res.By,
+		ObjectHash:     res.ObjectHash,
+		LockedPlan:     res.LockedPlan,
+		LockedPlanHash: res.LockedPlanHash,
+		Warning:        res.Warning,
+	})
+}
+
+// Note creates one cmt- note draft (schema eka-note-result-v1). The
+// inline content object is staged to a temporary file and merged over
+// the per-role template by eka-core's NoteDraft.
+func (c *Capability) Note(req mcp.NoteRequest) ([]byte, error) {
+	contentFile, err := stageContent(req.Content)
+	if err != nil {
+		return nil, err
+	}
+	if contentFile != "" {
+		defer os.Remove(contentFile)
+	}
+	res, err := runtime.Authoring.NoteDraft(c.rt, runtime.NoteDraftRequest{
+		RepoPath:    req.RepoPath,
+		Target:      req.Target,
+		Role:        req.Role,
+		Domain:      req.Domain,
+		By:          toAuthorIdentity(req.By),
+		ContentFile: contentFile,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(noteResult{
+		Schema:       "eka-note-result-v1",
+		ID:           res.ID,
+		Target:       res.Target,
+		SubjectState: res.SubjectState,
+		Path:         c.logicalPath(res.Path),
+		By:           res.By,
+	})
+}
+
+// DraftRead returns one draft file content enriched with
+// legalTransitions (the v2.0 JSON authoring document plus the
+// per-owned-domain ordered value sets). The file bytes are read
+// verbatim, then legalTransitions is injected (computed exclusively
+// from conformance.DomainValues / OwnedDomains) so agents discover the
+// legal state values without a wasted transition refusal. The original
+// draft fields are preserved byte-for-byte except for the added
+// legalTransitions key. This is the renamed MCP tool
+// (td:mcp-view-naming-fix).
+func (c *Capability) DraftRead(target, project string) ([]byte, error) {
+	ref, err := runtime.Authoring.ResolveDraft(c.rt, target, project)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(ref.Path)
+	if err != nil {
+		return nil, fmt.Errorf("eka: cannot read draft %s: %w", target, err)
+	}
+	return injectLegalTransitions(data)
+}
+
+// View is the deprecated alias of DraftRead (td:mcp-view-naming-fix).
+// TODO(td:mcp-view-naming-fix): remove in next minor version after 1.1.3 — delete this method and keep DraftRead only.
+func (c *Capability) View(target, project string) ([]byte, error) {
+	return c.DraftRead(target, project)
+}
+
+// DraftList lists the draft backlog of one project (or every project
+// when project is "") as a machine list (schema eka-draft-list-v1),
+// ordered deterministically by eka-core's Authoring.Drafts.
+// provenance filter is human|inferred|reconciled|all (default all).
+func (c *Capability) DraftList(project string) ([]byte, error) {
+	return c.DraftListWithProvenance(project, "all")
+}
+
+// DraftListWithProvenance lists the draft backlog filtered by provenance.
+func (c *Capability) DraftListWithProvenance(project, provenance string) ([]byte, error) {
+	if provenance == "" {
+		provenance = "all"
+	}
+	drafts, err := runtime.Authoring.Drafts(c.rt, project)
+	if provenance != "all" && provenance != "" {
+		// Filter locally for backward compat with eka-core v1.6.0 (DraftsByProvenance absent).
+		// When core's Draft lacks Provenance field, reflection falls back to no filtering.
+		filtered := make([]runtime.Draft, 0, len(drafts))
+		for _, d := range drafts {
+			prov := provenanceOfDraft(d)
+			if prov == "" {
+				prov = "human"
+			}
+			if prov == provenance {
+				filtered = append(filtered, d)
+			}
+		}
+		drafts = filtered
+	}
+	if err != nil {
+		return nil, err
+	}
+	items := make([]draftResult, 0, len(drafts))
+	for _, d := range drafts {
+		items = append(items, draftResult{
+			Project:          d.Project,
+			Namespace:        d.Namespace,
+			Type:             d.Type,
+			ID:               d.ID,
+			Path:             c.logicalPath(d.Path),
+			Updated:          d.Updated,
+			LegalTransitions: legalTransitions(d.Type),
+		})
+	}
+	return json.Marshal(draftListResult{
+		Schema: "eka-draft-list-v1",
+		Count:  len(items),
+		Drafts: items,
+	})
+}
+
+// IntegrityCheck verifies the canonical store and returns the
+// deterministic integrity report (schema eka-integrity-report-v1). The
+// scan is entirely eka-core's (Integrity.Verify); this method only
+// shapes the projection.
+func (c *Capability) IntegrityCheck() ([]byte, error) {
+	report, err := c.rt.Integrity.Verify()
+	if err != nil {
+		return nil, err
+	}
+	violations := make([]integrityViolation, 0, len(report.Violations))
+	for _, v := range report.Violations {
+		violations = append(violations, integrityViolation{
+			Kind:    v.Kind,
+			Subject: v.Subject,
+			Detail:  v.Detail,
+		})
+	}
+	return json.Marshal(integrityReport{
+		Schema:             "eka-integrity-report-v1",
+		PayloadsChecked:    report.PayloadsChecked,
+		RefsChecked:        report.RefsChecked,
+		AttachmentsChecked: report.AttachmentsChecked,
+		OrphanPayloads:     report.OrphanPayloads,
+		Violations:         violations,
+	})
+}
+
+// SyncPush refreshes the repository snapshot from the workspace store
+// (the push side of sync) — the same engine `eka sync push` uses
+// (Authoring.Sync Pull:false, Push:true). The snapshot is the SOURCE
+// transport (exchange.EmitSource) verified on every pull and emitted
+// deterministically; the digest is the source fingerprint. Emission is
+// crash-safe (staged in .snapshots-tmp, swapped atomically) so a
+// failed push writes nothing partially (AC #2). Pull / --from-docs
+// re-seed is deliberately NOT exposed — it re-points line references to
+// older instances (silent regression hazard) and stays an
+// operator-supervised CLI operation (`eka sync pull`).
+//
+// repoPath defaults to "." (the server cwd, same as the CLI). adopt
+// corresponds to `eka sync push --adopt` (ADR-032 Option C2): workspace-
+// native units (source_repo = "runtime") are re-attributed before the
+// push, so a clone receives them. override is the machine override of
+// the content-namespace reconciliation (ADR-020 Decision 3). Errors keep
+// their refusal classes and are sanitized at the MCP boundary.
+func (c *Capability) SyncPush(repoPath string, adopt, override bool) ([]byte, error) {
+	if repoPath == "" {
+		repoPath = "."
+	}
+	report, err := runtime.Authoring.Sync(c.rt, repoPath, runtime.SyncOptions{
+		Pull:            false,
+		Push:            true,
+		AdoptBeforePush: adopt,
+		Override:        override,
+	})
+	if err != nil {
+		return nil, err
+	}
+	warnings := report.Warnings
+	if warnings == nil {
+		warnings = []string{}
+	}
+	return json.Marshal(syncPushResult{
+		Schema:            "eka-sync-push-result-v1",
+		Workspace:         c.logicalPath(report.Workspace),
+		Project:           report.Project,
+		Repo:              report.Repo,
+		PushedUnits:       report.PushedUnits,
+		PushedAttachments: report.PushedAttachments,
+		SnapshotLabel:     report.SnapshotLabel,
+		SnapshotDigest:    report.SnapshotDigest,
+		Changed:           report.PushChanged,
+		NewRepo:           report.NewRepo,
+		Warnings:          warnings,
+	})
+}
+
+// DraftUpdate applies a partial content merge to one pending draft
+// (schema eka-draft-update-v1) via the runtime-owned Authoring API
+// (runtime.Authoring.ResolveDraft) — not direct store. It is
+// read-modify-write through draft_read: supplied content keys
+// overwrite/add, keys not mentioned are preserved, publish still
+// validates — no validation here. Optimistic concurrency via
+// expectedRevision/expectedHash refuses deterministically on mismatch
+// (re-read with draft_read and retry). Unknown target and post-publish
+// (draft already gone — the single-use ticket) refuse via
+// *runtime.DraftNotFoundError; concurrent modification refuses with a
+// deterministic conflict error.
+func (c *Capability) DraftUpdate(req mcp.DraftUpdateRequest) ([]byte, error) {
+	if req.Content == nil {
+		return nil, fmt.Errorf("draft_update requires content to be a JSON object")
+	}
+	ref, err := runtime.Authoring.ResolveDraft(c.rt, req.Target, req.Project)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(ref.Path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, &runtime.DraftNotFoundError{Target: req.Target, Project: ref.Project}
+		}
+		return nil, fmt.Errorf("draft_update: cannot read draft %s: %w", req.Target, err)
+	}
+	// Optimistic concurrency: expectedHash (sha256 hex of raw bytes).
+	if req.ExpectedHash != "" {
+		h := sha256.Sum256(raw)
+		actual := hex.EncodeToString(h[:])
+		if !strings.EqualFold(strings.TrimSpace(req.ExpectedHash), actual) {
+			return nil, fmt.Errorf("draft %s conflict: expected hash %s but found %s (concurrent modification — re-read with draft_read and retry)", req.Target, strings.TrimSpace(req.ExpectedHash), actual)
+		}
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("draft_update: draft %s is not valid JSON: %w", req.Target, err)
+	}
+	if req.ExpectedRevision != nil {
+		var current int
+		if v, ok := doc["revision"]; ok {
+			switch n := v.(type) {
+			case float64:
+				current = int(n)
+			case int:
+				current = n
+			}
+		}
+		if current != *req.ExpectedRevision {
+			return nil, fmt.Errorf("draft %s conflict: expected revision %d but found revision %d (concurrent modification — re-read with draft_read and retry)", req.Target, *req.ExpectedRevision, current)
+		}
+	}
+	// Merge content.
+	contentRaw, hasContent := doc["content"]
+	var contentMap map[string]any
+	if hasContent {
+		if m, ok := contentRaw.(map[string]any); ok {
+			contentMap = m
+		} else {
+			contentMap = map[string]any{}
+		}
+	} else {
+		contentMap = map[string]any{}
+	}
+	for k, v := range req.Content {
+		contentMap[k] = v
+	}
+	doc["content"] = contentMap
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("draft_update: cannot encode draft %s: %w", req.Target, err)
+	}
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, out, "", "  "); err != nil {
+		return nil, fmt.Errorf("draft_update: cannot indent draft %s: %w", req.Target, err)
+	}
+	indented.WriteByte('\n')
+	dir := filepath.Dir(ref.Path)
+	tmp, err := os.CreateTemp(dir, ".draft-update-*.json.tmp")
+	if err != nil {
+		return nil, fmt.Errorf("draft_update: cannot stage draft %s: %w", req.Target, err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(indented.Bytes()); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return nil, fmt.Errorf("draft_update: cannot write draft %s: %w", req.Target, err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return nil, fmt.Errorf("draft_update: cannot write draft %s: %w", req.Target, err)
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		os.Remove(tmpPath)
+		return nil, fmt.Errorf("draft_update: cannot write draft %s: %w", req.Target, err)
+	}
+	if err := os.Rename(tmpPath, ref.Path); err != nil {
+		os.Remove(tmpPath)
+		return nil, fmt.Errorf("draft_update: cannot write draft %s: %w", req.Target, err)
+	}
+	updated, err := os.ReadFile(ref.Path)
+	if err != nil {
+		return nil, fmt.Errorf("draft_update: cannot read updated draft %s: %w", req.Target, err)
+	}
+	return injectLegalTransitions(updated)
+}
+
+// PublishBatch publishes every pending draft of a project in
+// topological order (schema eka-publish-batch-v1) — the same engine
+// `eka publish --all` / `--pending` uses (runtime.Authoring.PublishBatch,
+// Kahn's algorithm, pre-flight cycle and dangling-reference refusals,
+// per-draft atomic validation). Empty backlog is a valid no-op.
+func (c *Capability) PublishBatch(req mcp.PublishBatchRequest) ([]byte, error) {
+	result, err := runtime.Authoring.PublishBatch(c.rt, runtime.PublishBatchOptions{
+		Project: req.Project,
+	})
+	if err != nil {
+		// Surface validation findings with report fidelity (sto:mcp-error-fidelity)
+		// so the boundary can embed the full conformance report.
+		return nil, wrapToolRefusal(err)
+	}
+	published := make([]publishResult, 0, len(result.Published))
+	for _, r := range result.Published {
+		typeToken := ""
+		if ref, perr := conformance.ParseReference(r.Form, "", ""); perr == nil {
+			typeToken = ref.Type
+		}
+		published = append(published, publishResult{
+			Form:             r.Form,
+			InstanceVersion:  r.InstanceVersion,
+			ObjectHash:       r.ObjectHash,
+			Note:             r.Note,
+			LegalTransitions: legalTransitions(typeToken),
+		})
+	}
+	if published == nil {
+		published = []publishResult{}
+	}
+	return json.Marshal(publishBatchResult{
+		Schema:    "eka-publish-batch-v1",
+		Project:   req.Project,
+		Count:     len(published),
+		Published: published,
+	})
+}
+
+// Discard deletes one draft file without publishing (schema
+// eka-discard-result-v1). The deletion is eka-core's
+// (Authoring.DiscardDraft); the returned note names the project when
+// the resolution fell back across projects.
+func (c *Capability) Discard(target, project string) ([]byte, error) {
+	note, err := runtime.Authoring.DiscardDraft(c.rt, target, project, false)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(discardResult{
+		Schema: "eka-discard-result-v1",
+		Target: target,
+		Note:   note,
+	})
+}
+
+// --- Wire shapes (the deterministic eka-*-v1 projections). ---
+
+type conformanceReport struct {
+	Schema       string              `json:"schema"`
+	Root         string              `json:"root"`
+	FilesScanned int                 `json:"filesScanned"`
+	Artifacts    int                 `json:"artifacts"`
+	Skipped      string              `json:"skipped"`
+	Errors       int                 `json:"errors"`
+	Warnings     int                 `json:"warnings"`
+	Pass         bool                `json:"pass"`
+	Results      []conformanceResult `json:"results"`
+}
+
+type conformanceResult struct {
+	File     string `json:"file"`
+	Rule     string `json:"rule"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+}
+
+// TODO(sto:mcp-transition-transparency): CLI parity follow-up — surface
+// legalTransitions in `eka publish --json` and `eka new --json` so the CLI
+// and MCP wire shapes stay aligned (tracked separately; MCP is not blocked).
+type draftResult struct {
+	Schema           string              `json:"schema,omitempty"`
+	Project          string              `json:"project"`
+	Namespace        string              `json:"namespace"`
+	Type             string              `json:"type"`
+	ID               string              `json:"id"`
+	Path             string              `json:"path"`
+	Updated          string              `json:"updated"`
+	LegalTransitions map[string][]string `json:"legalTransitions"`
+}
+
+type draftListResult struct {
+	Schema string        `json:"schema"`
+	Count  int           `json:"count"`
+	Drafts []draftResult `json:"drafts"`
+}
+
+type publishResult struct {
+	Schema           string              `json:"schema"`
+	Form             string              `json:"form"`
+	InstanceVersion  int                 `json:"instanceVersion"`
+	ObjectHash       string              `json:"objectHash"`
+	Note             string              `json:"note"`
+	LegalTransitions map[string][]string `json:"legalTransitions"`
+}
+
+type publishBatchResult struct {
+	Schema    string          `json:"schema"`
+	Project   string          `json:"project"`
+	Count     int             `json:"count"`
+	Published []publishResult `json:"published"`
+}
+
+type transitionResult struct {
+	Schema         string                     `json:"schema"`
+	Target         string                     `json:"target"`
+	From           string                     `json:"from"`
+	To             string                     `json:"to"`
+	By             conformance.AuthorIdentity `json:"by"`
+	ObjectHash     string                     `json:"objectHash"`
+	LockedPlan     string                     `json:"lockedPlan"`
+	LockedPlanHash string                     `json:"lockedPlanHash"`
+	Warning        string                     `json:"warning"`
+}
+
+type noteResult struct {
+	Schema       string                     `json:"schema"`
+	ID           string                     `json:"id"`
+	Target       string                     `json:"target"`
+	SubjectState string                     `json:"subjectState"`
+	Path         string                     `json:"path"`
+	By           conformance.AuthorIdentity `json:"by"`
+}
+
+type discardResult struct {
+	Schema string `json:"schema"`
+	Target string `json:"target"`
+	Note   string `json:"note"`
+}
+
+type integrityReport struct {
+	Schema             string               `json:"schema"`
+	PayloadsChecked    int                  `json:"payloadsChecked"`
+	RefsChecked        int                  `json:"refsChecked"`
+	AttachmentsChecked int                  `json:"attachmentsChecked"`
+	OrphanPayloads     int                  `json:"orphanPayloads"`
+	Violations         []integrityViolation `json:"violations"`
+}
+
+type integrityViolation struct {
+	Kind    string `json:"kind"`
+	Subject string `json:"subject"`
+	Detail  string `json:"detail"`
+}
+
+type syncPushResult struct {
+	Schema            string   `json:"schema"`
+	Workspace         string   `json:"workspace"`
+	Project           string   `json:"project"`
+	Repo              string   `json:"repo"`
+	PushedUnits       int      `json:"pushedUnits"`
+	PushedAttachments int      `json:"pushedAttachments"`
+	SnapshotLabel     string   `json:"snapshotLabel"`
+	SnapshotDigest    string   `json:"snapshotDigest"`
+	Changed           bool     `json:"changed"`
+	NewRepo           bool     `json:"newRepo"`
+	Warnings          []string `json:"warnings"`
+}
+
+// --- Helpers. ---
+
+// stageContent writes the inline content object of a write tool to a
+// temporary JSON file and returns its path ("" for nil content — the
+// empty template scaffolds). The caller removes the file when done;
+// eka-core reads it synchronously.
+
+// logicalPath returns a logical/relative path for MCP results — no absolute host path leakage.
+// It prefers a path relative to the workspace (EKA_HOME) and falls back to base name.
+func (c *Capability) logicalPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	if !filepath.IsAbs(p) {
+		return p
+	}
+	if rel, err := filepath.Rel(c.Path(), p); err == nil && rel != "." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !strings.HasPrefix(rel, "..") {
+		return rel
+	}
+	if home := os.Getenv("EKA_HOME"); home != "" {
+		if rel, err := filepath.Rel(home, p); err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
+	}
+	return filepath.Base(p)
+}
+
+func stageContent(content map[string]any) (string, error) {
+	if content == nil {
+		return "", nil
+	}
+	f, err := os.CreateTemp("", "eka-mcp-content-*.json")
+	if err != nil {
+		return "", fmt.Errorf("eka: cannot stage content: %w", err)
+	}
+	path := f.Name()
+	if err := json.NewEncoder(f).Encode(content); err != nil {
+		f.Close()
+		os.Remove(path)
+		return "", fmt.Errorf("eka: cannot stage content: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(path)
+		return "", fmt.Errorf("eka: cannot stage content: %w", err)
+	}
+	return path, nil
+}
+
+// toAuthorIdentity maps the MCP boundary identity to the eka-core
+// authoring identity (same kind/name model).
+func toAuthorIdentity(a mcp.AuthorIdentity) conformance.AuthorIdentity {
+	return conformance.AuthorIdentity{Kind: a.Kind, Name: a.Name}
+}
+
+// toRelationships maps the MCP boundary relationships to the eka-core
+// exchange relationships (same type/target model).
+func toRelationships(rels []mcp.Relationship) []exchange.Relationship {
+	out := make([]exchange.Relationship, 0, len(rels))
+	for _, r := range rels {
+		out = append(out, exchange.Relationship{Type: r.Type, Target: r.Target})
+	}
+	return out
+}
+
+// legalTransitions returns the per-owned-domain ordered value sets for
+// an artifact type, derived exclusively from the single source of truth:
+// conformance.OwnedDomains and conformance.DomainValues. No duplicated
+// tables — every domain's values come from DomainValues.
+func legalTransitions(typeToken string) map[string][]string {
+	domains := conformance.OwnedDomains(typeToken)
+	if len(domains) == 0 {
+		return map[string][]string{}
+	}
+	out := make(map[string][]string, len(domains))
+	for _, d := range domains {
+		vals := conformance.DomainValues(d, typeToken)
+		if vals == nil {
+			out[d] = []string{}
+			continue
+		}
+		cp := make([]string, len(vals))
+		copy(cp, vals)
+		out[d] = cp
+	}
+	return out
+}
+
+// provenanceOfDraft extracts provenance via reflection for backward compat with eka-core without provenance field.
+func provenanceOfDraft(d runtime.Draft) string {
+	// Avoid hard dependency on field existence: reflect over struct.
+	// When core's Draft has Provenance string field, return it; else "".
+	v := reflect.ValueOf(d)
+	f := v.FieldByName("Provenance")
+	if f.IsValid() && f.Kind() == reflect.String {
+		return f.String()
+	}
+	return ""
+}
+
+// injectLegalTransitions enriches a verbatim draft JSON document with the
+// legalTransitions map derived from its type field. The original fields
+// are preserved; legalTransitions is injected at top level. If the draft
+// is not valid JSON or lacks a type, the original bytes are returned
+// unchanged (best-effort, never fails the draft read).
+func injectLegalTransitions(data []byte) ([]byte, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return data, nil
+	}
+	typeToken, _ := doc["type"].(string)
+	if typeToken == "" {
+		return data, nil
+	}
+	doc["legalTransitions"] = legalTransitions(typeToken)
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return data, nil
+	}
+	return out, nil
 }
