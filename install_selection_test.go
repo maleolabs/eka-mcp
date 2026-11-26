@@ -7,8 +7,7 @@ import (
 )
 
 // TestInstallSelectionSubset: explicit subsets install only the named
-// entries (dry-run), with the sidecar included whenever any family is
-// non-empty.
+// entries (dry-run).
 func TestInstallSelectionSubset(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, "opencode")
@@ -80,7 +79,7 @@ func TestInstallSelectionRefusals(t *testing.T) {
 	}
 }
 
-// TestInstallSelectionEmpty: empty lists install nothing (no sidecar).
+// TestInstallSelectionEmpty: empty lists install nothing (nothing written).
 func TestInstallSelectionEmpty(t *testing.T) {
 	base := t.TempDir()
 	rep, err := InstallSelection("opencode", base, nil, nil, true)

@@ -1,10 +1,10 @@
 ---
-description: Execute approved EKA planning autonomously — MVP scope first, selectors for container/plan/full roadmap. PM-style orchestration: delegate work items through the role contract in isolated worktrees, enforce the EKA state machine via transitions (gates runtime-enforced), team review after every item, checkpoint after every item, and resume from interruptions without losing context.
+description: Execute approved EKA planning autonomously — MVP scope first, selectors for container/plan/full roadmap. PM-style orchestration: implement each work item inline in its own isolated worktree (`mode: solo`), enforce the EKA state machine via transitions (gates runtime-enforced), per-item self-review, checkpoint after every item, and resume from interruptions without losing context.
 ---
 
 # EKA Execution
 
-Execute **approved** EKA planning autonomously, PM-style. The primary agent orchestrates; outside `mode: solo` it never implements engineering work itself (Delegation mode defines the explicit solo degrade). Every work item runs through the role contract, the EKA state machine is enforced through `transition` (R13 gates are runtime-enforced), and a checkpoint is written after **every** item so execution can resume after interruptions (credit/context limits, network loss, machine shutdown) without losing context.
+Execute **approved** EKA planning autonomously, PM-style. The primary agent performs every step itself, inline (`mode: solo`): orchestration, implementation and review. The EKA state machine is enforced through `transition` (R13 gates are runtime-enforced), and a checkpoint is written after **every** item so execution can resume after interruptions (credit/context limits, network loss, machine shutdown) without losing context.
 
 The user interacts exactly twice: at invocation (scope selection) and at the final report. Mid-run interruptions resume via the checkpoint protocol — no manual re-commanding of items.
 
@@ -34,41 +34,12 @@ This body references EKA skills by name (`eka-orientation`, `eka-knowledge-autho
 2. **MCP resource (secondary path).** Otherwise, if an eka-mcp server is connected, read the resource `eka://skills/<name>` (`text/markdown`): it serves the embedded SKILL.md verbatim, and the resource listing carries each skill's frontmatter description for discovery. Found → use it, stop here.
 3. **Inline hard rules (fallback).** If neither path yields the skill, proceed without it: this body is self-sufficient — the Hard rules section below carries the non-negotiable behavior, and the transport-primitive table above carries the full CLI/MCP surface. Degrade explicitly: state once which skills were unavailable and that the run proceeds on inline rules alone — never silently, and never invent a skill's guidance.
 
-## Role contract
+## Execution mode
 
-Delegation is expressed exclusively through this role contract — nine roles, a closed set ratified by the orchestrator (adding or removing a role is a breaking pack change). A role is a duty, not an agent name: each ecosystem maps roles to its own agents at install time; the semantics below are ecosystem-independent.
+EKA is a **solo-author** knowledge system: the primary agent performs **every** step itself — orchestration, implementation and review — inline. This is the pack's single `mode: solo` execution path; agent-to-agent handoff and role mapping are not part of EKA.
 
-| Role | Kind | Input | Deliverable | Escalates to |
-|---|---|---|---|---|
-| architect | analysis-only | the Engineering Context Object + the proposal under discussion | architecture impact assessment: constraints in force, strata impact, dependency effects, related-knowledge landscape | primary agent |
-| backend | implementing | work item identity + context object + acceptance criteria + branch/worktree conventions | implemented change on its own branch in its own worktree, quality gates green, evidence note published | primary agent |
-| frontend | implementing | UI scope + acceptance criteria + branch/worktree conventions | implemented UI change on its own branch in its own worktree, quality gates green, evidence note published | primary agent |
-| security-review | analysis-only | the proposal/diff + its context object | security findings with severity; blocking findings gate approval | primary agent |
-| code-review | analysis-only | the proposal/diff + acceptance criteria | technical-correctness verdict with findings | primary agent |
-| product-review | analysis-only | user-facing proposal/item + product context | product, UX and holistic experience verdict (this role absorbs UX-review and holistic review-specialist duties) | primary agent |
-| qa | analysis-only (gate) | the draft/artifact + its evidence trail + conformance rules | QA verdict: conformance, state/change-log integrity, consistency, traceability | primary agent |
-| devops | implementing | infrastructure/build/CI scope + conventions | infrastructure change on its own branch in its own worktree, quality gates green, evidence note published | primary agent |
-| documenter | implementing | documentation-only scope + conventions | documentation change on its own branch in its own worktree, evidence note published | primary agent |
-
-Contract rules:
-
-- Sizing is decided by the item itself, not by splitting roles: `backend` covers light and heavy backend sizing, `frontend` covers standard and advanced UI.
-- Analysis-only roles never implement; implementing roles never approve.
-- Every role escalates to the **primary agent** — the orchestrating agent running this command, the only party that talks to the user.
-
-## Delegation mode
-
-Before the first delegation attempt of a session, the primary agent resolves its **delegation mode** from delegation data — never from assumptions about the environment:
-
-1. **Resolve the rows.** Read the active delegation table: the `DELEGATION.txt` sidecar installed next to these commands when present, else the pack's mapping table for the resolved target. Each row maps one role-contract role to an agent target plus a mode: `delegate` (a named agent performs the role) or `solo` (the primary performs it inline).
-2. **Determine the mode.** Every role resolving to `solo`/`primary` ⇒ the session runs as **`mode: solo`**. Any role resolving to a named agent ⇒ **`mode: delegated`**. Resolution happens once at session start, is re-checked on resume, and always precedes the first delegation attempt.
-3. **Record the mode.** State the resolved mode in the session preamble (`mode: solo` or `mode: delegated`) and carry it into every checkpoint and closing summary. A missing or unreadable delegation source is stated explicitly and defaults to `mode: solo` with that assumption recorded — the degrade is never silent, in either direction.
-4. **Reconcile on resume.** On resume, the re-checked resolution (step 2) is compared against the mode recorded in the checkpoint. If the two differ, the agent states the conflict explicitly — never silently — and reconciles it by fixed precedence: the **recorded checkpoint mode governs already-completed items** (their history stays coherent with the mode that produced it), while **newly started items follow the freshly resolved mode**. The reconciliation decision is recorded in the resumed session preamble and carried into the next checkpoint. Precedence reconciles the mode only — it never overrides store authority or runtime gates: every EKA state-machine obligation (transitions, gates, evidence notes) applies identically in either mode and always wins over the mode.
-
-Mode semantics:
-
-- **`mode: delegated`** — nothing changes: every role goes to its mapped agent exactly as the role contract defines.
-- **`mode: solo`** — the primary performs every role itself, inline, in role order, labeling each contribution with the role it fulfills (e.g. `[role: architect]`). Analysis-only roles become clearly labeled perspectives held to the same inputs and deliverables as delegated ones. Implementing roles are performed by the primary under exactly the rules each body sets for delegated implementation — in execution: dedicated branch + worktree per item created from the latest development branch snapshot, quality gates re-run, review sign-off before `done`. Solo never drops a role's duties and never skips review: where no second agent exists, review is an explicit self-review against the same checklist, applied in full and recorded as self-review.
+- Implementation happens inline in each item's isolated worktree under the branch/worktree rules below — the isolation contract is unchanged by who executes.
+- Review is an explicit **self-review** against the full checklist (conformance; technical correctness; security where security-sensitive; product/experience where user-facing), applied in full and recorded as a `cmt` note stating `self-review` — a rubber-stamp pass without the checklist is a gate violation.
 
 ## Input
 
@@ -95,20 +66,19 @@ Invalid selector → stop and report.
 3. Readiness gates (blocking — stop with a report, never invent scope):
    - the plan(s) in scope are approved; a plan is locked immutable by container activation;
    - the container is active — or activate it: `transition ctr:<id> active` (gated on the exactly-one-active rule and the depends-on plan being approved; activation locks the plan atomically);
-   - the work items in scope are `planned` **and ticketed to the container** — each item has a `tkt-` ticket deriving from the container and the item (the membership contract; see "Execution membership" in `eka-knowledge-authoring`). Items without tickets are a **planning gap** (`unassigned` on the board, invisible in the `view` projection): stop, report the gap, and route back to `/eka-discuss` — never create or link tickets at intake (authority comes from the store).
+   - the work items in scope are `planned` **and ticketed to the container** — each item has a `tkt-` ticket deriving from the container and the item (the membership contract; see "Execution membership" in `eka-knowledge-authoring`). Items without tickets are a **planning gap** (not a container member: absent from the board and invisible in the `view` projection): stop, report the gap, and route back to `/eka-discuss` — never create or link tickets at intake (authority comes from the store).
 
 ## Phase 1 — Execution plan
 
 Build the plan:
 
 - ordered item list with dependencies (`get <item>` upstream), critical path, parallelization candidates (same-wave items with all dependencies satisfied and no overlapping files), decision-required items;
-- delegation set per item, resolved against the role contract: implementer by domain (`backend` Go/CLI/backend, `frontend` UI, `devops` infrastructure, `documenter` documentation-only) + QA (`qa`) + code review (`code-review`) + security (`security-review` when security-sensitive) + product (`product-review` for user-facing items);
-- delegation mode resolved first (Delegation mode): in `mode: solo` the primary holds every role itself — the plan's structure, ordering, and gates are unchanged;
+- review set per item: implementation by domain (Go/CLI/backend, UI, infrastructure, documentation-only) + QA + code review + security (when security-sensitive) + product (for user-facing items) — every step performed inline by the primary (`mode: solo`);
 - present the plan; do not wait for confirmation (autonomous run).
 
 ## Branch and worktree strategy
 
-Every item is implemented in **its own branch in a dedicated worktree** — nothing is ever committed to the development branch directly by a delegated role, and the primary checkout stays read-only for implementation.
+Every item is implemented in **its own branch in a dedicated worktree** — nothing is ever committed to the development branch directly, and the primary checkout stays read-only for implementation.
 
 1. **Development branch** — the integration branch (default `develop`; the repository convention may differ — detect it, never assume). All item branches are created from it and merged back into it.
 2. **Per-item branch** — created from the **latest development branch snapshot** at item start: `git worktree add <path> -b <branch> <develop>`, branch name following the repository convention (default `feat/<type>-<id>`, e.g. `feat/sto-publish-post`). Every item gets its own branch and worktree; parallel items never share one.
@@ -132,15 +102,13 @@ For each work item in order (parallel batches only when files do not overlap; ne
 
 1. **Idempotent gate** — `get <ns>/<type>:<id>`: verify the ACTUAL state, never checkpoint assumptions.
    - `planned` → container not primed yet (old checkpoint / interrupted before priming): run the container priming step first, then `todo` → `in-progress` below;
-   - `todo` → next item: `transition <line> in-progress` **before delegating** — `in-progress` marks the item as actively worked, so it must be set at work start, never as a blip after the work is done;
+   - `todo` → next item: `transition <line> in-progress` **before implementing** — `in-progress` marks the item as actively worked, so it must be set at work start, never as a blip after the work is done;
    - `in-progress` → resume mid-item (Phase 4);
    - `done` / `canceled` → skip (never re-execute).
 2. **Context** — `context <line>` at engineering depth: the constraints in force for the item (dependencies, decisions, planning sections).
-3. **Delegate** to the implementer role for the item's domain (role contract) — **mandatory: dedicated branch + worktree per item** (see Branch and worktree strategy): the implementing role creates the worktree from the latest development branch snapshot, works only inside it, resolves conflicts against the latest `develop`, re-runs quality gates after every integration, and never touches the primary checkout. The delegation prompt MUST include: the item identity, the context object, the acceptance criteria from the item's content, the branch name, the worktree path, and the worktree/branch conventions.
-   In `mode: solo`: the primary performs the implementer role inline inside the SAME isolated worktree under the SAME rules — dedicated branch created from the latest development branch snapshot, work confined to the worktree, conflicts resolved against the latest `develop`, quality gates re-run, primary checkout untouched. Only who executes changes; the isolation contract does not.
-4. **Evidence** — the implementing role records the work as a `cmt` note: `note <line> --role implementation`, fill `summary`/`changes`/`tests`, set `noteState: resolved`, then `publish`.
-5. **Team review** — after the implementation note is published (resolved): `qa` + `code-review` minimum; `product-review`/`security-review` per item class (same loop as the sprint-execute convention). Review verdicts are recorded as `cmt` notes (`--role review`). Fix requests are routed back to the implementing role in the same worktree.
-   In `mode: solo`: no second agent exists — each review is an explicit self-review by the primary against the same checklist, labeled `[role: qa]` / `[role: code-review]` / …, applied in full (findings listed verbatim, including blocking ones), and recorded as `cmt` notes (`--role review`) whose summary states `self-review (mode: solo)`. A rubber-stamp pass without the checklist violates the gate; findings route back to the implementing pass in the same worktree.
+3. **Implement** the item inline (`mode: solo`) — **mandatory: dedicated branch + worktree per item** (see Branch and worktree strategy): create the worktree from the latest development branch snapshot, work only inside it, resolve conflicts against the latest `develop`, re-run quality gates after every integration, and never touch the primary checkout. The work brief MUST include: the item identity, the context object, the acceptance criteria from the item's content, the branch name, the worktree path, and the worktree/branch conventions.
+4. **Evidence** — record the work as a `cmt` note: `note <line> --role implementation`, fill `summary`/`changes`/`tests`, set `noteState: resolved`, then `publish`.
+5. **Self-review** — after the implementation note is published (resolved): QA + code review minimum; product/security review per item class (same loop as the sprint-execute convention). Every review is an explicit **self-review** by the primary against the same checklist, applied in full (findings listed verbatim, including blocking ones), and recorded as `cmt` notes (`--role review`) whose summary states `self-review (mode: solo)`. A rubber-stamp pass without the checklist violates the gate; fix requests are addressed in the same worktree.
 6. **Advance the state machine**:
    - `transition <line> in-review` — the item is already `in-progress` from the gate step, so `in-progress → in-review` is a D1-legal step; gated on the resolved implementation note;
    - after review sign-off: **merge the item branch into the development branch** (PR/MR or direct merge per repository convention), then `transition <line> done` — gated on every note resolved, and only after the merge landed (knowledge must never claim `done` before the code is on the development branch).
@@ -169,7 +137,7 @@ When every item of the container is `done`/`canceled`: `transition ctr:<id> comp
 scope: <selector>
 updated: <date>
 status: running | paused | interrupted | completed
-mode: solo | delegated
+mode: solo
 items:
 - <ns>/<type>:<id>: done            # every completed item (instance versions in the store)
 - <ns>/<type>:<id>: in-progress     # at most one — the item actively worked
@@ -205,7 +173,7 @@ resume: <exact commands to resume from here>
 ## Phase 5 — Final report
 
 - scope executed; items transitioned (with instance versions); gates passed; decisions made (with rationale); team review summary;
-- delegation mode (`mode: solo` / `mode: delegated`) and, in solo mode, the explicit self-review records;
+- the execution mode (`mode: solo`) and the explicit self-review records;
 - repository state (snapshot digest, worktrees cleaned up, `sync` push result);
 - checkpoint path and status;
 - recommended next scope (`/eka-execute plan:<id>` / `ctr:<id>` / `mvp`), and any planning gaps found (deferred items, missing evidence) — never silently expand scope.
@@ -215,9 +183,9 @@ resume: <exact commands to resume from here>
 - Authority comes from the store: never execute unapproved work; never invent scope.
 - State changes only via `transition`; never edit published objects; never write the store by hand.
 - Gates are runtime-enforced: `--force` never bypasses them.
-- **Every item is implemented in its own branch + worktree, created from the latest development branch snapshot; nothing is committed to the development branch directly by a delegated role; the merge to the development branch (PR/MR or direct, per repository convention) happens before the `done` transition.**
-- Team review (minimum `qa` + `code-review` sign-off) before `done` — in `mode: solo`, explicit self-review per Delegation mode satisfies this gate, recorded as such.
-- Roles never ask the user — they escalate to the primary agent (their question tool is denied).
+- **Every item is implemented in its own branch + worktree, created from the latest development branch snapshot; nothing is committed to the development branch directly; the merge to the development branch (PR/MR or direct, per repository convention) happens before the `done` transition.**
+- Per-item review (minimum `qa` + `code-review` sign-off) before `done`, performed as an explicit, recorded self-review (`mode: solo`).
+- The primary agent is the only party that talks to the user.
 - Checkpoint after EVERY item: a crash may lose at most one item's mid-flight state.
 - `sync` push after transitions so snapshots carry the new states.
-- Outside `mode: solo`, the primary agent never implements engineering work itself — it orchestrates. In `mode: solo` (the explicit degrade of Delegation mode) it performs implementing roles inline under the identical isolation rules, states the mode in every preamble and checkpoint, and records reviews as explicit self-reviews.
+- The primary agent performs every implementing and review step itself, inline (`mode: solo`), under the isolation rules above; it states the mode in every preamble and checkpoint and records reviews as explicit self-reviews.

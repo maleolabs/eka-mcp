@@ -4,8 +4,8 @@ The command layer of the EKA AI Skill Pack: two **custom commands** that turn th
 
 | Command | File | Purpose | Touches source code? |
 |---|---|---|---|
-| `/eka-discuss` | [`eka-discuss.md`](eka-discuss.md) | interactive planning discussion through the EKA flow: idea → discuss → propose → validate → approved → publish; creates knowledge drafts, delegates review through the role contract | **never** |
-| `/eka-execute` | [`eka-execute.md`](eka-execute.md) | autonomous execution of approved planning (MVP scope first; selectors for container/plan/full); PM-style orchestration with the EKA state machine, team review, checkpoints, and a resume protocol; every item is implemented in its own branch + worktree created from the development branch snapshot, merged back to the development branch (PR/MR or direct merge) before the `done` transition | yes — via delegated roles |
+| `/eka-discuss` | [`eka-discuss.md`](eka-discuss.md) | interactive planning discussion through the EKA flow: idea → discuss → propose → validate → approved → publish; creates knowledge drafts and performs deep analysis and review inline (`mode: solo`) | **never** |
+| `/eka-execute` | [`eka-execute.md`](eka-execute.md) | autonomous execution of approved planning (MVP scope first; selectors for container/plan/full); PM-style orchestration with the EKA state machine, per-item self-review, checkpoints, and a resume protocol; every item is implemented in its own branch + worktree created from the development branch snapshot, merged back to the development branch (PR/MR or direct merge) before the `done` transition | yes — inline in isolated worktrees |
 
 The two commands are the two halves of one cycle: **plan in EKA, execute from EKA**. `/eka-discuss` produces approved knowledge; `/eka-execute` consumes it — the store is the handoff, no documents to reconcile.
 
@@ -26,13 +26,11 @@ eka-mcp configure --target opencode --with-all --json        # skills + commands
 
 Install destinations are the conventional per-target directories under an anchor (`<base>` = `--dir`, else the user home for opencode/claude and the working directory for codex):
 
-| Target | Commands | Skills | Delegation sidecar |
-|---|---|---|---|
-| **opencode** | `<base>/.config/opencode/commands/` | `<base>/.config/opencode/skills/` | `DELEGATION.txt` next to the commands |
-| **claude** | `<base>/.claude/commands/` | `<base>/.claude/skills/` | `DELEGATION.txt` next to the commands |
-| **codex** | — not installable (codex-cli removed the prompts directory in 0.117.0; `--with-commands` / `--with-all` refuse deterministically) | `<base>/.agents/skills/` | `DELEGATION.txt` inside the skills subtree |
-
-Every command install also writes the active role→agent mapping table as a **non-.md sidecar** (`DELEGATION.txt`) — deliberately not `.md`, because legacy command directories scan every `*.md` as a command. `DELEGATION.txt` is a **reserved file name** in the install directories: every install writes/overwrites it unconditionally, so never store your own content under that name.
+| Target | Commands | Skills |
+|---|---|---|
+| **opencode** | `<base>/.config/opencode/commands/` | `<base>/.config/opencode/skills/` |
+| **claude** | `<base>/.claude/commands/` | `<base>/.claude/skills/` |
+| **codex** | — not installable (codex-cli removed the prompts directory in 0.117.0; `--with-commands` / `--with-all` refuse deterministically) | `<base>/.agents/skills/` |
 
 Manual copy remains a valid fallback:
 
@@ -44,7 +42,7 @@ mkdir -p .opencode/commands
 cp skills/commands/*.md .opencode/commands/
 ```
 
-Then run `/eka-discuss` or `/eka-execute` in the agent's TUI. The canonical bodies carry **description-only frontmatter**; provider-specific frontmatter is rendered into the installed copies at install time per target — the canonical pack files stay byte-identical. The primary orchestrating agent runs the command; delegation happens through the role contract inside the command body.
+Then run `/eka-discuss` or `/eka-execute` in the agent's TUI. The canonical bodies carry **description-only frontmatter**; provider-specific frontmatter is rendered into the installed copies at install time per target — the canonical pack files stay byte-identical. The primary orchestrating agent runs the command and performs every step inline (`mode: solo`).
 
 ## How commands load skills
 
@@ -56,15 +54,13 @@ Both command bodies reference pack skills by name. Every such reference resolves
 
 ## Provider mapping
 
-The command **bodies are provider-agnostic**: canonical frontmatter is description-only, and delegation is expressed exclusively through the role contract (nine closed roles — architect, backend, frontend, security-review, code-review, product-review, qa, devops, documenter). Provider-specific frontmatter and the per-ecosystem role→agent mapping are applied at install time per target:
+The command **bodies are provider-agnostic**: canonical frontmatter is description-only. Provider-specific frontmatter is applied at install time per target:
 
 | Provider | Mechanism | Adaptation |
 |---|---|---|
-| **opencode** | `commands/*.md` with frontmatter | canonical body + rendered frontmatter at install; `description` always, `agent:` only when it resolves from the active mapping (today never — the commands are primary-agent orchestrators, so the key is omitted per V2 rather than guessed) |
-| **Claude Code** | skills (`.claude/skills/<name>/SKILL.md`) or `.claude/commands/<name>.md` — both create `/name` | keep the body; rendered frontmatter follows the same resolve-or-omit rule (`description` only today); optional keys like `disable-model-invocation: true` or `context: fork` are user-side refinements, not pack-rendered |
-| **Codex** | skills subtree `.agents/skills/` (repo-local; codex-cli removed `~/.codex/prompts` in 0.117.0, so commands install is refused) | install via `--with-skills`; the codex mapping table is deliberately all-`solo` (explicit primary-agent degrade, never silent). For execution resume, Codex's `/goal` (persisted objective + pause/resume) complements the checkpoint protocol |
-
-Roles are duties, not agent names: each ecosystem's install-time mapping table resolves a role to that ecosystem's agents. Both bodies carry an identical **Delegation mode** section: before any delegation attempt the primary resolves the rows from the installed `DELEGATION.txt` sidecar (else the pack's mapping table) — all-`solo` rows ⇒ `mode: solo`, any named agent ⇒ `mode: delegated` — and records the resolved mode in the session preamble and checkpoints, never silently. In `mode: solo` the primary performs every role inline (analysis roles as labeled perspectives; implementing roles under the same branch/worktree isolation rules, with review as explicit, recorded self-review); in `mode: delegated` behavior is unchanged.
+| **opencode** | `commands/*.md` with frontmatter | canonical body + rendered frontmatter at install; `description` only (the commands are primary-agent orchestrators, so no provider-specific key is invented per V2) |
+| **Claude Code** | skills (`.claude/skills/<name>/SKILL.md`) or `.claude/commands/<name>.md` — both create `/name` | keep the body; rendered frontmatter is `description` only; optional keys like `disable-model-invocation: true` or `context: fork` are user-side refinements, not pack-rendered |
+| **Codex** | skills subtree `.agents/skills/` (repo-local; codex-cli removed `~/.codex/prompts` in 0.117.0, so commands install is refused) | install via `--with-skills`. For execution resume, Codex's `/goal` (persisted objective + pause/resume) complements the checkpoint protocol |
 
 ## The session-context pattern (caveman reference)
 

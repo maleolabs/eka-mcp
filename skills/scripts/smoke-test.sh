@@ -163,8 +163,6 @@ if [ "${BAD_ACTIONS:-1}" -eq 0 ]; then pass "configure: changes[] actions are cr
 N_CHANGES="$(jsonq "$out" '.changes | length')"; N_CHANGES="${N_CHANGES:-0}"
 if [ "$N_CHANGES" -eq $((CREATED + OVERWRITTEN + SKIPPED)) ]; then pass "configure: counts sum matches changes[] length"; else fail "configure: counts ($CREATED/$OVERWRITTEN/$SKIPPED) do not sum to changes[] length ($N_CHANGES)"; fi
 
-SIDECAR_PLANNED="$(jsonq "$out" '[.changes[].path] | map(select(endswith("/DELEGATION.txt"))) | length')"
-if [ "${SIDECAR_PLANNED:-0}" -ge 1 ]; then pass "configure: DELEGATION.txt sidecar planned (non-.md by name)"; else fail "configure: DELEGATION.txt sidecar missing from plan"; fi
 if [ -e "$CFG_HOME/.config" ] || [ -e "$CFG_HOME/opencode.json" ]; then fail "configure: dry-run wrote to the filesystem"; else pass "configure: dry-run writes nothing"; fi
 
 # 8.2 real install into the fake HOME: exit 0, plan parity, artifacts on disk
@@ -183,13 +181,6 @@ assert_contains "configure: commands installed" "$COMMAND_LIST" "eka-execute.md"
 if [ -f "$CFG_HOME/.config/opencode/skills/eka-orientation/SKILL.md" ]; then pass "configure: skill folder with SKILL.md"; else fail "configure: skill folder missing"; fi
 if [ -f "$CFG_HOME/.config/opencode/skills/eka-knowledge-authoring/templates/drafts/adr-template.json" ]; then pass "configure: templates travel with the skill"; else fail "configure: templates missing"; fi
 if [ -f "$CFG_HOME/.config/opencode/commands/eka-execute.md" ]; then pass "configure: command file"; else fail "configure: command file missing"; fi
-
-SIDECAR="$CFG_HOME/.config/opencode/commands/DELEGATION.txt"
-if [ -f "$SIDECAR" ] && [ -s "$SIDECAR" ]; then pass "configure: DELEGATION.txt sidecar present next to commands"; else fail "configure: DELEGATION.txt sidecar missing/empty"; fi
-case "$(basename "$SIDECAR")" in
-  *.md) fail "configure: sidecar must not be a .md file" ;;
-  *) pass "configure: sidecar extension is non-.md" ;;
-esac
 
 if [ -f "$CFG_HOME/opencode.json" ] && [ "$(jsonq "$(cat "$CFG_HOME/opencode.json")" '.mcp.eka.command[0] // ""')" != "" ]; then
   pass "configure: MCP client config entry written"

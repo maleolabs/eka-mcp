@@ -49,28 +49,6 @@ The `workItems` content key of a `ctr-` artifact is prose — never parsed for m
 
 Containers activate under the **one-active-container-per-source_repo** rule (dec:parallel-container-execution): multiple containers may be active simultaneously — one per repository (source_repo) — provided their transitive `depends-on`/`derives-from` **plan closures are disjoint** (a shared plan/decision node refuses the activation naming the shared line). A second activation in the SAME source_repo keeps the exact-one-active refusal; cross-repo activation with a shared closure node refuses with the shared plan/edge. Plan retirement gates only on active containers deriving from THAT plan, and the work-item active-container confirmation resolves against ANY active container. Multi-active is a valid state — `eka view execution` renders one board per active container plus a containers summary.
 
-## Assignment (work item → member)
-
-Human ownership of work is the **assigned-to** relationship (ADR-029 / `req:team-collaboration` §4.3): a work item points at its assigned member (`mbr-` line). Assignment is relationship-only (ADR-013) and **single-assignee** — a work item carries at most one assigned-to edge. The member line is the typed target: an `mbr-` artifact (operating token, Execution domain, content-state + existence-state, `purpose`/`content` sections — see [`templates/drafts/mbr-template.json`](templates/drafts/mbr-template.json)).
-
-Assignment changes happen **only through the explicit assignment commands** — the other authoring commands never assign (no side-effect auto-assign, and `eka relate` deliberately keeps `assigned-to` off its flag surface):
-
-```sh
-eka assign <item> --to <mbr>      # set the assignee (idempotent on the SAME member;
-                                  # refuses when the item is already assigned to a
-                                  # DIFFERENT member — use reassign to move)
-eka reassign <item> --to <mbr>    # replace the assignment in ONE operation
-                                  # (refuses when the item has no assignee)
-eka unassign <item>               # remove the assigned-to edge (no-op when none)
-```
-
-- **Item** — the work item line: `<type>:<id>` (unqualified) or `<ns>/<type>:<id>` (qualified, must equal the repository's namespace). Only work items (`sto`/`ts`/`bug`/`td`/`ch`/`spk`) are assignable.
-- **Member target** — `--to <mbr-id>`, `mbr:<id>`, `mbr-<id>`, or `<ns>/mbr:<id>`. The member must be a **resolvable `mbr-` line of the SAME repository** (provenance mirror of the R13 assigned-to sub-check): cross-repository assignment is refused deterministically, and an unresolvable member id refuses with the repository's known member lines listed.
-- **No instance churn** — the edge is written with the SAME instance version (the relate no-churn mechanism): a published item is re-pointed to a new immutable payload, a pending draft gets its relationships block mutated in place.
-- **Exit codes** — `0` the edge is in the requested state (published, draft-mutated, or unchanged); `1` deterministic refusal (non-work-item target, unresolvable/cross-repository member, already-assigned-to-a-different-member on assign, not-assigned on reassign, validation findings); `2` usage or internal error.
-- **Machine output** — `--json` emits the deterministic report (schema `eka-assignment-v1`) with the pinned keys `assignee` (the canonical member identity) and `no-assignee` (the member-axis bucket flag — never `unassigned`, which belongs to the container axis).
-- **R13 interplay** — the conditional assigned-to sub-check (typed target, at-most-one, provenance) is evaluated at sync time, not at publish; the R13 transition gates read note-state only.
-
 ## Allowed state values
 
 Single source of truth: `conformance/state.go` (`DomainValues`). Values are lowercase; the initial value per domain is the scaffold default (see the family templates). An invalid value is a blocking publish error — check the table before authoring, not by trial-and-error.
@@ -83,7 +61,7 @@ Single source of truth: `conformance/state.go` (`DomainValues`). Values are lowe
 | existence-state | `active`, `archived`, `retired` | every type that carries state |
 | note-state | `open`, `resolved`, `dismissed` | `cmt-` |
 | phase (context attribute) | `discovery`, `mvp`, `milestone`, `release`, `growth`, `maturity`, `sunset` | `scp-`, `plan-` only |
-| content-state — living variant | `draft`, `review`, `approved`, `amended` | knowledge types `vis-`, `str-`, `req-`, `scp-`, `epc-`, `plan-`, `trc-`, `arc-`, `spec-`, `std-`, `run-`, `rel-`, `gls-`, `fnd-`, `rvw-` (and `cmt-`, `mbr-`) |
+| content-state — living variant | `draft`, `review`, `approved`, `amended` | knowledge types `vis-`, `str-`, `req-`, `scp-`, `epc-`, `plan-`, `trc-`, `arc-`, `spec-`, `std-`, `run-`, `rel-`, `gls-`, `fnd-`, `rvw-` (and `cmt-`) |
 | content-state — ADR variant | `proposed`, `accepted`, `superseded` | `adr-` |
 | content-state — decision variant | `draft`, `accepted`, `superseded` | `dec-` |
 
@@ -135,7 +113,7 @@ Discipline:
 - **`changeLog`** — every state transition in the object's life, in occurrence order, `{date, domain, from, to, by}`. A state field without a matching change-log entry is invalid. Do not invent dates; use the actual day.
 - **`content`** — the type's required content keys (e.g. `context`/`decision`/`consequences`/`alternativesConsidered` for `adr`; `description`/`acceptanceCriteria` for `sto`). The keys must be present (the template guarantees them); empty values publish, but a truthful artifact is filled — never publish empty knowledge and call it knowledge.
 - **`relationships`** — only existing identities or, for drafts of *other* units, draft identities (draft tolerance). Never point at invented identities.
-- `instanceVersion` is deliberately absent — assigned at publish.
+- `instanceVersion` is deliberately absent — set at publish.
 - **Author identity (`by`)** — the scaffold defaults to `by: Engineering`; **replace it with the real author** before publishing. The `by` value must be the human/agent identity in effect — `git config user.name`, or an explicit agent identity — never a generic placeholder, never an invented person. (`eka transition` has the same discipline via `--by` with `--by-kind user|agent|worker`; `eka note` takes the author from `git config user.name`.)
 
 Use `eka edit <target>` only interactively (TTY); for CLI agent workflows edit the draft file directly (it is a mutable workspace-local file) or use `--content-file`; for MCP workflows use `draft_update` (partial content merge, read-modify-write via `draft_read`, publish still validates) instead of hand-editing workspace draft files.
@@ -158,7 +136,7 @@ eka publish <target> [--instance-version V]
 ```
 
 - Validates, then persists the **immutable CKO** in the workspace store, then removes the draft — all-or-nothing. A failed validation leaves the draft untouched (fix and retry).
-- **Instance version auto-assigned**: the line's highest + 1 (1 for a new line). Explicit `--instance-version` must exceed the line's highest (forward-only, P7).
+- **Instance version auto-set**: the line's highest + 1 (1 for a new line). Explicit `--instance-version` must exceed the line's highest (forward-only, P7).
 - Published objects are **workspace-native** (`source_repo = "runtime"`): part of the project union, visible to `eka get`/`eka context`/`eka view`, but **never enter a repository snapshot** — `eka sync` remains the explicit transport for repository-attributed knowledge.
 - The draft file is a single-use ticket: a second publish of the same draft fails.
 - `eka discard <target> [--force]` — drop a draft without publishing. `eka draft list` — see the backlog.

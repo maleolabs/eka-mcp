@@ -83,7 +83,7 @@ Validation is not a formality — it is the invariant layer. Never ship a change
 
 ### Stage 6 — Publish / persist
 
-- **Drafts** → `eka publish` (workspace-native immutable CKO; instance version auto-assigned).
+- **Drafts** → `eka publish` (workspace-native immutable CKO; instance version set at publish).
 - **Transitions** → already published; `eka sync push` refreshes the repository snapshot for repository-attributed knowledge.
 - **Docs tree** → `eka sync` (compile + seed + snapshot).
 - **Evidence** → `eka note --role review` + `eka publish` so the review trail participates in the gates.

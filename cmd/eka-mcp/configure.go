@@ -55,9 +55,9 @@ func runConfigure(args []string, out io.Writer) error {
 			fmt.Fprintln(out, "Output is human-readable by default; --json emits the machine report instead.")
 			fmt.Fprintln(out, "")
 			fmt.Fprintln(out, "Install layout (conventional dirs; --dir anchors the tree for project-scoped installs):")
-			fmt.Fprintln(out, "  opencode  <base>/.config/opencode/skills + .../commands (+ DELEGATION.txt sidecar next to the commands)")
-			fmt.Fprintln(out, "  claude    <base>/.claude/skills + .../commands (+ DELEGATION.txt sidecar next to the commands)")
-			fmt.Fprintln(out, "  codex     <base>/.agents/skills (+ DELEGATION.txt inside the skills subtree); commands are NOT")
+			fmt.Fprintln(out, "  opencode  <base>/.config/opencode/skills + .../commands")
+			fmt.Fprintln(out, "  claude    <base>/.claude/skills + .../commands")
+			fmt.Fprintln(out, "  codex     <base>/.agents/skills; commands are NOT")
 			fmt.Fprintln(out, "            installable (codex-cli removed the prompts directory in 0.117.0) — --with-commands and")
 			fmt.Fprintln(out, "            --with-all refuse deterministically.")
 			fmt.Fprintln(out, "<base> is --dir, else the user home (opencode, claude) or the working directory (codex).")
@@ -152,8 +152,7 @@ func runConfigure(args []string, out io.Writer) error {
 	// Delegate skill/command install only when opted in.
 	// Default configure only writes the MCP client config; skills and commands are accessible
 	// via MCP resources (eka://skills/*, eka://templates/*) and require --with-skills / --with-commands / --with-all.
-	// The pack owns rendering/installation (req R6): rendered command frontmatter per target plus
-	// the DELEGATION.txt sidecar carrying the active mapping table.
+	// The pack owns rendering/installation (req R6): rendered command frontmatter per target.
 	installed := map[string][]string{}
 	var changes []pack.FileAction
 	var counts *pack.ActionCounts

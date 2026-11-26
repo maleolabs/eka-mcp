@@ -126,17 +126,6 @@ func TestConfigureWithCommandsOnly(t *testing.T) {
 			t.Errorf("command %s should be installed: %v", c, err)
 		}
 	}
-	// Sidecar: DELEGATION.txt (non-.md) next to the installed commands,
-	// carrying exactly the active mapping table's RenderText output.
-	sidecar, err := os.ReadFile(filepath.Join(cmdsDir, "DELEGATION.txt"))
-	if err != nil {
-		t.Fatalf("DELEGATION.txt sidecar must sit next to the commands: %v", err)
-	}
-	table, _ := pack.LoadMappingTable("opencode")
-	want, _ := table.RenderText()
-	if string(sidecar) != want {
-		t.Errorf("sidecar content must equal RenderText output")
-	}
 	skills, _ := pack.SkillDirs()
 	skillsDir := filepath.Join(dir, ".config", "opencode", "skills")
 	for _, s := range skills {
@@ -182,9 +171,6 @@ func TestConfigureWithAll(t *testing.T) {
 		if strings.Contains(head, "agent:") {
 			t.Errorf("installed command %s must not invent an agent key (V2 omission)", c)
 		}
-	}
-	if _, err := os.Stat(filepath.Join(cmdsDir, "DELEGATION.txt")); err != nil {
-		t.Errorf("DELEGATION.txt sidecar expected next to the commands: %v", err)
 	}
 	// Also combining explicit flags should give same result
 	dir2 := t.TempDir()
@@ -338,8 +324,8 @@ func TestConfigureWithAllTargets(t *testing.T) {
 	}
 }
 
-// TestConfigureClaudeLayout pins the claude conventional dirs and sidecar:
-// <dir>/.claude/{skills,commands} with DELEGATION.txt next to the commands.
+// TestConfigureClaudeLayout pins the claude conventional dirs:
+// <dir>/.claude/{skills,commands}.
 func TestConfigureClaudeLayout(t *testing.T) {
 	dir := t.TempDir()
 	var out bytes.Buffer
@@ -353,15 +339,6 @@ func TestConfigureClaudeLayout(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(cmdsDir, c)); err != nil {
 			t.Errorf("command %s must install to .claude/commands: %v", c, err)
 		}
-	}
-	sidecar, err := os.ReadFile(filepath.Join(cmdsDir, "DELEGATION.txt"))
-	if err != nil {
-		t.Fatalf("DELEGATION.txt expected in .claude/commands: %v", err)
-	}
-	table, _ := pack.LoadMappingTable("claude")
-	want, _ := table.RenderText()
-	if string(sidecar) != want {
-		t.Errorf("claude sidecar content must equal RenderText output")
 	}
 	skills, _ := pack.SkillDirs()
 	for _, s := range skills {
@@ -398,8 +375,7 @@ func TestConfigureCodexRefusesCommands(t *testing.T) {
 }
 
 // TestConfigureCodexSkillsSubtree (spike V3): codex installs ONLY skills,
-// as a subtree under <dir>/.agents/skills, with DELEGATION.txt INSIDE the
-// subtree — never a prompts path.
+// as a subtree under <dir>/.agents/skills — never a prompts path.
 func TestConfigureCodexSkillsSubtree(t *testing.T) {
 	dir := t.TempDir()
 	var out bytes.Buffer
@@ -416,15 +392,6 @@ func TestConfigureCodexSkillsSubtree(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(skillsRoot, s, "SKILL.md")); err != nil {
 			t.Errorf("skill %s must install under .agents/skills: %v", s, err)
 		}
-	}
-	sidecar, err := os.ReadFile(filepath.Join(skillsRoot, "DELEGATION.txt"))
-	if err != nil {
-		t.Fatalf("DELEGATION.txt must sit inside the skills subtree: %v", err)
-	}
-	table, _ := pack.LoadMappingTable("codex")
-	want, _ := table.RenderText()
-	if string(sidecar) != want {
-		t.Errorf("codex sidecar content must equal RenderText output")
 	}
 }
 
@@ -444,9 +411,6 @@ func TestConfigureDryRunActionsFidelity(t *testing.T) {
 	if res.Counts == nil || res.Counts.Created != len(res.Changes) {
 		t.Fatalf("dry-run counts = %+v, want all-create over %d actions", res.Counts, len(res.Changes))
 	}
-	cmdsDir := filepath.Join(dir, ".config", "opencode", "commands")
-	wantSidecar := filepath.Join(cmdsDir, "DELEGATION.txt")
-	foundSidecar := false
 	for _, a := range res.Changes {
 		if a.Action != "create" {
 			t.Errorf("fresh dry-run action = %q (%s), want create", a.Action, a.Path)
@@ -454,12 +418,6 @@ func TestConfigureDryRunActionsFidelity(t *testing.T) {
 		if !strings.HasPrefix(a.Path, dir) {
 			t.Errorf("action path %q escapes base %q", a.Path, dir)
 		}
-		if a.Path == wantSidecar {
-			foundSidecar = true
-		}
-	}
-	if !foundSidecar {
-		t.Errorf("sidecar %s missing from dry-run plan", wantSidecar)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Errorf("dry-run must not create directories either, stat err = %v", err)
