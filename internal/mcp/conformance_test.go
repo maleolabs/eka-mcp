@@ -562,116 +562,6 @@ func TestConformanceSyncPushTool(t *testing.T) {
 	}
 }
 
-// TestConformanceAssignmentTools (td:mcp-assignment-tools AC #1-3): assign/reassign/unassign
-// expose the same engine as CLI with deterministic refusals and agent identity.
-func TestConformanceAssignmentTools(t *testing.T) {
-	s := conformanceServer()
-	// assignment tools are discoverable through the workspace group: their
-	// properties live in the nested args schema, their descriptions verbatim
-	// in the group description.
-	props := memberArgsProps(t, s, "assign")
-	required := func(name, field string) bool {
-		d := descriptorByName(name)
-		if d == nil {
-			return false
-		}
-		for _, r := range d.Required {
-			if r == field {
-				return true
-			}
-		}
-		return false
-	}
-	for _, name := range []string{"assign", "reassign", "unassign"} {
-		if props["target"] == nil {
-			t.Errorf("%s inputSchema must carry target", name)
-		}
-		desc := memberGroupDescription(t, s, name)
-		if !strings.Contains(desc, "eka-assignment-v1") {
-			t.Errorf("%s description = %q, want eka-assignment-v1", name, desc)
-		}
-		if !strings.Contains(strings.ToLower(desc), "eka "+name) && !strings.Contains(desc, "assign") {
-			t.Errorf("%s description = %q, want mention of CLI semantics", name, desc)
-		}
-	}
-	// assign/reassign require to, unassign does not
-	for _, name := range []string{"assign", "reassign"} {
-		if props["to"] == nil {
-			t.Errorf("%s inputSchema must carry to", name)
-		}
-		if !required(name, "target") || !required(name, "to") {
-			t.Errorf("%s required must carry target and to", name)
-		}
-	}
-	if !required("unassign", "target") {
-		t.Errorf("unassign required must carry target")
-	}
-
-	// tools/call assign succeeds with deterministic byte-identical output and agent identity
-	a := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1","to":"mbr:alice"}}}`)
-	b := mustHandle(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1","to":"mbr:alice"}}}`)
-	aText := mustResult(t, a)["content"].([]any)[0].(map[string]any)["text"].(string)
-	bText := mustResult(t, b)["content"].([]any)[0].(map[string]any)["text"].(string)
-	if aText != bText {
-		t.Errorf("assign must be byte-deterministic for identical state, got %q vs %q", aText, bText)
-	}
-	var doc map[string]any
-	if err := json.Unmarshal([]byte(aText), &doc); err != nil {
-		t.Fatalf("assign text must be JSON: %v", err)
-	}
-	if doc["schema"] != "eka-assignment-v1" {
-		t.Errorf("assign schema = %v, want eka-assignment-v1", doc["schema"])
-	}
-	if doc["by"] == nil || doc["by"] == "" {
-		t.Errorf("assign result must carry by (agent identity), got %v", doc["by"])
-	}
-	// reassign and unassign also deterministic
-	for _, name := range []string{"reassign", "unassign"} {
-		arg := `{"target":"acme/sto:1","to":"mbr:bob"}`
-		if name == "unassign" {
-			arg = `{"target":"acme/sto:1"}`
-		}
-		aa := mustHandle(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"`+name+`","arguments":`+arg+`}}`)
-		bb := mustHandle(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"`+name+`","arguments":`+arg+`}}`)
-		at := mustResult(t, aa)["content"].([]any)[0].(map[string]any)["text"].(string)
-		bt := mustResult(t, bb)["content"].([]any)[0].(map[string]any)["text"].(string)
-		if at != bt {
-			t.Errorf("%s must be byte-deterministic, got %q vs %q", name, at, bt)
-		}
-	}
-
-	// Malformed / missing args refuse deterministically as isError=true (no JSON-RPC error)
-	for _, tc := range []struct {
-		name string
-		msg  string
-	}{
-		{"assign missing to", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1"}}}`},
-		{"assign missing target", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"to":"mbr:alice"}}}`},
-		{"reassign missing to", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"reassign","arguments":{"target":"acme/sto:1"}}}`},
-		{"unassign missing target", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unassign","arguments":{}}}`},
-		{"assign unknown byKind", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1","to":"mbr:alice","by":"x","byKind":"bogus"}}}`},
-	} {
-		out := mustHandle(t, s, tc.msg)
-		res := mustResult(t, out)
-		if res["isError"] != true {
-			t.Errorf("%s must be isError=true, got %v", tc.name, res)
-		}
-	}
-
-	// Capability-level refusal (member does not resolve, non-work-item) surfaces as isError with sanitized text
-	cap := &failingAssignmentCapability{err: errors.New("assign refused: member acme/mbr:alice does not resolve; available members of the repository: ")}
-	s2 := newTestServer(cap)
-	out := mustHandle(t, s2, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"target":"acme/sto:1","to":"mbr:alice"}}}`)
-	res2 := mustResult(t, out)
-	if res2["isError"] != true {
-		t.Errorf("assign capability refusal must be isError=true, got %v", res2)
-	}
-	text := res2["content"].([]any)[0].(map[string]any)["text"].(string)
-	if !strings.Contains(text, "does not resolve") {
-		t.Errorf("assign refusal text = %q, want deterministic refusal", text)
-	}
-}
-
 // TestConformanceFeedbackTools (ts:mcp-feedback-tool AC #1-5): feedback_new/list/publish mirror CLI, list-call semantics, refusals, no CKO, token invariants.
 func TestConformanceFeedbackTools(t *testing.T) {
 	s := conformanceServer()
@@ -880,9 +770,6 @@ func (f *failingFeedbackCapability) Discard(t, p string) ([]byte, error)   { ret
 func (f *failingFeedbackCapability) SyncPush(repoPath string, adopt, override bool) ([]byte, error) {
 	return nil, nil
 }
-func (f *failingFeedbackCapability) Assign(req AssignmentRequest) ([]byte, error)   { return nil, nil }
-func (f *failingFeedbackCapability) Reassign(req AssignmentRequest) ([]byte, error) { return nil, nil }
-func (f *failingFeedbackCapability) Unassign(req UnassignRequest) ([]byte, error)   { return nil, nil }
 func (f *failingFeedbackCapability) FeedbackNew(req FeedbackNewRequest) ([]byte, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -893,78 +780,6 @@ func (f *failingFeedbackCapability) FeedbackList() ([]byte, error) {
 	return []byte(`{"schema":"eka-feedback-list-v1","ok":true,"feedback":[]}`), nil
 }
 func (f *failingFeedbackCapability) FeedbackPublish(req FeedbackPublishRequest) ([]byte, error) {
-	return nil, f.err
-}
-
-// failingAssignmentCapability is a tiny fake that only fails assignment, for refusal tests.
-type failingAssignmentCapability struct {
-	err error
-}
-
-func (f *failingAssignmentCapability) Get(form string, noContent bool) ([]byte, error) {
-	return f.GetWithFilters(form, noContent, "", "", "")
-}
-func (f *failingAssignmentCapability) GetWithFilters(form string, noContent bool, level, project, version string) ([]byte, error) {
-	return nil, nil
-}
-func (f *failingAssignmentCapability) Domain(p, d string, noContent bool) ([]byte, error) {
-	return f.DomainWithFilters(p, d, noContent, "", "", "")
-}
-func (f *failingAssignmentCapability) DomainWithFilters(p, d string, noContent bool, level, project, version string) ([]byte, error) {
-	return nil, nil
-}
-func (f *failingAssignmentCapability) DomainPaged(p, d string, noContent bool, level, project, version string, limit, offset int) ([]byte, error) {
-	return f.DomainWithFilters(p, d, noContent, level, project, version)
-}
-func (f *failingAssignmentCapability) Status() ([]byte, error) {
-	return f.StatusWithAll(false)
-}
-func (f *failingAssignmentCapability) StatusWithAll(all bool) ([]byte, error) {
-	return []byte(`{}`), nil
-}
-func (f *failingAssignmentCapability) Context(s, p, d string) ([]byte, error) { return nil, nil }
-func (f *failingAssignmentCapability) CodeContext(req CodeContextRequest) ([]byte, error) {
-	return nil, nil
-}
-func (f *failingAssignmentCapability) CodeDiscover(req CodeDiscoverRequest) ([]byte, error) {
-	return nil, nil
-}
-func (f *failingAssignmentCapability) CodeGet(req CodeGetRequest) ([]byte, error)   { return nil, nil }
-func (f *failingAssignmentCapability) Validate(root string) ([]byte, error)         { return nil, nil }
-func (f *failingAssignmentCapability) NewDraft(req NewDraftRequest) ([]byte, error) { return nil, nil }
-func (f *failingAssignmentCapability) DraftUpdate(req DraftUpdateRequest) ([]byte, error) {
-	return nil, nil
-}
-func (f *failingAssignmentCapability) Publish(req PublishRequest) ([]byte, error) { return nil, nil }
-func (f *failingAssignmentCapability) PublishBatch(req PublishBatchRequest) ([]byte, error) {
-	return nil, nil
-}
-func (f *failingAssignmentCapability) Transition(req TransitionRequest) ([]byte, error) {
-	return nil, nil
-}
-func (f *failingAssignmentCapability) Note(req NoteRequest) ([]byte, error)  { return nil, nil }
-func (f *failingAssignmentCapability) DraftRead(t, p string) ([]byte, error) { return nil, nil }
-func (f *failingAssignmentCapability) View(t, p string) ([]byte, error)      { return nil, nil }
-func (f *failingAssignmentCapability) DraftList(p string) ([]byte, error)    { return nil, nil }
-func (f *failingAssignmentCapability) IntegrityCheck() ([]byte, error)       { return nil, nil }
-func (f *failingAssignmentCapability) Discard(t, p string) ([]byte, error)   { return nil, nil }
-func (f *failingAssignmentCapability) SyncPush(repoPath string, adopt, override bool) ([]byte, error) {
-	return nil, nil
-}
-func (f *failingAssignmentCapability) Assign(req AssignmentRequest) ([]byte, error) {
-	return nil, f.err
-}
-func (f *failingAssignmentCapability) Reassign(req AssignmentRequest) ([]byte, error) {
-	return nil, f.err
-}
-func (f *failingAssignmentCapability) Unassign(req UnassignRequest) ([]byte, error) {
-	return nil, f.err
-}
-func (f *failingAssignmentCapability) FeedbackNew(req FeedbackNewRequest) ([]byte, error) {
-	return nil, nil
-}
-func (f *failingAssignmentCapability) FeedbackList() ([]byte, error) { return nil, nil }
-func (f *failingAssignmentCapability) FeedbackPublish(req FeedbackPublishRequest) ([]byte, error) {
 	return nil, f.err
 }
 
@@ -1021,8 +836,6 @@ func (f *failingSyncPushCapability) Discard(t, p string) ([]byte, error)   { ret
 func (f *failingSyncPushCapability) SyncPush(repoPath string, adopt, override bool) ([]byte, error) {
 	return nil, f.err
 }
-func (f *failingSyncPushCapability) Assign(req AssignmentRequest) ([]byte, error)   { return nil, nil }
-func (f *failingSyncPushCapability) Reassign(req AssignmentRequest) ([]byte, error) { return nil, nil }
 func (f *failingSyncPushCapability) FeedbackNew(req FeedbackNewRequest) ([]byte, error) {
 	return nil, nil
 }
@@ -1030,7 +843,6 @@ func (f *failingSyncPushCapability) FeedbackList() ([]byte, error) { return nil,
 func (f *failingSyncPushCapability) FeedbackPublish(req FeedbackPublishRequest) ([]byte, error) {
 	return nil, nil
 }
-func (f *failingSyncPushCapability) Unassign(req UnassignRequest) ([]byte, error) { return nil, nil }
 
 func mustAllResourceURIs(t *testing.T) []string {
 	t.Helper()

@@ -95,15 +95,6 @@ func wrapToolRefusal(err error) error {
 	return err
 }
 
-// wrapValidationRefusal builds a fidelity carrier for a CKO-level
-// validation refusal that does not originate from a single eka-core error
-// type (assignment's RelateValidationError and assignmentValidationError).
-// The headline msg is kept byte-identical to the historical count-only
-// summary, while RefusalReport exposes the full report.
-func wrapValidationRefusal(msg string, report *conformance.Report) error {
-	return &toolRefusal{err: errors.New(msg), reportJSON: marshalConformanceReport(report)}
-}
-
 // marshalConformanceReport serializes one core conformance report into
 // the established eka-conformance-report-v1 shape — the SAME wire
 // structs the validate tool serves (conformanceReport/conformanceResult),

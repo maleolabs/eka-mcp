@@ -39,9 +39,6 @@ var toolHandlers = map[string]toolHandler{
 	"code_get":      (*Server).dispatchCodeGet,
 	// workspace
 	"sync_push":       (*Server).dispatchSyncPush,
-	"assign":          (*Server).dispatchAssign,
-	"reassign":        (*Server).dispatchReassign,
-	"unassign":        (*Server).dispatchUnassign,
 	"integrity_check": (*Server).dispatchIntegrityCheck,
 	// feedback
 	"feedback_new":     (*Server).dispatchFeedbackNew,

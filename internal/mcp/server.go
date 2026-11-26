@@ -306,44 +306,6 @@ var memberToolDescriptors = []toolDescriptor{
 		},
 	},
 	{
-		Name:        "assign",
-		RiskClass:   RiskCanonicalWrite,
-		Required:    []string{"target", "to"},
-		Description: "Assign a work item to a member (schema eka-assignment-v1): the assigned-to edge (work item -> member) is added — same engine as CLI `eka assign` — same target forms, same validation, same refusal classes including deterministic refusal when already assigned to a different member; idempotent on the same member. Single-assignee, deterministic; a failed assignment writes nothing.",
-		Properties: map[string]any{
-			"target":   map[string]any{"type": "string", "minLength": 1, "description": "The work item line: \"<ns>/<type>:<id>\" or \"<type>:<id>\" (same as CLI `eka assign <item>`)."},
-			"to":       map[string]any{"type": "string", "minLength": 1, "description": "The member line to assign to: \"<mbr-id>\", \"mbr:<id>\", \"mbr-<id>\", or \"<ns>/mbr:<id>\" (same as CLI --to)."},
-			"repoPath": map[string]any{"type": "string", "description": "Optional repository path (default: the server cwd) — logical relative path."},
-			"by":       map[string]any{"type": "string", "description": "Optional change-log authority name (defaults to the agent identity)."},
-			"byKind":   map[string]any{"type": "string", "enum": []string{"user", "agent", "worker"}, "description": "Optional authority kind: user | agent | worker (default agent)."},
-		},
-	},
-	{
-		Name:        "reassign",
-		RiskClass:   RiskCanonicalWrite,
-		Required:    []string{"target", "to"},
-		Description: "Move a work item's assignment to another member in one operation (schema eka-assignment-v1): same engine as CLI `eka reassign` — same validation and refusal classes; deterministic refusal when not assigned (use assign) and idempotent on the same member; a failed reassign writes nothing.",
-		Properties: map[string]any{
-			"target":   map[string]any{"type": "string", "minLength": 1, "description": "The work item line: \"<ns>/<type>:<id>\" or \"<type>:<id>\" (same as CLI `eka reassign <item>`)."},
-			"to":       map[string]any{"type": "string", "minLength": 1, "description": "The member line to move to: \"<mbr-id>\", \"mbr:<id>\", \"mbr-<id>\", or \"<ns>/mbr:<id>\" (same as CLI --to)."},
-			"repoPath": map[string]any{"type": "string", "description": "Optional repository path (default: the server cwd) — logical relative path."},
-			"by":       map[string]any{"type": "string", "description": "Optional change-log authority name (defaults to the agent identity)."},
-			"byKind":   map[string]any{"type": "string", "enum": []string{"user", "agent", "worker"}, "description": "Optional authority kind: user | agent | worker (default agent)."},
-		},
-	},
-	{
-		Name:        "unassign",
-		RiskClass:   RiskCanonicalWrite,
-		Required:    []string{"target"},
-		Description: "Remove a work item's assigned-to edge (schema eka-assignment-v1): same engine as CLI `eka unassign` — same validation and refusal classes; deterministic no-op when already unassigned; a failed unassign writes nothing.",
-		Properties: map[string]any{
-			"target":   map[string]any{"type": "string", "minLength": 1, "description": "The work item line: \"<ns>/<type>:<id>\" or \"<type>:<id>\" (same as CLI `eka unassign <item>`)."},
-			"repoPath": map[string]any{"type": "string", "description": "Optional repository path (default: the server cwd) — logical relative path."},
-			"by":       map[string]any{"type": "string", "description": "Optional change-log authority name (defaults to the agent identity)."},
-			"byKind":   map[string]any{"type": "string", "enum": []string{"user", "agent", "worker"}, "description": "Optional authority kind: user | agent | worker (default agent)."},
-		},
-	},
-	{
 		Name:        "feedback_new",
 		RiskClass:   RiskLocalWrite,
 		Required:    []string{"type", "title"},
@@ -389,7 +351,7 @@ var groupSpecs = []groupSpec{
 	{Name: "knowledge_read", Members: []string{"context", "get", "domain", "status", "validate", "draft_read", "draft_list"}},
 	{Name: "knowledge_write", Members: []string{"new", "draft_update", "publish", "publishBatch", "transition", "note", "discard"}},
 	{Name: "code", Members: []string{"code_context", "code_discover", "code_get"}},
-	{Name: "workspace", Members: []string{"sync_push", "assign", "reassign", "unassign"}},
+	{Name: "workspace", Members: []string{"sync_push"}},
 	{Name: "ops", Members: []string{"integrity_check"}},
 	{Name: "feedback", Members: []string{"feedback_new", "feedback_list", "feedback_publish"}},
 }
@@ -850,15 +812,6 @@ type Capability interface {
 	// `eka sync push` (deterministic snapshot, same digest, same refusals);
 	// a failed push writes nothing partially.
 	SyncPush(repoPath string, adopt, override bool) ([]byte, error)
-	// Assign sets the assigned-to edge of a work item (schema eka-assignment-v1).
-	// Same semantics, validation and refusal classes as `eka assign`.
-	Assign(req AssignmentRequest) ([]byte, error)
-	// Reassign moves the assigned-to edge in one operation (schema eka-assignment-v1).
-	// Same semantics as `eka reassign`.
-	Reassign(req AssignmentRequest) ([]byte, error)
-	// Unassign removes the assigned-to edge (schema eka-assignment-v1).
-	// Same semantics as `eka unassign`.
-	Unassign(req UnassignRequest) ([]byte, error)
 	// FeedbackNew creates a local feedback draft under EKA_HOME/feedback
 	// (YAML frontmatter + markdown body). It mirrors `eka feedback new`
 	// semantics exactly — same validation, same scaffold, same id generation.
@@ -970,21 +923,6 @@ type NoteRequest struct {
 	Domain   string
 	By       AuthorIdentity
 	Content  map[string]any
-}
-
-// AssignmentRequest describes one assign/reassign operation.
-type AssignmentRequest struct {
-	RepoPath string
-	Target   string
-	To       string
-	By       AuthorIdentity
-}
-
-// UnassignRequest describes one unassign operation.
-type UnassignRequest struct {
-	RepoPath string
-	Target   string
-	By       AuthorIdentity
 }
 
 // FeedbackNewRequest describes one feedback draft to create (mirrors `eka feedback new`).

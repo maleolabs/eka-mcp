@@ -10,7 +10,10 @@ package mcp
 // the result the transport emits):
 //
 //	BEFORE (25 flat tools)  ToolCount=25 AdvertisedToolCount=26 schemaBytes=27981
-//	AFTER  (6 group tools)  ToolCount=6  AdvertisedToolCount=6  schemaBytes=22158
+//	AFTER  (6 group tools)  ToolCount=6  AdvertisedToolCount=6  schemaBytes=20503
+//
+// (20503 after the workspace assignment ops assign/reassign/unassign were
+// retired from the workspace group, leaving sync_push; was 22158.)
 
 import (
 	"encoding/json"
@@ -20,7 +23,7 @@ import (
 
 // surfaceBudgetBytes is the recorded AFTER cost of the advertised tool array.
 // A change that grows it without retiring something must fail here.
-const surfaceBudgetBytes = 22158
+const surfaceBudgetBytes = 20503
 
 // advertisedToolCount is the recorded AFTER number of advertised handles.
 const advertisedToolCount = 6

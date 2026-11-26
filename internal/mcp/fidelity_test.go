@@ -316,35 +316,6 @@ func TestTransitionConfirmationWithoutWarning(t *testing.T) {
 	}
 }
 
-// TestAssignValidationRefusalCarriesReport: an assign-class validation
-// refusal embeds the conformance report just like publish — the assign
-// path now uses wrapValidationRefusal so agents get the findings.
-func TestAssignValidationRefusalCarriesReport(t *testing.T) {
-	cap := &fakeCapability{
-		statusJSON: `{}`,
-		assignErr: &stubFidelity{
-			msg:    "assign refused: feather/sto:004 failed CKO-level validation with 1 blocking error(s); nothing was changed",
-			report: stubReportJSON,
-		},
-	}
-	s := newTestServer(cap)
-	out := mustHandle(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assign","arguments":{"target":"feather/sto:004","to":"feather/mbr:alice"}}}`)
-	texts := mustFailureContent(t, out)
-	if len(texts) != 2 {
-		t.Fatalf("content blocks = %d, want 2 (headline + report) for assign", len(texts))
-	}
-	if texts[0] != "assign refused: feather/sto:004 failed CKO-level validation with 1 blocking error(s); nothing was changed" {
-		t.Errorf("assign headline = %q, want byte-stable count-only message", texts[0])
-	}
-	var report map[string]any
-	if err := json.Unmarshal([]byte(texts[1]), &report); err != nil {
-		t.Fatalf("assign embedded report must be valid JSON: %v\n%s", err, texts[1])
-	}
-	if report["schema"] != "eka-conformance-report-v1" {
-		t.Errorf("assign report schema = %v, want eka-conformance-report-v1", report["schema"])
-	}
-}
-
 // TestBoundaryGuardDoesNotCorruptJSON: a finding message containing a
 // JSON-escaped path with an embedded quote (at /home/u/x.db" done)
 // must not corrupt the embedded report — the boundary either embeds
