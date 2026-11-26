@@ -53,7 +53,7 @@ func TestApprovalPolicyReadVsWriteSeparation(t *testing.T) {
 		}
 	}
 	// Explicit pin: canonical-write and external must not be read-only.
-	for _, name := range []string{"publish", "publishBatch", "transition", "assign", "reassign", "unassign", "sync_push", "feedback_publish"} {
+	for _, name := range []string{"publish", "publishBatch", "transition", "sync_push", "feedback_publish"} {
 		if IsReadOnly(name) {
 			t.Errorf("tool %q must not be read-only", name)
 		}
@@ -292,7 +292,7 @@ func TestLogicalPathsEnforcedInSchemas(t *testing.T) {
 		desc := tm["description"].(string)
 		// Check path-bearing tools mention logical/relative.
 		switch name {
-		case "code_context", "code_discover", "code_get", "validate", "sync_push", "transition", "note", "assign", "reassign", "unassign":
+		case "code_context", "code_discover", "code_get", "validate", "sync_push", "transition", "note":
 			if !strings.Contains(strings.ToLower(desc), "logical") && !strings.Contains(desc, "relative") {
 				// Schema properties also should mention logical for path fields.
 				// At least one of description or property description should mention logical.

@@ -280,18 +280,6 @@ func (f *failingStatusCapability) SyncPush(repoPath string, adopt, override bool
 	return nil, errors.New("unreachable")
 }
 
-func (f *failingStatusCapability) Assign(req AssignmentRequest) ([]byte, error) {
-	return nil, errors.New("unreachable")
-}
-
-func (f *failingStatusCapability) Reassign(req AssignmentRequest) ([]byte, error) {
-	return nil, errors.New("unreachable")
-}
-
-func (f *failingStatusCapability) Unassign(req UnassignRequest) ([]byte, error) {
-	return nil, errors.New("unreachable")
-}
-
 func (f *failingStatusCapability) FeedbackNew(req FeedbackNewRequest) ([]byte, error) {
 	return nil, errors.New("unreachable")
 }

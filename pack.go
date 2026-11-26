@@ -54,11 +54,11 @@ var Capabilities = []string{"install", "mcp"}
 
 // ToolGroups is the deterministic MCP tool grouping for tiered routing (sto:skill-pack-tiered-routing-real — hollow gap fix)
 // read: get, context, domain, status, view
-// write: new, publish, transition, note, assign
+// write: new, publish, transition, note
 // ops: validate, integrity, feedback, sync
 var ToolGroups = map[string][]string{
 	"eka_read":  {"get", "context", "domain", "status", "view"},
-	"eka_write": {"new", "publish", "transition", "note", "assign", "reassign", "unassign"},
+	"eka_write": {"new", "publish", "transition", "note"},
 	"eka_ops":   {"validate", "integrity", "feedback", "sync"},
 }
 
