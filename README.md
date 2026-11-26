@@ -88,14 +88,9 @@ directory for codex): `opencode` → `<base>/.config/opencode/{skills,commands}`
 (skills only — codex-cli removed the prompts directory in 0.117.0, so
 `--with-commands`/`--with-all` refuse deterministically). Canonical command
 bodies stay description-only in the pack; frontmatter is rendered per target at
-install time, and the active role→agent delegation table travels alongside as a
-non-.md `DELEGATION.txt` sidecar (next to the installed commands for
-opencode/claude, inside the skills subtree for codex) so legacy command dirs
-never see a phantom `.md` command. `DELEGATION.txt` is a **reserved sidecar
-name**: every install writes/overwrites it, so do not store your own content
-under that name in the install directories. Re-installing overwrites only
-pack-owned files; foreign files are never touched; a symlinked final path
-component refuses (intermediate directory symlinks are followed).
+install time. Re-installing overwrites only pack-owned files; foreign files are
+never touched; a symlinked final path component refuses (intermediate
+directory symlinks are followed).
 
 ## The MCP server
 
@@ -228,23 +223,6 @@ Commands: `eka-discuss` (planning discussion) and `eka-execute` (autonomous
 execution + resume). The pack also ships reference draft templates for all 26
 token families and a smoke test.
 
-Alongside the pack, the embedded [`mappings/`](mappings) directory ships the
-pre-rendered role→agent delegation tables per ecosystem (`opencode.toml` — the
-default reference mapping, `claude.toml`, `codex.toml`) of
-req:agent-agnostic-skill-pack R4: one closed 9-role vocabulary, declarative
-per-ecosystem resolution (`delegate` to a named agent or explicit `solo`
-degrade).
-
-### Mapping burden
-
-Per-ecosystem adaptation is **declarative, not editorial**: the command bodies
-never name agents, so porting to a new ecosystem means editing (or adding) a
-`mappings/*.toml` table — never a command body. At install time the active
-table is rendered to the plain-text `DELEGATION.txt` sidecar next to the
-installed artifacts, and the bodies resolve their delegation rows from it.
-Bodies and tables cannot drift silently: a build-time consistency test asserts
-that every role cited by the command bodies resolves in every mapping table.
-
 ## Installation
 
 ### As an eka-cli plugin (recommended)
@@ -252,14 +230,14 @@ that every role cited by the command bodies resolves in every mapping table.
 ```sh
 eka plugin install mcp
 eka-mcp configure --target opencode --dir . --json                          # only writes MCP client config (skills/commands via MCP resources)
-eka-mcp configure --target opencode --dir . --with-all --json               # also installs skills + commands (.config/opencode/{skills,commands} under <dir>) + DELEGATION.txt
+eka-mcp configure --target opencode --dir . --with-all --json               # also installs skills + commands (.config/opencode/{skills,commands} under <dir>)
 eka-mcp configure --target opencode --dir . --with-skills --json            # only skills, --with-commands for commands only
 ```
 
 This installs the official `eka-mcp` plugin from its GitHub release with
 checksum verification. The `configure` subcommand is the per-agent setup:
 it writes the MCP client config entry (absolute `eka-mcp` binary path +
-`EKA_HOME` when set) and, only when opted in, delegates the skill/command
+`EKA_HOME` when set) and, only when opted in, performs the skill/command
 install (`--with-skills` / `--with-commands` / `--with-all`). Without those
 flags no files are copied — skills and templates remain available via MCP
 resources `eka://skills/*` and `eka://templates/*`. Use `--dry-run` to

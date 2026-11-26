@@ -30,21 +30,19 @@ Reference drafts for every authorable token family — the **exact scaffold outp
 | `spk-template.json` | `spk` — Spike | — | executionState, existenceState | `conclusion`, `description`, `investigationNotes` |
 | `rvw-template.json` | `rvw` — Review | `quality` | contentState, existenceState | `actionItems`, `content`, `findings`, `purpose` |
 | `ses-template.json` | `ses` — Session | — | existenceState only | `context`, `notes`, `verification` |
-| `mbr-template.json` | `mbr` — Member | — | contentState, existenceState | `content`, `purpose` |
 | `run-template.json` | `run` — Runbook | `operations` | contentState, existenceState | `content`, `purpose` |
 | `rel-template.json` | `rel` — Release Record | `records` | contentState, existenceState | `content`, `purpose` |
 | `cmt-publish-post-implementation.json` | `cmt` — Note (implementation role) | — | contentState, existenceState, **noteState** | role content: `role`, `summary`, `changes[]`, `tests[]` |
 
 ## Facts encoded in these templates
 
-- `instanceVersion` is **absent** — assigned at publish (`max + 1` for the line).
+- `instanceVersion` is **absent** — set at publish (`max + 1` for the line).
 - **`dimension`** is present on knowledge types (R6 requires it at publish) — scaffolded via `--dimension <token>`; absent on work items, containers, tickets, sessions, notes.
 - Initial state values are the scaffold defaults: `contentState: draft` (knowledge types), `contentState: proposed` (adr/dec), `executionState: planned` (work items), `containerState: planned` (containers), **no state at all** (tickets — empty state vector, no change-log). Keep the truthful initial state — never pre-jump states.
 - `changeLog` carries one entry per owned state domain with `by: Engineering` — **replace `by` with the real author identity** (see the author-identity rule in [`../SKILL.md`](../SKILL.md)).
 - `ctr-` scaffolds require `--depends-on` with a `plan-` reference (a container without a plan can never publish/activate).
 - **`workItems` in a `ctr-` draft's content is prose — never parsed for membership.** Membership comes from tickets only: a `tkt-` whose `derivesFrom` carries both the container and the work item (`eka new tkt:my-ticket --derives-from ctr:wave-7,sto:my-item`). `--depends-on ctr:` on a work item does **not** make it a container member.
 - `cmt-` is scaffolded by `eka note <subject-line> --role <implementation|review|fix>`, never by `eka new`; it carries the `discusses` relationship to the subject line and its author comes from `git config user.name`.
-- `mbr-` (Member, ADR-029) is an operating token like `ses-`: no `--dimension`, no work-item state. Unlike `ses-` (existence-state only) it carries the full content-state + existence-state vector with the `purpose`/`content` sections — the member line expresses identity/role material, never work-item state. It is the typed target of the `assigned-to` relationship carried by work items (single-assignee, same-repository provenance).
 
 ## Allowed state values
 
@@ -58,7 +56,7 @@ Single source of truth: `conformance/state.go` (`DomainValues`). Values are lowe
 | existence-state | `active`, `archived`, `retired` | every type that carries state |
 | note-state | `open`, `resolved`, `dismissed` | `cmt-` |
 | phase (context attribute) | `discovery`, `mvp`, `milestone`, `release`, `growth`, `maturity`, `sunset` | `scp-`, `plan-` only |
-| content-state — living variant | `draft`, `review`, `approved`, `amended` | knowledge types `vis-`, `str-`, `req-`, `scp-`, `epc-`, `plan-`, `trc-`, `arc-`, `spec-`, `std-`, `run-`, `rel-`, `gls-`, `fnd-`, `rvw-` (and `cmt-`, `mbr-`) |
+| content-state — living variant | `draft`, `review`, `approved`, `amended` | knowledge types `vis-`, `str-`, `req-`, `scp-`, `epc-`, `plan-`, `trc-`, `arc-`, `spec-`, `std-`, `run-`, `rel-`, `gls-`, `fnd-`, `rvw-` (and `cmt-`) |
 | content-state — ADR variant | `proposed`, `accepted`, `superseded` | `adr-` |
 | content-state — decision variant | `draft`, `accepted`, `superseded` | `dec-` |
 
@@ -76,7 +74,7 @@ declare -A dim=( [vis]=intent [str]=intent [req]=requirements [fnd]=research \
 for t in "${!dim[@]}"; do
   eka new "feather/${t}:template" --dimension "${dim[$t]}"
 done
-for t in sto ts bug td ch spk ses mbr; do
+for t in sto ts bug td ch spk ses; do
   eka new "feather/${t}:template"
 done
 eka new feather/ctr:template --depends-on feather/plan:roadmap-v1

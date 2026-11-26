@@ -13,16 +13,9 @@ import (
 // --- Target-aware installation (req:agent-agnostic-skill-pack R5/R6/R7) ---
 //
 // Rendering and installation logic is owned by the pack-distribution
-// vehicle (ADR-030 lineage): this package embeds the pack, the mappings/
-// tables and the installer, so canonical bodies stay provider-neutral on
-// disk while installed copies carry target-appropriate frontmatter and the
-// active delegation table travels alongside as a NON-.md sidecar.
-
-// SidecarName is the fixed file name of the delegation sidecar written next
-// to the installed artifacts (req R5). It is deliberately NOT a .md file:
-// legacy command directories scan every *.md as a command (spike V1), so a
-// .md sidecar would surface as a phantom command.
-const SidecarName = "DELEGATION.txt"
+// vehicle (ADR-030 lineage): this package embeds the pack and the installer,
+// so canonical bodies stay provider-neutral on disk while installed copies
+// carry target-appropriate frontmatter.
 
 // InstallTargets lists the supported installation targets in deterministic
 // order — the refusal messages, the docs and the tests share this list.
@@ -32,7 +25,6 @@ var InstallTargets = []string{"opencode", "claude", "codex"}
 type TargetLayout struct {
 	SkillsDir   string // root of the installed eka-* skill subtrees
 	CommandsDir string // directory receiving the rendered eka-*.md commands; empty when the target has no command target
-	SidecarDir  string // directory receiving DELEGATION.txt
 }
 
 // InstallBase resolves the anchor directory of a target's install tree: an
@@ -65,10 +57,10 @@ func InstallBase(target, dir string) (string, error) {
 // ResolveLayout maps one target onto its conventional directories under the
 // given base (spike V3):
 //
-//	opencode  <base>/.config/opencode/{skills,commands}   — sidecar next to the commands
-//	claude    <base>/.claude/{skills,commands}            — sidecar next to the commands
-//	codex     <base>/.agents/skills                       — sidecar inside the skills subtree;
-//	            no command target (codex-cli removed ~/.codex/prompts in 0.117.0)
+//	opencode  <base>/.config/opencode/{skills,commands}
+//	claude    <base>/.claude/{skills,commands}
+//	codex     <base>/.agents/skills   — no command target
+//	            (codex-cli removed ~/.codex/prompts in 0.117.0)
 func ResolveLayout(target, base string) (TargetLayout, error) {
 	switch target {
 	case "opencode":
@@ -76,20 +68,16 @@ func ResolveLayout(target, base string) (TargetLayout, error) {
 		return TargetLayout{
 			SkillsDir:   filepath.Join(root, "skills"),
 			CommandsDir: filepath.Join(root, "commands"),
-			SidecarDir:  filepath.Join(root, "commands"),
 		}, nil
 	case "claude":
 		root := filepath.Join(base, ".claude")
 		return TargetLayout{
 			SkillsDir:   filepath.Join(root, "skills"),
 			CommandsDir: filepath.Join(root, "commands"),
-			SidecarDir:  filepath.Join(root, "commands"),
 		}, nil
 	case "codex":
-		skills := filepath.Join(base, ".agents", "skills")
 		return TargetLayout{
-			SkillsDir:  skills,
-			SidecarDir: skills,
+			SkillsDir: filepath.Join(base, ".agents", "skills"),
 		}, nil
 	default:
 		return TargetLayout{}, unsupportedTargetError(target)
@@ -97,13 +85,9 @@ func ResolveLayout(target, base string) (TargetLayout, error) {
 }
 
 // RenderCommand renders one embedded command file for a target ecosystem
-// (req R3/R5): the canonical body stays byte-identical; the description-only
-// frontmatter is rebuilt deterministically, preserving the description and
-// adding provider-specific keys ONLY where they resolve from the active
-// mapping table. Today no command-level key resolves for any target — the
-// commands are orchestrators run by the primary agent, not mapped roles —
-// so per spike V2 the renderer OMITS unresolvable keys instead of guessing.
-// The embedded pack file itself is never mutated.
+// (req R3/R5): the canonical body stays byte-identical and the
+// description-only frontmatter is rebuilt deterministically. The embedded
+// pack file itself is never mutated.
 func RenderCommand(target, name string) ([]byte, error) {
 	files, err := CommandFiles()
 	if err != nil {
@@ -173,12 +157,11 @@ func splitCommandFrontmatter(name string, data []byte) (string, string, error) {
 }
 
 // providerFrontmatterKeys returns the ordered provider-specific frontmatter
-// key/value pairs rendered into a command for one target. A key is added
-// ONLY when it resolves from the active mapping table (req R5): today the
-// commands are primary-agent orchestrators and no role row resolves to a
-// command-level agent, so every target renders description-only (spike V2:
-// omit rather than invent). This function is the single extension point for
-// future targets whose mappings do resolve command-level keys.
+// key/value pairs rendered into a command for one target. The commands are
+// primary-agent orchestrators and no provider-specific key applies today, so
+// every target renders description-only (spike V2: omit rather than invent).
+// This function is the single extension point for future targets that need
+// command-level keys.
 func providerFrontmatterKeys(target string) ([][2]string, error) {
 	switch target {
 	case "opencode", "claude", "codex":
@@ -186,17 +169,6 @@ func providerFrontmatterKeys(target string) ([][2]string, error) {
 	default:
 		return nil, unsupportedTargetError(target)
 	}
-}
-
-// SidecarText returns the DELEGATION.txt content for one target: the active
-// mapping table rendered as deterministic plain text (req R4/R5). Same
-// table → same bytes, always.
-func SidecarText(target string) (string, error) {
-	table, err := LoadMappingTable(target)
-	if err != nil {
-		return "", err
-	}
-	return table.RenderText()
 }
 
 // FileAction is one planned or performed filesystem change of a target
@@ -230,10 +202,7 @@ type TargetInstallReport struct {
 // ecosystem into the target's conventional directories (req R5/R6):
 //
 //   - skills   — pure copy of each eka-* subtree;
-//   - commands — RENDERED copies (target frontmatter) of the eka-*.md bodies;
-//   - sidecar  — DELEGATION.txt carrying the ACTIVE mapping table, written
-//     next to the installed commands (opencode, claude) or inside the
-//     installed skills subtree (codex), whenever any family is installed.
+//   - commands — RENDERED copies (target frontmatter) of the eka-*.md bodies.
 //
 // Idempotent by construction: only pack-owned file NAMES are ever written;
 // foreign files are never touched. Existing regular files with identical
@@ -261,8 +230,7 @@ func InstallForTarget(target, dir string, withSkills, withCommands, dryRun bool)
 // InstallSelection installs explicit artifact subsets for one target
 // ecosystem — the interactive installer's execution primitive. Names
 // must resolve against SkillDirs()/CommandFiles() (unknown names
-// refuse deterministically); empty lists install nothing (the sidecar
-// is written only when at least one family is non-empty). Planning,
+// refuse deterministically); empty lists install nothing. Planning,
 // classification and writing share InstallForTarget's exact semantics
 // (idempotent, dryRun pure).
 func InstallSelection(target, dir string, skills, commands []string, dryRun bool) (TargetInstallReport, error) {
@@ -351,14 +319,6 @@ func InstallSelection(target, dir string, skills, commands []string, dryRun bool
 			}
 			plan = append(plan, planEntry{path: filepath.Join(layout.CommandsDir, c), content: rendered})
 		}
-	}
-
-	if len(files) > 0 {
-		sidecar, err := SidecarText(target)
-		if err != nil {
-			return TargetInstallReport{}, err
-		}
-		plan = append(plan, planEntry{path: filepath.Join(layout.SidecarDir, SidecarName), content: []byte(sidecar)})
 	}
 
 	sort.Slice(plan, func(i, j int) bool { return plan[i].path < plan[j].path })

@@ -125,40 +125,6 @@ func TestRenderCommandRefusals(t *testing.T) {
 	}
 }
 
-// TestSidecarTextMatchesRenderText (req R5): the sidecar content is exactly
-// the active mapping table's RenderText output — same table, same bytes.
-func TestSidecarTextMatchesRenderText(t *testing.T) {
-	ecosystems, err := MappingEcosystems()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, key := range ecosystems {
-		table, err := LoadMappingTable(key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		want, err := table.RenderText()
-		if err != nil {
-			t.Fatal(err)
-		}
-		got, err := SidecarText(key)
-		if err != nil {
-			t.Fatalf("SidecarText(%q): %v", key, err)
-		}
-		if got != want {
-			t.Errorf("SidecarText(%q) differs from RenderText output", key)
-		}
-		a, _ := SidecarText(key)
-		b, _ := SidecarText(key)
-		if a != b {
-			t.Errorf("SidecarText(%q) must be deterministic", key)
-		}
-	}
-	if _, err := SidecarText("bogus"); err == nil {
-		t.Error("unknown ecosystem must refuse")
-	}
-}
-
 // TestResolveLayout pins the conventional per-target layout (spike V3):
 // opencode under .config/opencode, claude under .claude, codex skills-only
 // under .agents/skills — and NO prompts directory anywhere.
@@ -168,11 +134,10 @@ func TestResolveLayout(t *testing.T) {
 		target   string
 		skills   string
 		commands string // "" = no command target
-		sidecar  string
 	}{
-		{"opencode", filepath.Join(base, ".config", "opencode", "skills"), filepath.Join(base, ".config", "opencode", "commands"), filepath.Join(base, ".config", "opencode", "commands")},
-		{"claude", filepath.Join(base, ".claude", "skills"), filepath.Join(base, ".claude", "commands"), filepath.Join(base, ".claude", "commands")},
-		{"codex", filepath.Join(base, ".agents", "skills"), "", filepath.Join(base, ".agents", "skills")},
+		{"opencode", filepath.Join(base, ".config", "opencode", "skills"), filepath.Join(base, ".config", "opencode", "commands")},
+		{"claude", filepath.Join(base, ".claude", "skills"), filepath.Join(base, ".claude", "commands")},
+		{"codex", filepath.Join(base, ".agents", "skills"), ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.target, func(t *testing.T) {
@@ -185,9 +150,6 @@ func TestResolveLayout(t *testing.T) {
 			}
 			if layout.CommandsDir != tc.commands {
 				t.Errorf("CommandsDir = %q, want %q", layout.CommandsDir, tc.commands)
-			}
-			if layout.SidecarDir != tc.sidecar {
-				t.Errorf("SidecarDir = %q, want %q", layout.SidecarDir, tc.sidecar)
 			}
 			if strings.Contains(layout.CommandsDir+layout.SkillsDir, "prompts") {
 				t.Errorf("codex prompts dir is dead (0.117.0); layout must not reference it: %+v", layout)
@@ -235,25 +197,13 @@ func TestInstallForTargetDryRunWritesNothing(t *testing.T) {
 			if _, err := os.Stat(root); !os.IsNotExist(err) {
 				t.Errorf("dry-run must not create anything, stat err = %v", err)
 			}
-			// The sidecar must be part of the plan at the documented location.
-			layout, _ := ResolveLayout(target, root)
-			sidecarPath := filepath.Join(layout.SidecarDir, SidecarName)
-			found := false
-			for _, a := range rep.Actions {
-				if a.Path == sidecarPath {
-					found = true
-				}
-			}
-			if !found {
-				t.Errorf("sidecar %s missing from plan: %v", sidecarPath, rep.Actions)
-			}
 		})
 	}
 }
 
 // TestInstallForTargetCodexSubtreeLayout (spike V3): codex installs ONLY the
-// skills subtree under .agents/skills with DELEGATION.txt INSIDE it; no
-// commands land anywhere and no prompts dir is referenced.
+// skills subtree under .agents/skills; no commands land anywhere and no
+// prompts dir is referenced.
 func TestInstallForTargetCodexSubtreeLayout(t *testing.T) {
 	base := t.TempDir()
 	rep, err := InstallForTarget("codex", base, true, false, false)
@@ -272,17 +222,6 @@ func TestInstallForTargetCodexSubtreeLayout(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(skillsRoot, s, "SKILL.md")); err != nil {
 			t.Errorf("skill %s must install under .agents/skills: %v", s, err)
 		}
-	}
-	sidecar, err := os.ReadFile(filepath.Join(skillsRoot, SidecarName))
-	if err != nil {
-		t.Fatalf("DELEGATION.txt must sit inside the skills subtree: %v", err)
-	}
-	want, _ := SidecarText("codex")
-	if string(sidecar) != want {
-		t.Errorf("codex sidecar content drifted from RenderText output")
-	}
-	if strings.Contains(string(sidecar), "<!--") || strings.HasSuffix(strings.ToLower(SidecarName), ".md") {
-		t.Errorf("sidecar must never be a .md file (V1)")
 	}
 }
 

@@ -28,7 +28,7 @@ EKA MCP             (future wire transport — Runtime capabilities)
 EKA Runtime         (workspace + canonical store, Runtime API + Authoring API)
 ```
 
-MCP will expose **Runtime capabilities** as a transport: the same services the CLI already delegates to — `Knowledge` (retrieval), `Resolver`, `Relations`, `Timeline`, `Workspace` (state), the **Authoring API** (validate/compile/sync + the draft lifecycle), and the deterministic **Context Object** produced by the Context Engine. The wire layer is a thin adapter over contracts that already exist (ADR-014, ADR-015, ADR-021 reserve exactly this slot).
+MCP will expose **Runtime capabilities** as a transport: the same services the CLI already routes to — `Knowledge` (retrieval), `Resolver`, `Relations`, `Timeline`, `Workspace` (state), the **Authoring API** (validate/compile/sync + the draft lifecycle), and the deterministic **Context Object** produced by the Context Engine. The wire layer is a thin adapter over contracts that already exist (ADR-014, ADR-015, ADR-021 reserve exactly this slot).
 
 ## The separation contract
 
