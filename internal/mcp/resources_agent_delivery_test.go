@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	pack "github.com/maleolabs/eka-mcp"
+	pack "github.com/maleolabs/eka-mcp/v2"
 )
 
 // TestResourcesManifestAndBootstrap verifies the compact manifest/index and

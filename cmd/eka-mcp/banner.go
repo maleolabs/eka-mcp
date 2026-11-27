@@ -7,9 +7,9 @@ import (
 
 	"github.com/mattn/go-isatty"
 
-	"github.com/maleolabs/eka-mcp"
-	"github.com/maleolabs/eka-mcp/internal/eka"
-	"github.com/maleolabs/eka-mcp/internal/mcp"
+	"github.com/maleolabs/eka-mcp/v2"
+	"github.com/maleolabs/eka-mcp/v2/internal/eka"
+	"github.com/maleolabs/eka-mcp/v2/internal/mcp"
 )
 
 // bannerState is the state-derived data the banner renders. Every field

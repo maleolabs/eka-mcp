@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/runtime"
-	"github.com/maleolabs/eka-mcp/internal/mcp"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-core/v2/runtime"
+	"github.com/maleolabs/eka-mcp/v2/internal/mcp"
 )
 
 // refusalCarrier is the structural view of the boundary's fidelity

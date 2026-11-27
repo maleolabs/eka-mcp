@@ -10,10 +10,10 @@ into one executable:
 3. **CLI plugin** — an `eka-cli` plugin that installs the skill pack into an
    agent configuration directory.
 
-It is a consumer of [`eka-core`](https://github.com/maleolabs/eka-core) (the
+It is a consumer of [`eka-core`](https://github.com/maleolabs/eka-core/v2) (the
 Runtime and the plugin contract) and an `eka-cli` plugin.
 
-Module path: `github.com/maleolabs/eka-mcp`
+Module path: `github.com/maleolabs/eka-mcp/v2`
 
 ## Layering
 
@@ -25,7 +25,7 @@ MCP Transport (stdio)    internal/mcp/transport.go   newline-delimited JSON-RPC
 MCP Server (dispatch)    internal/mcp/server.go      JSON-RPC 2.0 request handling
 EKA capability layer     internal/eka                wraps eka-core behind the
                                                      Capability interface
-eka-core Runtime         github.com/maleolabs/eka-core
+eka-core Runtime         github.com/maleolabs/eka-core/v2
 ```
 
 The capability layer deliberately reimplements **no** EKA domain logic — every
@@ -54,7 +54,7 @@ installer can actually install:
     { "kind": "commands", "entries": ["eka-discuss.md", "eka-execute.md"] }
   ],
   "capabilities": ["install", "mcp"],
-  "source": "github.com/maleolabs/eka-mcp"
+  "source": "github.com/maleolabs/eka-mcp/v2"
 }
 ```
 
@@ -327,7 +327,7 @@ Then run `./eka-mcp serve` as your MCP client's stdio server, or use
   `install` result, and the MCP `serverInfo` — one version across all three
   roles, so they never drift.
 - **Release builds stamp the tag.** The release pipeline injects the git tag
-  into `pack.Version` via `-ldflags "-X github.com/maleolabs/eka-mcp.Version=<tag>"`
+  into `pack.Version` via `-ldflags "-X github.com/maleolabs/eka-mcp/v2.Version=<tag>"`
   (see `.anvil/pipelines/build.yaml`; `scripts/bump.sh` keeps `anvil.yaml` and
   `pack.go` in sync before tagging). A running build is therefore identifiable:
   read `.version` from `eka mcp manifest --json`, or `serverInfo.version` from

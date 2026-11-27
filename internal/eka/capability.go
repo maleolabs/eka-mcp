@@ -3,7 +3,7 @@
 //
 // It wraps the runtime services (Resolver, Knowledge, Workspace,
 // Authoring, Integrity) and the deterministic machine projections
-// (machine.NewDocument, machine.NewCollection, contexts.Engine) behind
+// (machine.NewDocument, machine.NewCollection, api.Contexts) behind
 // the capability surface the MCP server dispatches to. It deliberately
 // reimplements NO EKA domain logic — every call delegates to eka-core;
 // this package only shapes the wire responses (the deterministic
@@ -21,28 +21,27 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/maleolabs/eka-core/codegraph"
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/contexts"
-	"github.com/maleolabs/eka-core/exchange"
-	"github.com/maleolabs/eka-core/machine"
-	"github.com/maleolabs/eka-core/runtime"
-	"github.com/maleolabs/eka-mcp/internal/mcp"
+	"github.com/maleolabs/eka-core/v2/api"
+	"github.com/maleolabs/eka-core/v2/codegraph"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-core/v2/exchange"
+	"github.com/maleolabs/eka-core/v2/machine"
+	"github.com/maleolabs/eka-mcp/v2/internal/mcp"
 )
 
 // Capability is one opened EKA capability: a handle on the EKA Runtime
 // exposing the knowledge-retrieval, context and authoring surfaces.
 type Capability struct {
-	rt *runtime.Runtime
+	rt api.Runtime
 }
 
-// Open opens the EKA Runtime read-only (runtime.Open — it never
+// Open opens the EKA Runtime read-only (api.Open — it never
 // initializes a workspace; a missing workspace yields a detached
 // runtime whose service calls report the uninitialized state
 // informatively). The server can therefore initialize cleanly even
 // before a workspace exists.
 func Open() (*Capability, error) {
-	rt, err := runtime.Open()
+	rt, err := api.Open()
 	if err != nil {
 		return nil, fmt.Errorf("eka: cannot open the EKA runtime: %w", err)
 	}
@@ -73,7 +72,7 @@ func (c *Capability) ProjectCount() (int, error) {
 	if !c.Exists() {
 		return 0, nil
 	}
-	projects, err := c.rt.Workspace.Projects()
+	projects, err := c.rt.Workspace().Projects()
 	if err != nil {
 		return 0, err
 	}
@@ -86,13 +85,13 @@ func (c *Capability) RepoCount() (int, error) {
 	if !c.Exists() {
 		return 0, nil
 	}
-	projects, err := c.rt.Workspace.Projects()
+	projects, err := c.rt.Workspace().Projects()
 	if err != nil {
 		return 0, err
 	}
 	total := 0
 	for _, p := range projects {
-		repos, err := c.rt.Workspace.Repos(p.ID)
+		repos, err := c.rt.Workspace().Repos(p.ID)
 		if err != nil {
 			return 0, err
 		}
@@ -124,7 +123,7 @@ func (c *Capability) GetWithFilters(form string, noContent bool, level, project,
 	if !c.Exists() {
 		return nil, fmt.Errorf("eka: workspace not initialized")
 	}
-	u, ok, err := c.rt.Resolver.Resolve(form)
+	u, ok, err := c.rt.Resolver().Resolve(form)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +191,7 @@ func (c *Capability) DomainPaged(projectID, domain string, noContent bool, level
 	if !c.Exists() {
 		return nil, fmt.Errorf("eka: workspace not initialized")
 	}
-	units, err := c.rt.Knowledge.Search(runtime.SearchQuery{ProjectID: projectID, Domain: domain})
+	units, err := c.rt.Knowledge().Search(api.SearchQuery{ProjectID: projectID, Domain: domain})
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +349,7 @@ func (c *Capability) StatusWithAll(all bool) ([]byte, error) {
 			"projects":    []any{},
 		})
 	}
-	st, err := c.rt.Workspace.Status()
+	st, err := c.rt.Workspace().Status()
 	if err != nil {
 		return nil, err
 	}
@@ -387,13 +386,13 @@ func (c *Capability) StatusWithAll(all bool) ([]byte, error) {
 
 // scopeStatus mirrors cmd/status.go scopeStatus: when cwd is inside a
 // registered repo path, return only that project's slice.
-func (c *Capability) scopeStatus(st *runtime.WorkspaceStatus) *runtime.WorkspaceStatus {
+func (c *Capability) scopeStatus(st *api.WorkspaceStatus) *api.WorkspaceStatus {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return st
 	}
 	cwd = filepath.Clean(cwd)
-	var matched *runtime.ProjectStatus
+	var matched *api.ProjectStatus
 	matchedLen := -1
 	for i := range st.Projects {
 		for _, rs := range st.Projects[i].Repos {
@@ -410,7 +409,7 @@ func (c *Capability) scopeStatus(st *runtime.WorkspaceStatus) *runtime.Workspace
 		return st
 	}
 	out := *st
-	out.Projects = []runtime.ProjectStatus{*matched}
+	out.Projects = []api.ProjectStatus{*matched}
 	return &out
 }
 
@@ -429,11 +428,11 @@ func (c *Capability) fetchExecutionState(projectID string) map[string]any {
 	// ponytail: repos registered before schema v3 carry Namespace "".
 	ns := "eka"
 	if cwd, cerr := os.Getwd(); cerr == nil {
-		if repo, found, ferr := c.rt.Workspace.FindRepo(cwd); ferr == nil && found && repo.ProjectID == projectID && repo.Namespace != "" {
+		if repo, found, ferr := c.rt.Workspace().FindRepo(cwd); ferr == nil && found && repo.ProjectID == projectID && repo.Namespace != "" {
 			ns = repo.Namespace
 		}
 	}
-	units, err := c.rt.Knowledge.Search(runtime.SearchQuery{
+	units, err := c.rt.Knowledge().Search(api.SearchQuery{
 		ProjectID: projectID,
 		Namespace: ns,
 		Type:      "ses",
@@ -488,17 +487,17 @@ func (c *Capability) fetchExecutionState(projectID string) map[string]any {
 
 // Context builds the Context Object around one subject at one depth
 // (schema eka-context-v1, compact form). The depth token is resolved
-// by contexts.ParseDepth (local | dependency | engineering); the
+// by api.ParseDepth (local | dependency | engineering); the
 // construction itself is entirely the Context Engine's.
 func (c *Capability) Context(subject, projectID, depth string) ([]byte, error) {
-	d, ok := contexts.ParseDepth(depth)
+	d, ok := api.ParseDepth(depth)
 	if !ok {
 		return nil, fmt.Errorf("eka: unknown context depth %q (allowed: local, dependency, engineering)", depth)
 	}
 	if !c.Exists() {
 		return nil, fmt.Errorf("eka: workspace not initialized")
 	}
-	obj, err := contexts.New(c.rt).Build(subject, projectID, d, contexts.Options{})
+	obj, err := c.rt.Contexts().Build(subject, projectID, d, api.ContextOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -617,7 +616,7 @@ func (c *Capability) CodeGet(req mcp.CodeGetRequest) ([]byte, error) {
 // (Authoring.Validate); this method only shapes the deterministic
 // report projection.
 func (c *Capability) Validate(root string) ([]byte, error) {
-	report, err := runtime.Authoring.Validate(root)
+	report, err := c.rt.Authoring().Validate(root)
 	if err != nil {
 		return nil, err
 	}
@@ -656,7 +655,7 @@ func (c *Capability) NewDraft(req mcp.NewDraftRequest) ([]byte, error) {
 	if contentFile != "" {
 		defer os.Remove(contentFile)
 	}
-	draft, err := runtime.Authoring.NewDraft(c.rt, runtime.NewDraftRequest{
+	draft, err := c.rt.Authoring().NewDraft(api.NewDraftRequest{
 		Project:       req.Project,
 		Namespace:     req.Namespace,
 		Type:          req.Type,
@@ -688,12 +687,12 @@ func (c *Capability) NewDraft(req mcp.NewDraftRequest) ([]byte, error) {
 // validation or insert leaves the draft untouched; the draft file is
 // the single-use ticket.
 func (c *Capability) Publish(req mcp.PublishRequest) ([]byte, error) {
-	res, err := runtime.Authoring.Publish(c.rt, req.Target, runtime.PublishOptions{
+	res, err := c.rt.Authoring().Publish(req.Target, api.PublishOptions{
 		Project:         req.Project,
 		InstanceVersion: req.InstanceVersion,
 	})
 	if err != nil {
-		// A *runtime.PublishError carries the full CKO validation
+		// A *api.PublishError carries the full CKO validation
 		// report — wrap it so the MCP boundary embeds the report
 		// instead of dropping it (sto:mcp-error-fidelity).
 		return nil, wrapToolRefusal(err)
@@ -723,7 +722,7 @@ func (c *Capability) Publish(req mcp.PublishRequest) ([]byte, error) {
 // confirmation are enforced by eka-core's Authoring.Transition — a
 // refused transition publishes nothing.
 func (c *Capability) Transition(req mcp.TransitionRequest) ([]byte, error) {
-	res, err := runtime.Authoring.Transition(c.rt, runtime.TransitionRequest{
+	res, err := c.rt.Authoring().Transition(api.TransitionRequest{
 		RepoPath:  req.RepoPath,
 		Target:    req.Target,
 		To:        req.To,
@@ -734,7 +733,7 @@ func (c *Capability) Transition(req mcp.TransitionRequest) ([]byte, error) {
 		Confirmed: req.Confirmed,
 	})
 	if err != nil {
-		// A *runtime.TransitionRefusal carries the active-container
+		// A *api.TransitionRefusal carries the active-container
 		// warning and the confirmation affordance — wrap it so the
 		// MCP boundary surfaces the retry-with-confirmed path
 		// (sto:mcp-error-fidelity).
@@ -764,7 +763,7 @@ func (c *Capability) Note(req mcp.NoteRequest) ([]byte, error) {
 	if contentFile != "" {
 		defer os.Remove(contentFile)
 	}
-	res, err := runtime.Authoring.NoteDraft(c.rt, runtime.NoteDraftRequest{
+	res, err := c.rt.Authoring().NoteDraft(api.NoteDraftRequest{
 		RepoPath:    req.RepoPath,
 		Target:      req.Target,
 		Role:        req.Role,
@@ -795,7 +794,7 @@ func (c *Capability) Note(req mcp.NoteRequest) ([]byte, error) {
 // legalTransitions key. This is the renamed MCP tool
 // (td:mcp-view-naming-fix).
 func (c *Capability) DraftRead(target, project string) ([]byte, error) {
-	ref, err := runtime.Authoring.ResolveDraft(c.rt, target, project)
+	ref, err := c.rt.Authoring().ResolveDraft(target, project)
 	if err != nil {
 		return nil, err
 	}
@@ -825,11 +824,11 @@ func (c *Capability) DraftListWithProvenance(project, provenance string) ([]byte
 	if provenance == "" {
 		provenance = "all"
 	}
-	drafts, err := runtime.Authoring.Drafts(c.rt, project)
+	drafts, err := c.rt.Authoring().Drafts(project)
 	if provenance != "all" && provenance != "" {
 		// Filter locally for backward compat with eka-core v1.6.0 (DraftsByProvenance absent).
 		// When core's Draft lacks Provenance field, reflection falls back to no filtering.
-		filtered := make([]runtime.Draft, 0, len(drafts))
+		filtered := make([]api.Draft, 0, len(drafts))
 		for _, d := range drafts {
 			prov := provenanceOfDraft(d)
 			if prov == "" {
@@ -868,7 +867,7 @@ func (c *Capability) DraftListWithProvenance(project, provenance string) ([]byte
 // scan is entirely eka-core's (Integrity.Verify); this method only
 // shapes the projection.
 func (c *Capability) IntegrityCheck() ([]byte, error) {
-	report, err := c.rt.Integrity.Verify()
+	report, err := c.rt.Integrity().Verify()
 	if err != nil {
 		return nil, err
 	}
@@ -911,7 +910,7 @@ func (c *Capability) SyncPush(repoPath string, adopt, override bool) ([]byte, er
 	if repoPath == "" {
 		repoPath = "."
 	}
-	report, err := runtime.Authoring.Sync(c.rt, repoPath, runtime.SyncOptions{
+	report, err := c.rt.Authoring().Sync(repoPath, api.SyncOptions{
 		Pull:            false,
 		Push:            true,
 		AdoptBeforePush: adopt,
@@ -941,27 +940,27 @@ func (c *Capability) SyncPush(repoPath string, adopt, override bool) ([]byte, er
 
 // DraftUpdate applies a partial content merge to one pending draft
 // (schema eka-draft-update-v1) via the runtime-owned Authoring API
-// (runtime.Authoring.ResolveDraft) — not direct store. It is
+// (api.Authoring.ResolveDraft) — not direct store. It is
 // read-modify-write through draft_read: supplied content keys
 // overwrite/add, keys not mentioned are preserved, publish still
 // validates — no validation here. Optimistic concurrency via
 // expectedRevision/expectedHash refuses deterministically on mismatch
 // (re-read with draft_read and retry). Unknown target and post-publish
 // (draft already gone — the single-use ticket) refuse via
-// *runtime.DraftNotFoundError; concurrent modification refuses with a
+// *api.DraftNotFoundError; concurrent modification refuses with a
 // deterministic conflict error.
 func (c *Capability) DraftUpdate(req mcp.DraftUpdateRequest) ([]byte, error) {
 	if req.Content == nil {
 		return nil, fmt.Errorf("draft_update requires content to be a JSON object")
 	}
-	ref, err := runtime.Authoring.ResolveDraft(c.rt, req.Target, req.Project)
+	ref, err := c.rt.Authoring().ResolveDraft(req.Target, req.Project)
 	if err != nil {
 		return nil, err
 	}
 	raw, err := os.ReadFile(ref.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, &runtime.DraftNotFoundError{Target: req.Target, Project: ref.Project}
+			return nil, &api.DraftNotFoundError{Target: req.Target, Project: ref.Project}
 		}
 		return nil, fmt.Errorf("draft_update: cannot read draft %s: %w", req.Target, err)
 	}
@@ -1048,11 +1047,11 @@ func (c *Capability) DraftUpdate(req mcp.DraftUpdateRequest) ([]byte, error) {
 
 // PublishBatch publishes every pending draft of a project in
 // topological order (schema eka-publish-batch-v1) — the same engine
-// `eka publish --all` / `--pending` uses (runtime.Authoring.PublishBatch,
+// `eka publish --all` / `--pending` uses (api.Authoring.PublishBatch,
 // Kahn's algorithm, pre-flight cycle and dangling-reference refusals,
 // per-draft atomic validation). Empty backlog is a valid no-op.
 func (c *Capability) PublishBatch(req mcp.PublishBatchRequest) ([]byte, error) {
-	result, err := runtime.Authoring.PublishBatch(c.rt, runtime.PublishBatchOptions{
+	result, err := c.rt.Authoring().PublishBatch(api.PublishBatchOptions{
 		Project: req.Project,
 	})
 	if err != nil {
@@ -1090,7 +1089,7 @@ func (c *Capability) PublishBatch(req mcp.PublishBatchRequest) ([]byte, error) {
 // (Authoring.DiscardDraft); the returned note names the project when
 // the resolution fell back across projects.
 func (c *Capability) Discard(target, project string) ([]byte, error) {
-	note, err := runtime.Authoring.DiscardDraft(c.rt, target, project, false)
+	note, err := c.rt.Authoring().DiscardDraft(target, project, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1302,7 +1301,7 @@ func legalTransitions(typeToken string) map[string][]string {
 }
 
 // provenanceOfDraft extracts provenance via reflection for backward compat with eka-core without provenance field.
-func provenanceOfDraft(d runtime.Draft) string {
+func provenanceOfDraft(d api.Draft) string {
 	// Avoid hard dependency on field existence: reflect over struct.
 	// When core's Draft has Provenance string field, return it; else "".
 	v := reflect.ValueOf(d)

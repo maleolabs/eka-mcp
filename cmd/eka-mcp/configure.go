@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/maleolabs/eka-mcp"
+	"github.com/maleolabs/eka-mcp/v2"
 )
 
 // supportedTargets is the fixed set the configure subcommand understands —

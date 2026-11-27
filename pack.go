@@ -18,14 +18,14 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/maleolabs/eka-core/plugin"
+	"github.com/maleolabs/eka-core/v2/plugin"
 )
 
 // Version is the eka-mcp plugin version (and the MCP server version it
 // reports in serverInfo). It is the single version source of the
 // repository: anvil.yaml must carry the same value (scripts/bump.sh
 // keeps both in sync), and the release pipeline stamps it via ldflags
-// (-X github.com/maleolabs/eka-mcp.Version=<version>) so the released
+// (-X github.com/maleolabs/eka-mcp/v2.Version=<version>) so the released
 // binary reports the tagged version in its manifest and serverInfo.
 // The -X target is the module path (not .../pack): this package lives
 // at the module root, so its import path IS the module path.
@@ -39,7 +39,7 @@ const Description = "EKA MCP — the AI-agent integration layer: an MCP server o
 
 // Source is the canonical upstream repository of the plugin, reported
 // in the manifest so registry/install tooling can track provenance.
-const Source = "github.com/maleolabs/eka-mcp"
+const Source = "github.com/maleolabs/eka-mcp/v2"
 
 // Capabilities are the fixed capability tags of the plugin, reported
 // in the manifest: it installs artifact families into the workspace

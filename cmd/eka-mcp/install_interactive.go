@@ -11,7 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-isatty"
 
-	pack "github.com/maleolabs/eka-mcp"
+	pack "github.com/maleolabs/eka-mcp/v2"
 )
 
 // This file implements the interactive installer: the default when

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-core/plugin"
-	"github.com/maleolabs/eka-mcp"
+	"github.com/maleolabs/eka-core/v2/plugin"
+	"github.com/maleolabs/eka-mcp/v2"
 )
 
 // TestManifestJSON is the plugin contract test (a): "manifest --json"
@@ -52,8 +52,8 @@ func TestManifestJSON(t *testing.T) {
 	if !equalStrings(ext.Capabilities, []string{"install", "mcp"}) {
 		t.Errorf("capabilities = %v, want [install mcp]", ext.Capabilities)
 	}
-	if ext.Source != "github.com/maleolabs/eka-mcp" {
-		t.Errorf("source = %q, want %q", ext.Source, "github.com/maleolabs/eka-mcp")
+	if ext.Source != "github.com/maleolabs/eka-mcp/v2" {
+		t.Errorf("source = %q, want %q", ext.Source, "github.com/maleolabs/eka-mcp/v2")
 	}
 
 	// The JSON key names are the contract too: decode the raw output a
@@ -75,8 +75,8 @@ func TestManifestJSON(t *testing.T) {
 	if got := compact(raw["capabilities"]); got != `["install","mcp"]` {
 		t.Errorf("raw capabilities = %s, want [\"install\",\"mcp\"]", got)
 	}
-	if got := compact(raw["source"]); got != `"github.com/maleolabs/eka-mcp"` {
-		t.Errorf("raw source = %s, want %q", got, "github.com/maleolabs/eka-mcp")
+	if got := compact(raw["source"]); got != `"github.com/maleolabs/eka-mcp/v2"` {
+		t.Errorf("raw source = %s, want %q", got, "github.com/maleolabs/eka-mcp/v2")
 	}
 
 	skills, err := pack.SkillDirs()

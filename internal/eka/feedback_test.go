@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-core/workspace"
-	"github.com/maleolabs/eka-mcp/internal/feedback"
-	"github.com/maleolabs/eka-mcp/internal/mcp"
+	"github.com/maleolabs/eka-core/v2/workspace"
+	"github.com/maleolabs/eka-mcp/v2/internal/feedback"
+	"github.com/maleolabs/eka-mcp/v2/internal/mcp"
 )
 
 // feedbackEnv returns a Capability with isolated EKA_HOME and workspace.
