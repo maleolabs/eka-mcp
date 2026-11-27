@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-core/metadata"
-	"github.com/maleolabs/eka-core/workspace"
-	"github.com/maleolabs/eka-mcp"
-	"github.com/maleolabs/eka-mcp/internal/eka"
-	"github.com/maleolabs/eka-mcp/internal/mcp"
+	"github.com/maleolabs/eka-core/v2/metadata"
+	"github.com/maleolabs/eka-core/v2/workspace"
+	"github.com/maleolabs/eka-mcp/v2"
+	"github.com/maleolabs/eka-mcp/v2/internal/eka"
+	"github.com/maleolabs/eka-mcp/v2/internal/mcp"
 )
 
 // TestBannerTTYGate: banner appears only when stdin is TTY, absent otherwise.

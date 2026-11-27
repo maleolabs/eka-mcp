@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/maleolabs/eka-core/workspace"
-	pack "github.com/maleolabs/eka-mcp"
-	"github.com/maleolabs/eka-mcp/internal/feedback"
-	"github.com/maleolabs/eka-mcp/internal/mcp"
+	"github.com/maleolabs/eka-core/v2/api"
+	pack "github.com/maleolabs/eka-mcp/v2"
+	"github.com/maleolabs/eka-mcp/v2/internal/feedback"
+	"github.com/maleolabs/eka-mcp/v2/internal/mcp"
 )
 
 // Feedback capability schemas (mirroring CLI eka feedback JSON schemas).
@@ -119,7 +119,7 @@ func (c *Capability) FeedbackNew(req mcp.FeedbackNewRequest) ([]byte, error) {
 		body += "\n"
 	}
 
-	home, err := workspace.HomeDir()
+	home, err := api.HomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("feedback: cannot resolve the workspace home: %w", err)
 	}
@@ -158,7 +158,7 @@ func (c *Capability) FeedbackNew(req mcp.FeedbackNewRequest) ([]byte, error) {
 // (id descending, newest first — ids embed YYYYMMDD), mirroring
 // `eka feedback list --json` (schema eka-feedback-list-v1).
 func (c *Capability) FeedbackList() ([]byte, error) {
-	home, err := workspace.HomeDir()
+	home, err := api.HomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("feedback: cannot resolve the workspace home: %w", err)
 	}
@@ -211,7 +211,7 @@ func (c *Capability) FeedbackPublish(req mcp.FeedbackPublishRequest) ([]byte, er
 	if id == "" {
 		return nil, fmt.Errorf("feedback_publish requires {\"id\": string}")
 	}
-	home, err := workspace.HomeDir()
+	home, err := api.HomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("feedback: cannot resolve the workspace home: %w", err)
 	}

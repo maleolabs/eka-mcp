@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.0] - 2026-08-21
 
 ### Changed
-- **Version bump to 1.0.0** — single version constant `pack.Version` (`pack.go`) and `anvil.yaml` both carry `1.0.0` (no `v` prefix, stamped via `ldflags -X github.com/maleolabs/eka-mcp.Version` at release). `README.md` version strings updated `0.1.0` → `1.0.0`.
+- **Version bump to 1.0.0** — single version constant `pack.Version` (`pack.go`) and `anvil.yaml` both carry `1.0.0` (no `v` prefix, stamped via `ldflags -X github.com/maleolabs/eka-mcp/v2.Version` at release). `README.md` version strings updated `0.1.0` → `1.0.0`.
 - **Pack stabilization** — `skills/manifest.yaml` `pack.status` `experimental` → `stable`, `pack.version` `0.3.2` → `1.0.0`.
 - **requiresEka refresh** — `skills/manifest.yaml` `requiresEka` `">= 0.6.0"` → `">= 1.0.0"` (floor for stable pack, current CLI `eka-cli` `1.2.3`; verified with `eka --help` / `anvil.yaml`).
 - **Stale pack docs corrected (KMS gap fix)** — audited the four pack documents that previously referenced the removed `eka install` subject (commit `6600f38`, ADR-030 supersedes ADR-023):
@@ -49,4 +49,4 @@ This release closes the `eka-mcp` 1.0 milestone, consolidating:
 - Per-agent `configure` UX (`--target opencode|claude|codex`, idempotent merge)
 - Versioning-pack (this release — stable pack, version bump, docs correction)
 
-[1.0.0]: https://github.com/maleolabs/eka-mcp/releases/tag/v1.0.0
+[1.0.0]: https://github.com/maleolabs/eka-mcp/v2/releases/tag/v1.0.0

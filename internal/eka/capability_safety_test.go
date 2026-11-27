@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-mcp/internal/mcp"
+	"github.com/maleolabs/eka-mcp/v2/internal/mcp"
 )
 
 // TestDraftUpdateUsesAuthoringAPI verifies that DraftUpdate delegates to

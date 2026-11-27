@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-mcp"
+	"github.com/maleolabs/eka-mcp/v2"
 )
 
 // helper: decode configureResult from runConfigure output.

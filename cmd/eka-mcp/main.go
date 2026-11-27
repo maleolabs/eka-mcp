@@ -7,7 +7,7 @@
 //     --json" installs an artifact family from the embedded skill pack.
 //     Both are machine-readable (JSON on stdout), deterministic and
 //     versioned — the CLI talks to this executable through exactly these
-//     two subcommands (see github.com/maleolabs/eka-core/plugin).
+//     two subcommands (see github.com/maleolabs/eka-core/v2/plugin).
 //
 //  2. The MCP server: "serve" (or no subcommand) runs the MCP server
 //     over stdio (JSON-RPC 2.0, newline-delimited) exposing the EKA
@@ -23,10 +23,10 @@ import (
 
 	"github.com/mattn/go-isatty"
 
-	"github.com/maleolabs/eka-core/plugin"
-	"github.com/maleolabs/eka-mcp"
-	"github.com/maleolabs/eka-mcp/internal/eka"
-	"github.com/maleolabs/eka-mcp/internal/mcp"
+	"github.com/maleolabs/eka-core/v2/plugin"
+	"github.com/maleolabs/eka-mcp/v2"
+	"github.com/maleolabs/eka-mcp/v2/internal/eka"
+	"github.com/maleolabs/eka-mcp/v2/internal/mcp"
 )
 
 func main() {

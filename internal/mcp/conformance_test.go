@@ -32,7 +32,7 @@ import (
 	"strings"
 	"testing"
 
-	pack "github.com/maleolabs/eka-mcp"
+	pack "github.com/maleolabs/eka-mcp/v2"
 )
 
 // conformanceServer returns a server wired to a deterministic fake

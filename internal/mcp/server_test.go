@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/maleolabs/eka-core/conformance"
-	pack "github.com/maleolabs/eka-mcp"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	pack "github.com/maleolabs/eka-mcp/v2"
 )
 
 // fakeCapability is a deterministic stand-in for the EKA capability

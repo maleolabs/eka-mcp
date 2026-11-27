@@ -4,9 +4,9 @@
 //
 // eka-core returns deterministic, data-carrying refusal errors:
 //
-//   - *runtime.PublishError{Target, Report}        — publish gate;
-//   - *runtime.RelateValidationError{Target, Report} — relate gate;
-//   - *runtime.TransitionRefusal{Reason, Hint, Warning, Confirmation}
+//   - *api.PublishError{Target, Report}        — publish gate;
+//   - *api.RelateValidationError{Target, Report} — relate gate;
+//   - *api.TransitionRefusal{Reason, Hint, Warning, Confirmation}
 //     — transition gates; Warning/Confirmation mark the retryable
 //     active-container membership gate.
 //
@@ -27,9 +27,9 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/runtime"
-	"github.com/maleolabs/eka-mcp/internal/mcp"
+	"github.com/maleolabs/eka-core/v2/api"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-mcp/v2/internal/mcp"
 )
 
 // toolRefusal carries one structured core refusal across the capability
@@ -80,15 +80,15 @@ func wrapToolRefusal(err error) error {
 	if errors.As(err, &already) {
 		return err
 	}
-	var pubErr *runtime.PublishError
+	var pubErr *api.PublishError
 	if errors.As(err, &pubErr) {
 		return &toolRefusal{err: err, reportJSON: marshalConformanceReport(pubErr.Report)}
 	}
-	var relErr *runtime.RelateValidationError
+	var relErr *api.RelateValidationError
 	if errors.As(err, &relErr) {
 		return &toolRefusal{err: err, reportJSON: marshalConformanceReport(relErr.Report)}
 	}
-	var trErr *runtime.TransitionRefusal
+	var trErr *api.TransitionRefusal
 	if errors.As(err, &trErr) {
 		return &toolRefusal{err: err, warning: trErr.Warning, confirm: trErr.Confirmation}
 	}

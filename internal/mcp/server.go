@@ -27,7 +27,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/maleolabs/eka-mcp"
+	"github.com/maleolabs/eka-mcp/v2"
 )
 
 // ProtocolVersion is the MCP protocol version the server reports in the

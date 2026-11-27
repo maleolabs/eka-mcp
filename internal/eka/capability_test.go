@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-core/exchange"
-	"github.com/maleolabs/eka-core/metadata"
-	"github.com/maleolabs/eka-core/runtime"
-	"github.com/maleolabs/eka-core/store"
-	"github.com/maleolabs/eka-core/workspace"
+	"github.com/maleolabs/eka-core/v2/exchange"
+	"github.com/maleolabs/eka-core/v2/metadata"
+	"github.com/maleolabs/eka-core/v2/runtime"
+	"github.com/maleolabs/eka-core/v2/store"
+	"github.com/maleolabs/eka-core/v2/workspace"
 )
 
 // TestOpenDetached: opening the capability on a machine without an EKA
